@@ -51,9 +51,14 @@ const server = http.createServer((req, res) => {
     if (!err && st.isDirectory()) file = path.join(file, "index.html");
     fs.readFile(file, (err2, body) => {
       if (err2) return send(res, 404, "text/plain", "Not found: " + rel);
+      // Vendored runtime and models are content-stable and ~12MB combined —
+      // without a long cache the Portal re-downloads them on every launch.
+      // App code stays uncached so edits land on reload.
+      const immutable = rel.startsWith("/vendor/") || rel.startsWith("/models/");
+
       res.writeHead(200, {
         "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream",
-        "Cache-Control": "no-store",
+        "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-store",
         // Needed later if we run WASM face tracking with threads.
         "Cross-Origin-Opener-Policy": "same-origin",
         "Cross-Origin-Embedder-Policy": "require-corp"
