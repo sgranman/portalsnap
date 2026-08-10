@@ -1,0 +1,19 @@
+services:
+  portalsnap:
+    image: node:22-alpine
+    container_name: portalsnap
+    working_dir: /app
+    command: node server.js
+    volumes:
+      - ./:/app
+    environment:
+      PORT: 8080
+    restart: unless-stopped
+    networks:
+      - web
+
+# Reachable only through the cloudflared container on the shared `web` network.
+# Add a Public Hostname route: portalsnap.<domain> -> http://portalsnap:8080
+networks:
+  web:
+    external: true

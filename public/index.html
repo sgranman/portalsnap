@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Portal Capability Probe</title>
+<style>
+  :root {
+    --bg: #12131a;
+    --panel: #1c1e29;
+    --line: #2e3140;
+    --ink: #f2f3f7;
+    --dim: #9aa0b4;
+    --ok: #4ade80;
+    --bad: #f87171;
+    --warn: #fbbf24;
+    --accent: #6366f1;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--ink);
+    font: 16px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 14px; margin: 0 0 16px; }
+
+  .btns { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+  button {
+    font: inherit; font-weight: 600; font-size: 18px;
+    color: #fff; background: var(--accent);
+    border: 0; border-radius: 14px;
+    padding: 18px 22px; min-height: 64px; min-width: 150px;
+    cursor: pointer; touch-action: manipulation;
+  }
+  button.alt { background: #343850; }
+  button:active { transform: translateY(1px); }
+  button[disabled] { opacity: .45; }
+
+  .cols { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .col { flex: 1 1 380px; min-width: 320px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 14px; margin-bottom: 16px;
+  }
+  .panel h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em;
+              color: var(--dim); margin: 0 0 10px; }
+
+  video {
+    width: 100%; background: #000; border-radius: 12px;
+    display: block; aspect-ratio: 4 / 3; object-fit: cover;
+  }
+  #meterWrap { height: 22px; background: #000; border-radius: 11px; overflow: hidden; margin-top: 12px; }
+  /* scaleX, not width — this repaints every animation frame off the mic signal. */
+  #meter {
+    height: 100%; width: 100%; background: var(--ok);
+    transform: scaleX(0); transform-origin: left center;
+    transition: transform .06s linear;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 5px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { color: var(--dim); white-space: nowrap; padding-right: 12px; }
+  td:last-child { word-break: break-word; font-family: ui-monospace, Menlo, monospace; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+
+  #log {
+    background: #0a0b10; border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px; height: 220px; overflow-y: auto;
+    font-family: ui-monospace, Menlo, monospace; font-size: 13px; white-space: pre-wrap;
+  }
+  #status { font-size: 15px; margin-bottom: 12px; min-height: 22px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Portal Capability Probe</h1>
+  <p class="sub">Tap a button below. Everything is reported on-screen — no devtools needed.</p>
+
+  <div id="status"></div>
+
+  <div class="btns">
+    <button id="bBoth">Camera + Mic</button>
+    <button id="bCam" class="alt">Camera only</button>
+    <button id="bMic" class="alt">Mic only</button>
+    <button id="bBench" class="alt">Run speed test</button>
+    <button id="bSend" class="alt">Send report</button>
+  </div>
+
+  <div class="cols">
+    <div class="col">
+      <div class="panel">
+        <h2>Live preview</h2>
+        <video id="v" autoplay playsinline muted></video>
+        <div id="meterWrap"><div id="meter"></div></div>
+      </div>
+      <div class="panel">
+        <h2>Log</h2>
+        <div id="log"></div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="panel"><h2>Environment</h2><table id="tEnv"></table></div>
+      <div class="panel"><h2>Features</h2><table id="tFeat"></table></div>
+      <div class="panel"><h2>Media</h2><table id="tMedia"></table></div>
+      <div class="panel"><h2>Performance</h2><table id="tPerf"></table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const report = { env: {}, features: {}, media: {}, perf: {}, errors: [] };
+const el = id => document.getElementById(id);
+
+function log(msg, cls) {
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.textContent = new Date().toISOString().slice(11, 19) + "  " + msg;
+  el("log").appendChild(line);
+  el("log").scrollTop = el("log").scrollHeight;
+}
+
+function status(msg, cls) {
+  el("status").innerHTML = "";
+  const s = document.createElement("span");
+  if (cls) s.className = cls;
+  s.textContent = msg;
+  el("status").appendChild(s);
+}
+
+// Render a value into a table, and record it in the report.
+function row(tableId, bucket, key, value, cls) {
+  report[bucket][key] = value;
+  const t = el(tableId);
+  let tr = t.querySelector('tr[data-k="' + key + '"]');
+  if (!tr) {
+    tr = document.createElement("tr");
+    tr.dataset.k = key;
+    tr.innerHTML = "<td></td><td></td>";
+    tr.children[0].textContent = key;
+    t.appendChild(tr);
+  }
+  const cell = tr.children[1];
+  cell.textContent = typeof value === "object" ? JSON.stringify(value) : String(value);
+  cell.className = cls || "";
+}
+
+const yn = (b, bucket, table, key) =>
+  row(table, bucket, key, b ? "yes" : "no", b ? "ok" : "bad");
+
+window.addEventListener("error", e => {
+  report.errors.push(String(e.message));
+  log("ERROR " + e.message, "bad");
+});
+
+/* ---------- Passive detection (no permission required) ---------- */
+
+function detectEnvironment() {
+  row("tEnv", "env", "userAgent", navigator.userAgent);
+  row("tEnv", "env", "platform", navigator.platform || "?");
+  row("tEnv", "env", "language", navigator.language);
+  row("tEnv", "env", "screen", screen.width + "x" + screen.height + " @" + (window.devicePixelRatio || 1) + "x");
+  row("tEnv", "env", "viewport", innerWidth + "x" + innerHeight);
+  row("tEnv", "env", "touchPoints", navigator.maxTouchPoints ?? "?");
+  row("tEnv", "env", "cores", navigator.hardwareConcurrency || "?");
+  row("tEnv", "env", "deviceMemoryGB", navigator.deviceMemory || "?");
+  row("tEnv", "env", "origin", location.origin);
+
+  const secure = window.isSecureContext === true;
+  row("tEnv", "env", "secureContext", secure ? "yes" : "NO — camera will be blocked",
+      secure ? "ok" : "bad");
+
+  // Chromium version tells us which web APIs are realistically available.
+  const m = navigator.userAgent.match(/Chrom(?:e|ium)\/(\d+)/);
+  row("tEnv", "env", "chromiumMajor", m ? m[1] : "not Chromium/unknown", m ? "ok" : "warn");
+}
+
+// wasm-feature-detect's SIMD probe: a module using an i8x16.splat instruction.
+function wasmSimdSupported() {
+  try {
+    return WebAssembly.validate(new Uint8Array([
+      0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123,
+      3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11
+    ]));
+  } catch (e) { return false; }
+}
+
+// Every check runs isolated: on an unknown browser, one throwing probe must not
+// take out the rest of the report.
+function test(fn) {
+  try { return !!fn(); } catch (e) { log("probe threw: " + e.message, "warn"); return false; }
+}
+
+function detectFeatures() {
+  yn(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia), "features", "tFeat", "getUserMedia");
+  yn(!!(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices), "features", "tFeat", "enumerateDevices");
+  yn(typeof MediaRecorder !== "undefined", "features", "tFeat", "MediaRecorder");
+  yn(typeof WebAssembly !== "undefined", "features", "tFeat", "WebAssembly");
+  yn(wasmSimdSupported(), "features", "tFeat", "wasmSIMD");
+  yn(typeof SharedArrayBuffer !== "undefined", "features", "tFeat", "SharedArrayBuffer");
+  yn(window.crossOriginIsolated === true, "features", "tFeat", "crossOriginIsolated");
+  yn(typeof OffscreenCanvas !== "undefined", "features", "tFeat", "OffscreenCanvas");
+  yn(typeof createImageBitmap === "function", "features", "tFeat", "createImageBitmap");
+  yn("requestVideoFrameCallback" in HTMLVideoElement.prototype, "features", "tFeat", "requestVideoFrameCallback");
+  yn(typeof (window.AudioContext || window.webkitAudioContext) === "function", "features", "tFeat", "WebAudio");
+  // `in` tests the accessor without invoking its getter — reading
+  // AudioContext.prototype.audioWorklet directly throws "Illegal invocation".
+  yn(test(() => "audioWorklet" in (window.AudioContext || window.webkitAudioContext).prototype),
+     "features", "tFeat", "AudioWorklet");
+  yn(typeof ResizeObserver === "function", "features", "tFeat", "ResizeObserver");
+  yn(typeof Worker === "function", "features", "tFeat", "WebWorker");
+  yn(test(() => navigator.gpu), "features", "tFeat", "WebGPU");
+
+  // WebGL is what decides whether real-time face tracking is viable at all.
+  const c = document.createElement("canvas");
+  const gl2 = test(() => c.getContext("webgl2")) ? c.getContext("webgl2") : null;
+  const gl = gl2 || (test(() => c.getContext("webgl")) ? c.getContext("webgl") : null);
+  yn(!!gl2, "features", "tFeat", "webgl2");
+  yn(!!gl, "features", "tFeat", "webgl1");
+  if (gl) {
+    const dbg = test(() => gl.getExtension("WEBGL_debug_renderer_info"))
+      ? gl.getExtension("WEBGL_debug_renderer_info") : null;
+    row("tFeat", "features", "gpuRenderer",
+        dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : "masked");
+    row("tFeat", "features", "maxTextureSize", test(() => gl.getParameter(gl.MAX_TEXTURE_SIZE))
+        ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : "?");
+    yn(test(() => gl.getExtension("OES_texture_float")), "features", "tFeat", "floatTextures");
+  }
+
+  if (typeof MediaRecorder !== "undefined") {
+    const types = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm",
+                   "video/mp4;codecs=h264", "video/mp4", "audio/webm"];
+    const ok = types.filter(t => test(() => MediaRecorder.isTypeSupported(t)));
+    row("tFeat", "features", "recordingFormats", ok.join(", ") || "none",
+        ok.length ? "ok" : "bad");
+  }
+}
+
+/* ---------- Active probes (need user gesture + permission) ---------- */
+
+let stream = null;
+
+async function requestMedia(wantVideo, wantAudio) {
+  const label = [wantVideo && "camera", wantAudio && "mic"].filter(Boolean).join(" + ");
+  status("Requesting " + label + "…", "warn");
+  log("getUserMedia({ video: " + wantVideo + ", audio: " + wantAudio + " })");
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    status("getUserMedia is not available in this browser at all.", "bad");
+    log("navigator.mediaDevices.getUserMedia is undefined", "bad");
+    report.media.fatal = "getUserMedia undefined";
+    return;
+  }
+
+  const constraints = {
+    video: wantVideo ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" } : false,
+    audio: wantAudio ? true : false
+  };
+
+  try {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    status("Granted: " + label, "ok");
+    log("PERMISSION GRANTED for " + label, "ok");
+    report.media.granted = label;
+
+    if (wantVideo) await inspectVideo();
+    if (wantAudio) inspectAudio();
+    await listDevices();
+  } catch (err) {
+    // The error *name* is the diagnostic: NotAllowedError = user/policy denial,
+    // NotFoundError = no such device, NotReadableError = hardware busy.
+    const detail = err.name + ": " + err.message;
+    status("FAILED — " + detail, "bad");
+    log("getUserMedia failed — " + detail, "bad");
+    report.media.error = detail;
+    report.errors.push(detail);
+    await listDevices();
+  }
+}
+
+async function inspectVideo() {
+  const track = stream.getVideoTracks()[0];
+  if (!track) { log("no video track returned", "bad"); return; }
+
+  el("v").srcObject = stream;
+  try { await el("v").play(); } catch (e) { log("video.play() rejected: " + e.message, "warn"); }
+
+  const s = track.getSettings ? track.getSettings() : {};
+  row("tMedia", "media", "cameraLabel", track.label || "(hidden)");
+  row("tMedia", "media", "resolution", (s.width || "?") + "x" + (s.height || "?"), "ok");
+  row("tMedia", "media", "frameRate", s.frameRate ? Math.round(s.frameRate) + " fps" : "?");
+  row("tMedia", "media", "facingMode", s.facingMode || "unspecified");
+  log("video track: " + s.width + "x" + s.height + " @" + Math.round(s.frameRate || 0) + "fps", "ok");
+
+  if (track.getCapabilities) {
+    try {
+      const cap = track.getCapabilities();
+      row("tMedia", "media", "maxResolution",
+          (cap.width && cap.width.max) + "x" + (cap.height && cap.height.max));
+    } catch (e) { /* not implemented on older Chromium */ }
+  }
+}
+
+function inspectAudio() {
+  const track = stream.getAudioTracks()[0];
+  if (!track) { log("no audio track returned", "bad"); return; }
+  row("tMedia", "media", "micLabel", track.label || "(hidden)");
+
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { log("no WebAudio — cannot show level meter", "warn"); return; }
+
+  const ctx = new AC();
+  if (ctx.state === "suspended") ctx.resume();
+  row("tMedia", "media", "audioSampleRate", ctx.sampleRate + " Hz");
+
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+
+  const buf = new Uint8Array(analyser.fftSize);
+  let peak = 0, frames = 0;
+  (function tick() {
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const d = (buf[i] - 128) / 128;
+      sum += d * d;
+    }
+    const rms = Math.sqrt(sum / buf.length);
+    peak = Math.max(peak, rms);
+    el("meter").style.transform = "scaleX(" + Math.min(1, rms * 3).toFixed(3) + ")";
+    report.media.micPeakLevel = peak.toFixed(3);
+    // Numeric readout too — a silent meter and a broken meter look identical.
+    if (++frames % 6 === 0) {
+      row("tMedia", "media", "micLevelNow", rms.toFixed(3) + "  (peak " + peak.toFixed(3) + ")",
+          peak > 0.01 ? "ok" : "warn");
+    }
+    requestAnimationFrame(tick);
+  })();
+
+  log("mic live — speak and watch the green bar", "ok");
+}
+
+async function listDevices() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const cams = devs.filter(d => d.kind === "videoinput");
+    const mics = devs.filter(d => d.kind === "audioinput");
+    row("tMedia", "media", "videoInputs", cams.length + " — " + (cams.map(d => d.label || "unlabeled").join(" | ") || "none"));
+    row("tMedia", "media", "audioInputs", mics.length + " — " + (mics.map(d => d.label || "unlabeled").join(" | ") || "none"));
+    log("devices: " + cams.length + " camera(s), " + mics.length + " mic(s)");
+  } catch (e) {
+    log("enumerateDevices failed: " + e.message, "warn");
+  }
+}
+
+/* ---------- Speed test: can this device sustain a filter loop? ---------- */
+
+async function bench() {
+  if (!stream || !stream.getVideoTracks()[0]) {
+    status("Start the camera first, then run the speed test.", "warn");
+    return;
+  }
+  status("Measuring… hold still for 5 seconds", "warn");
+
+  const video = el("v");
+  const W = 640, H = 480;
+
+  // Pass 1: plain canvas 2D draw — the floor for any sticker-overlay filter.
+  const c2 = document.createElement("canvas");
+  c2.width = W; c2.height = H;
+  const ctx2 = c2.getContext("2d");
+  const fps2d = await measure(3000, () => ctx2.drawImage(video, 0, 0, W, H));
+  row("tPerf", "perf", "canvas2dFPS", fps2d + " fps", fps2d >= 24 ? "ok" : "warn");
+  log("canvas2d draw: " + fps2d + " fps");
+
+  // Pass 2: WebGL texture upload — the floor for any shader/warp filter.
+  const cg = document.createElement("canvas");
+  cg.width = W; cg.height = H;
+  const gl = cg.getContext("webgl2") || cg.getContext("webgl");
+  if (gl) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fpsGL = await measure(2000, () => {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    });
+    row("tPerf", "perf", "webglUploadFPS", fpsGL + " fps", fpsGL >= 24 ? "ok" : "warn");
+    log("webgl texture upload: " + fpsGL + " fps");
+  }
+
+  status("Speed test done.", "ok");
+}
+
+function measure(ms, work) {
+  return new Promise(resolve => {
+    let frames = 0;
+    const t0 = performance.now();
+    (function loop() {
+      try { work(); } catch (e) { /* frame not ready yet */ }
+      frames++;
+      const dt = performance.now() - t0;
+      if (dt < ms) requestAnimationFrame(loop);
+      else resolve(Math.round(frames / (dt / 1000)));
+    })();
+  });
+}
+
+/* ---------- Ship the results back to the dev machine ---------- */
+
+async function sendReport() {
+  report.generatedAt = new Date().toISOString();
+  try {
+    const res = await fetch("/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(report, null, 2)
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const out = await res.json();
+    status("Report saved as " + out.file, "ok");
+    log("report POSTed to server: " + out.file, "ok");
+  } catch (e) {
+    status("Could not POST report (" + e.message + ") — trying clipboard", "warn");
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+      status("Report copied to clipboard.", "ok");
+    } catch (e2) {
+      log("clipboard also unavailable: " + e2.message, "bad");
+    }
+  }
+}
+
+el("bBoth").onclick  = () => requestMedia(true, true);
+el("bCam").onclick   = () => requestMedia(true, false);
+el("bMic").onclick   = () => requestMedia(false, true);
+el("bBench").onclick = bench;
+el("bSend").onclick  = sendReport;
+
+detectEnvironment();
+detectFeatures();
+listDevices();  // pre-permission: counts devices but labels will be blank
+log("passive detection complete — tap a button to test camera/mic");
+if (!window.isSecureContext) {
+  status("Not a secure context — camera/mic will be blocked. Serve over HTTPS.", "bad");
+}
+</script>
+</body>
+</html>

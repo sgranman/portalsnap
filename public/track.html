@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PortalSnap — Face Tracking Benchmark</title>
+<style>
+  :root {
+    --bg: #12131a; --panel: #1c1e29; --line: #2e3140;
+    --ink: #f2f3f7; --dim: #9aa0b4;
+    --ok: #4ade80; --bad: #f87171; --warn: #fbbf24; --accent: #6366f1;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 0 0 12px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+  button {
+    font: inherit; font-weight: 600; font-size: 18px; color: #fff;
+    background: var(--accent); border: 0; border-radius: 14px;
+    padding: 18px 22px; min-height: 64px; cursor: pointer; touch-action: manipulation;
+  }
+  button.alt { background: #343850; }
+  button[disabled] { opacity: .45; }
+  .cols { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .col { flex: 1 1 380px; min-width: 300px; }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 14px; padding: 14px; margin-bottom: 16px; }
+  .panel h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em;
+              color: var(--dim); margin: 0 0 10px; }
+
+  /* Selfie view: mirror the whole stage so video and overlay stay aligned. */
+  #stage { position: relative; transform: scaleX(-1); border-radius: 12px; overflow: hidden; background: #000; }
+  #stage video, #stage canvas { display: block; width: 100%; }
+  #stage canvas { position: absolute; inset: 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 5px 4px; border-bottom: 1px solid var(--line); }
+  td:first-child { color: var(--dim); white-space: nowrap; padding-right: 12px; }
+  td:last-child { font-family: ui-monospace, Menlo, monospace; word-break: break-word; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  #status { font-size: 15px; margin-bottom: 12px; min-height: 22px; }
+  #log { background: #0a0b10; border: 1px solid var(--line); border-radius: 12px;
+         padding: 10px; height: 160px; overflow-y: auto;
+         font-family: ui-monospace, Menlo, monospace; font-size: 13px; white-space: pre-wrap; }
+  .bars div { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+  .bars span:first-child { width: 110px; color: var(--dim); }
+  .bars i { flex: 1; height: 10px; background: #000; border-radius: 5px; overflow: hidden; }
+  .bars i b { display: block; height: 100%; width: 100%; background: var(--accent);
+              transform: scaleX(0); transform-origin: left center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Face Tracking Benchmark</h1>
+  <div id="status">Tap Start.</div>
+
+  <div class="btns">
+    <button id="bStart">Start tracking</button>
+    <button id="bDelegate" class="alt">Delegate: GPU</button>
+    <button id="bDraw" class="alt">Overlay: mesh</button>
+    <button id="bSend" class="alt">Send report</button>
+  </div>
+
+  <div class="cols">
+    <div class="col">
+      <div class="panel">
+        <h2>Live</h2>
+        <div id="stage">
+          <video id="v" autoplay playsinline muted></video>
+          <canvas id="c"></canvas>
+        </div>
+      </div>
+      <div class="panel"><h2>Log</h2><div id="log"></div></div>
+    </div>
+    <div class="col">
+      <div class="panel"><h2>Results</h2><table id="tRes"></table></div>
+      <div class="panel">
+        <h2>Expressions (blendshapes)</h2>
+        <div class="bars" id="bars"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { FaceLandmarker, FilesetResolver } from "./vendor/mediapipe/vision_bundle.mjs";
+
+const report = { test: "face-tracking", env: {}, result: {}, errors: [] };
+const el = id => document.getElementById(id);
+
+function log(msg, cls) {
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = new Date().toISOString().slice(11, 19) + "  " + msg;
+  el("log").appendChild(d);
+  el("log").scrollTop = el("log").scrollHeight;
+}
+function status(msg, cls) {
+  el("status").className = cls || "";
+  el("status").textContent = msg;
+}
+function row(key, value, cls) {
+  report.result[key] = value;
+  let tr = el("tRes").querySelector('tr[data-k="' + key + '"]');
+  if (!tr) {
+    tr = document.createElement("tr");
+    tr.dataset.k = key;
+    tr.innerHTML = "<td></td><td></td>";
+    tr.children[0].textContent = key;
+    el("tRes").appendChild(tr);
+  }
+  tr.children[1].textContent = String(value);
+  tr.children[1].className = cls || "";
+}
+
+let landmarker = null, stream = null, running = false;
+let delegate = "GPU";
+const DRAW_MODES = ["mesh", "sunglasses", "none"];
+let drawMode = 0;
+
+/* ---- Timing. Inference cost is the number that decides the architecture. ---- */
+const inferTimes = [];   // ms per detectForVideo call
+const frameTimes = [];   // ms between delivered frames
+let lastFrameAt = 0;
+
+const pct = (arr, p) => {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(s.length * p))];
+};
+
+async function start() {
+  el("bStart").disabled = true;
+  try {
+    status("Requesting camera…", "warn");
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+      audio: false
+    });
+    el("v").srcObject = stream;
+    await el("v").play();
+
+    const s = stream.getVideoTracks()[0].getSettings();
+    row("camera", (s.width || "?") + "x" + (s.height || "?") + " @" + Math.round(s.frameRate || 0) + "fps");
+    el("c").width = el("v").videoWidth;
+    el("c").height = el("v").videoHeight;
+
+    await loadModel();
+    running = true;
+    loop();
+  } catch (err) {
+    status("Failed: " + err.name + " — " + err.message, "bad");
+    log(err.stack || String(err), "bad");
+    report.errors.push(String(err));
+    el("bStart").disabled = false;
+  }
+}
+
+async function loadModel() {
+  status("Loading model (" + delegate + ")…", "warn");
+  log("resolving wasm fileset from /vendor/mediapipe/wasm");
+
+  const t0 = performance.now();
+  const fileset = await FilesetResolver.forVisionTasks("./vendor/mediapipe/wasm");
+  if (landmarker) { landmarker.close(); landmarker = null; }
+
+  landmarker = await FaceLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: "./models/face_landmarker.task", delegate },
+    runningMode: "VIDEO",
+    numFaces: 1,
+    outputFaceBlendshapes: true,
+    outputFacialTransformationMatrixes: false
+  });
+
+  const ms = Math.round(performance.now() - t0);
+  row("modelLoadMs", ms + " ms (" + delegate + ")", ms < 4000 ? "ok" : "warn");
+  log("model ready in " + ms + "ms on " + delegate, "ok");
+  status("Tracking. Move around, open your mouth, raise your eyebrows.", "ok");
+
+  inferTimes.length = 0;
+  frameTimes.length = 0;
+}
+
+function loop() {
+  if (!running) return;
+  const video = el("v");
+
+  if (video.readyState >= 2) {
+    const now = performance.now();
+    if (lastFrameAt) frameTimes.push(now - lastFrameAt);
+    lastFrameAt = now;
+
+    let res = null;
+    const t0 = performance.now();
+    try {
+      // Timestamps must strictly increase or the VIDEO-mode graph rejects the frame.
+      res = landmarker.detectForVideo(video, now);
+    } catch (e) {
+      log("detect failed: " + e.message, "bad");
+      report.errors.push(String(e));
+    }
+    inferTimes.push(performance.now() - t0);
+
+    if (res) draw(res);
+
+    if (inferTimes.length % 30 === 0) updateStats();
+    if (inferTimes.length > 300) { inferTimes.shift(); frameTimes.shift(); }
+  }
+
+  if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) video.requestVideoFrameCallback(loop);
+  else requestAnimationFrame(loop);
+}
+
+function updateStats() {
+  const med = pct(inferTimes, 0.5), p95 = pct(inferTimes, 0.95);
+  const fps = frameTimes.length ? 1000 / (frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length) : 0;
+  row("inferenceMedian", med.toFixed(1) + " ms", med < 20 ? "ok" : med < 33 ? "warn" : "bad");
+  row("inferenceP95", p95.toFixed(1) + " ms", p95 < 33 ? "ok" : "warn");
+  row("endToEndFPS", fps.toFixed(1) + " fps", fps >= 24 ? "ok" : "bad");
+  row("headroomPerFrame", Math.max(0, 33 - med).toFixed(1) + " ms left at 30fps",
+      med < 25 ? "ok" : "warn");
+}
+
+/* ---- Drawing. Proves landmark anchoring works, and costs us the compositing budget. ---- */
+
+// Canonical FaceMesh indices.
+const EYE_R_OUTER = 33, EYE_L_OUTER = 263, NOSE_TIP = 1;
+
+function draw(res) {
+  const c = el("c"), ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, c.width, c.height);
+
+  const faces = res.faceLandmarks || [];
+  row("facesDetected", faces.length, faces.length ? "ok" : "warn");
+  if (!faces.length) return;
+
+  const lm = faces[0];
+  const mode = DRAW_MODES[drawMode];
+  const px = p => [p.x * c.width, p.y * c.height];
+
+  if (mode === "mesh") {
+    ctx.fillStyle = "rgba(99,102,241,.9)";
+    for (let i = 0; i < lm.length; i++) {
+      const [x, y] = px(lm[i]);
+      ctx.fillRect(x - 1, y - 1, 2.5, 2.5);
+    }
+  } else if (mode === "sunglasses") {
+    drawSunglasses(ctx, px(lm[EYE_R_OUTER]), px(lm[EYE_L_OUTER]));
+  }
+
+  if (res.faceBlendshapes && res.faceBlendshapes[0]) {
+    showBlendshapes(res.faceBlendshapes[0].categories);
+  }
+}
+
+// Scale and rotation come from the eye-to-eye vector — the anchoring math every
+// sticker filter will reuse.
+function drawSunglasses(ctx, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const dist = Math.hypot(dx, dy);
+  const angle = Math.atan2(dy, dx);
+  const w = dist * 1.25, h = dist * 0.42;
+
+  ctx.save();
+  ctx.translate((a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+  ctx.rotate(angle);
+  ctx.fillStyle = "rgba(10,10,15,.88)";
+  ctx.strokeStyle = "#f5c542";
+  ctx.lineWidth = Math.max(2, dist * 0.03);
+
+  const lensW = w * 0.42, gap = w * 0.1;
+  for (const sign of [-1, 1]) {
+    ctx.beginPath();
+    const x = sign * (gap / 2 + lensW / 2);
+    if (ctx.ellipse) ctx.ellipse(x, 0, lensW / 2, h / 2, 0, 0, Math.PI * 2);
+    else ctx.rect(x - lensW / 2, -h / 2, lensW, h);
+    ctx.fill(); ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.moveTo(-gap / 2, 0); ctx.lineTo(gap / 2, 0); ctx.stroke();
+  ctx.restore();
+}
+
+const WATCH = ["jawOpen", "browInnerUp", "eyeBlinkLeft", "eyeBlinkRight", "mouthSmileLeft"];
+function showBlendshapes(cats) {
+  for (const name of WATCH) {
+    const cat = cats.find(x => x.categoryName === name);
+    if (!cat) continue;
+    let node = document.getElementById("bs-" + name);
+    if (!node) {
+      const d = document.createElement("div");
+      d.innerHTML = '<span></span><i><b id="bs-' + name + '"></b></i><span id="bsv-' + name + '" style="width:44px"></span>';
+      d.children[0].textContent = name;
+      el("bars").appendChild(d);
+      node = document.getElementById("bs-" + name);
+    }
+    node.style.transform = "scaleX(" + cat.score.toFixed(3) + ")";
+    document.getElementById("bsv-" + name).textContent = cat.score.toFixed(2);
+    report.result["blend_" + name + "_max"] =
+      Math.max(Number(report.result["blend_" + name + "_max"] || 0), cat.score).toFixed(2);
+  }
+}
+
+/* ---- Controls ---- */
+
+el("bStart").onclick = start;
+
+el("bDelegate").onclick = async () => {
+  delegate = delegate === "GPU" ? "CPU" : "GPU";
+  el("bDelegate").textContent = "Delegate: " + delegate;
+  if (landmarker) {
+    running = false;
+    try { await loadModel(); running = true; loop(); }
+    catch (e) { status("Reload failed: " + e.message, "bad"); log(String(e), "bad"); }
+  }
+};
+
+el("bDraw").onclick = () => {
+  drawMode = (drawMode + 1) % DRAW_MODES.length;
+  el("bDraw").textContent = "Overlay: " + DRAW_MODES[drawMode];
+};
+
+el("bSend").onclick = async () => {
+  report.env.userAgent = navigator.userAgent;
+  report.env.cores = navigator.hardwareConcurrency;
+  report.env.screen = screen.width + "x" + screen.height;
+  report.generatedAt = new Date().toISOString();
+  try {
+    const r = await fetch("/report", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(report, null, 2)
+    });
+    const out = await r.json();
+    status("Report saved as " + out.file, "ok");
+  } catch (e) {
+    status("POST failed: " + e.message, "warn");
+  }
+};
+
+row("userAgent", navigator.userAgent);
+log("page loaded — tap Start tracking");
+</script>
+</body>
+</html>

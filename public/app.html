@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PortalSnap</title>
+<style>
+  :root {
+    --bg: #0e0f16;
+    --bar: #191b26;
+    --line: #2b2e3d;
+    --ink: #ffffff;
+    --dim: #a2a8bd;
+    --accent: #6d5bf5;
+    --hot: #ff5c8a;
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", -apple-system, Roboto, sans-serif;
+    user-select: none;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  /* Selfie view: mirror the stage so video and overlay stay in lockstep. */
+  #stage {
+    position: relative; flex: 1; min-height: 0;
+    background: #000; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #stage > .mirror {
+    position: relative; height: 100%; aspect-ratio: 16 / 9;
+    transform: scaleX(-1);
+  }
+  #stage video, #stage canvas {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    display: block; object-fit: cover;
+  }
+
+  /* Type scale is deliberately wide: 44 / 22 / 13. Small children read the
+     big words and ignore the rest. */
+  #loader {
+    position: absolute; inset: 0; z-index: 30;
+    background: radial-gradient(circle at 50% 40%, #241f4d, #0e0f16 70%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; text-align: center; padding: 20px;
+  }
+  #loader h1 { font-size: 44px; font-weight: 800; margin: 0; letter-spacing: -.02em; }
+  #loader p { font-size: 22px; color: var(--dim); margin: 0; max-width: 22ch; }
+  #loader.hidden { display: none; }
+  .spinner {
+    width: 54px; height: 54px; border-radius: 50%;
+    border: 6px solid rgba(255,255,255,.15); border-top-color: var(--accent);
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #hint {
+    position: absolute; z-index: 20; left: 50%; top: 18px;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,.62); border-radius: 999px;
+    padding: 10px 20px; font-size: 20px; font-weight: 600;
+    opacity: 0; transition: opacity .25s;
+  }
+  #hint.show { opacity: 1; }
+
+  /* Bottom bar */
+  #bar {
+    flex: 0 0 auto; background: var(--bar); border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  }
+  #strip {
+    flex: 1; display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 2px;
+  }
+  #strip::-webkit-scrollbar { display: none; }
+  .chip {
+    flex: 0 0 auto; width: 96px; height: 96px; border-radius: 22px;
+    border: 3px solid transparent; background: #262a3a;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; cursor: pointer; touch-action: manipulation;
+    transition: transform .12s, border-color .12s, background .12s;
+  }
+  .chip .emo { font-size: 38px; line-height: 1; }
+  .chip .lbl { font-size: 13px; font-weight: 700; color: var(--dim); letter-spacing: .02em; }
+  .chip.on { border-color: var(--accent); background: #322c62; transform: translateY(-3px); }
+  .chip.on .lbl { color: #fff; }
+  .chip:active { transform: scale(.94); }
+
+  #shutter {
+    flex: 0 0 auto; width: 96px; height: 96px; border-radius: 50%;
+    border: 5px solid #fff; background: var(--hot);
+    font-size: 34px; color: #fff; cursor: pointer; touch-action: manipulation;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #shutter:active { transform: scale(.92); }
+
+  /* Photo review */
+  #review {
+    position: absolute; inset: 0; z-index: 40; background: rgba(8,9,14,.96);
+    display: none; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    padding: 18px;
+  }
+  #review.show { display: flex; }
+  #review img { max-width: 78%; max-height: 66%; border-radius: 16px; border: 3px solid #fff; }
+  #review .acts { display: flex; gap: 16px; }
+  #review a, #review button {
+    font: inherit; font-size: 22px; font-weight: 700; color: #fff;
+    background: var(--accent); border: 0; border-radius: 16px;
+    padding: 18px 30px; text-decoration: none; cursor: pointer;
+  }
+  #review button.alt { background: #343850; }
+
+  #flash {
+    position: absolute; inset: 0; z-index: 35; background: #fff;
+    opacity: 0; pointer-events: none;
+  }
+  #flash.fire { animation: flash .32s ease-out; }
+  @keyframes flash { 0% { opacity: .9; } 100% { opacity: 0; } }
+
+  #hud {
+    position: absolute; z-index: 20; right: 10px; bottom: 10px;
+    font: 12px/1.4 ui-monospace, Menlo, monospace; color: #7dd3a0;
+    background: rgba(0,0,0,.55); padding: 6px 9px; border-radius: 8px;
+    white-space: pre; display: none;
+  }
+  #hud.show { display: block; }
+  #hudTap { position: absolute; z-index: 21; right: 0; bottom: 0; width: 64px; height: 64px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div class="mirror">
+      <video id="v" autoplay playsinline muted></video>
+      <canvas id="fx"></canvas>
+    </div>
+    <div id="hint"></div>
+    <div id="flash"></div>
+    <div id="hud"></div>
+    <div id="hudTap"></div>
+    <div id="loader">
+      <div class="spinner"></div>
+      <h1>PortalSnap</h1>
+      <p id="loadMsg">Waking up the camera…</p>
+    </div>
+    <div id="review">
+      <!-- Transparent 1x1 until a photo exists, so no broken-image box can flash. -->
+      <img id="shot" alt="Your photo"
+           src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+      <div class="acts">
+        <a id="save" download="portalsnap.png">Save</a>
+        <button id="again" class="alt">Take another</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="bar">
+    <div id="strip"></div>
+    <button id="shutter" aria-label="Take photo">📸</button>
+  </div>
+</div>
+
+<!-- Classic script: shared by the worker (importScripts) and the fallback path. -->
+<script src="./anchors.js"></script>
+<script type="module">
+import { FILTERS } from "./filters.js";
+
+const el = id => document.getElementById(id);
+const video = el("v"), fx = el("fx"), ctx = fx.getContext("2d");
+
+let worker = null, stream = null;
+let mainDetector = null, backend = "worker", mainClock = 0;
+let trackerBroken = null;
+let active = null;              // current filter, null = none
+let trackerMode = "fast";       // "fast" = blazeface, "mesh" = full landmarks
+let inFlight = false, seq = 0;
+let lastResultAt = 0, lastInferMs = 0, detFps = 0, detTimes = [];
+
+// Smoothed anchors, in normalized coords. `target` is the latest detection,
+// `shown` is what we draw — it chases the target every render frame.
+let target = null, shown = null;
+
+function hint(msg, ms = 2200) {
+  el("hint").textContent = msg;
+  el("hint").classList.add("show");
+  clearTimeout(hint._t);
+  hint._t = setTimeout(() => el("hint").classList.remove("show"), ms);
+}
+
+/* ------------------------------ Startup ------------------------------ */
+
+async function boot() {
+  try {
+    el("loadMsg").textContent = "Waking up the camera…";
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    fx.width = video.videoWidth || 1280;
+    fx.height = video.videoHeight || 720;
+
+  } catch (err) {
+    el("loadMsg").textContent = "Camera problem: " + (err.name || "") + " " + (err.message || err);
+    return;
+  }
+
+  // Tracking is allowed to fail without taking the app down — showing a child
+  // their own face with no filters still beats a dead loading screen.
+  try {
+    el("loadMsg").textContent = "Loading the magic…";
+    await startTracker(trackerMode);
+  } catch (err) {
+    trackerBroken = "" + ((err && err.message) || err);
+    console.warn("tracking unavailable:", trackerBroken);
+  }
+
+  el("loader").classList.add("hidden");
+  hint(trackerBroken ? "Filters are having a nap — camera still works" : "Pick a filter below!", 4000);
+  pump();
+  render();
+}
+
+function onResult(m) {
+  inFlight = false;
+  lastInferMs = m.inferMs;
+  const now = performance.now();
+  detTimes.push(now);
+  while (detTimes.length && now - detTimes[0] > 2000) detTimes.shift();
+  detFps = detTimes.length / 2;
+  if (m.anchors) { target = m.anchors; lastResultAt = now; }
+}
+
+// Prefer the worker; fall back to main-thread inference rather than stranding
+// a child on a loading screen. The fallback blocks for ~23ms per detection,
+// which is worse but still usable.
+async function startTracker(mode) {
+  target = shown = null;
+  inFlight = false;
+  try {
+    await startWorker(mode);
+    backend = "worker";
+  } catch (err) {
+    console.warn("worker unavailable:", err.message);
+    el("loadMsg").textContent = "Almost there…";
+    await startMainThread(mode);
+    backend = "main";
+  }
+  trackerMode = mode;
+}
+
+function startWorker(mode) {
+  return new Promise((resolve, reject) => {
+    if (worker) { worker.terminate(); worker = null; }
+
+    let settled = false;
+    const w = new Worker("./tracker.worker.js");   // classic, not module — see the worker file
+    const finish = (fn, arg) => { if (!settled) { settled = true; clearTimeout(timer); fn(arg); } };
+
+    // Without this, any silent init failure hangs on the loading screen forever.
+    const timer = setTimeout(() => {
+      finish(reject, new Error("tracker init timed out after 20s"));
+      w.terminate();
+    }, 20000);
+
+    w.onmessage = e => {
+      const m = e.data;
+      if (m.type === "ready") { worker = w; finish(resolve, m); return; }
+      if (m.type === "error") {
+        if (m.fatal) { w.terminate(); finish(reject, new Error(m.message)); }
+        else console.warn("tracker:", m.message);
+        return;
+      }
+      if (m.type === "result") onResult(m);
+    };
+    w.onerror = ev => { w.terminate(); finish(reject, new Error(ev.message || "worker failed to load")); };
+
+    w.postMessage({ type: "init", mode });
+  });
+}
+
+async function startMainThread(mode) {
+  if (worker) { worker.terminate(); worker = null; }
+  if (mainDetector) { mainDetector.close(); mainDetector = null; }
+  const V = await import("./vendor/mediapipe/vision_bundle.mjs");
+  mainDetector = await window.Anchors.createDetector(V, mode);
+}
+
+/* --------------------- Frame pump (one in flight) --------------------- */
+
+// Only ever one frame in the worker: queueing them would add latency without
+// adding detections, and every queued bitmap is memory this device lacks.
+async function pump() {
+  if (video.readyState >= 2 && !inFlight && (worker || mainDetector)) {
+    inFlight = true;
+    let bmp = null;
+    try {
+      // 320-wide input measured fastest for blazeface and costs the landmarker
+      // nothing, since it resizes to a fixed tensor internally anyway.
+      bmp = await createImageBitmap(video, {
+        resizeWidth: 320, resizeHeight: 180, resizeQuality: "low"
+      });
+
+      if (backend === "worker" && worker) {
+        worker.postMessage({ type: "frame", bitmap: bmp, seq: ++seq }, [bmp]);
+        bmp = null;   // ownership transferred
+      } else if (mainDetector) {
+        const t0 = performance.now();
+        const res = mainDetector.detectForVideo(bmp, (mainClock += 34));
+        onResult({
+          anchors: window.Anchors.toAnchors(res, trackerMode),
+          inferMs: performance.now() - t0
+        });
+      } else {
+        inFlight = false;
+      }
+    } catch (e) {
+      inFlight = false;
+    } finally {
+      if (bmp) { try { bmp.close(); } catch (e) {} }
+    }
+  }
+  setTimeout(pump, 16);
+}
+
+/* ---------------------- Smoothing + render loop ---------------------- */
+
+const KEYS = ["eyeR", "eyeL", "nose", "mouth", "earR", "earL"];
+
+// Detections land at 17-30fps but we draw at the display rate, so `shown`
+// eases toward `target`. Alpha rises with distance: snappy on fast head
+// movement, still on slow — the cheap half of a one-euro filter.
+function ease(dt) {
+  if (!target) return;
+  if (!shown) { shown = JSON.parse(JSON.stringify(target)); return; }
+
+  for (const k of KEYS) {
+    if (!target[k] || !shown[k]) continue;
+    const dx = target[k].x - shown[k].x, dy = target[k].y - shown[k].y;
+    const dist = Math.hypot(dx, dy);
+    const a = Math.min(1, (0.18 + dist * 12) * (dt / 16.7));
+    shown[k].x += dx * a;
+    shown[k].y += dy * a;
+  }
+
+  shown.blendshapes = shown.blendshapes || {};
+  const tb = target.blendshapes || {};
+  for (const k in tb) {
+    const cur = shown.blendshapes[k] || 0;
+    shown.blendshapes[k] = cur + (tb[k] - cur) * Math.min(1, 0.25 * (dt / 16.7));
+  }
+}
+
+// Pixel-space frame every filter draws against.
+function buildFace(a) {
+  const w = fx.width, h = fx.height;
+  const eyeR = { x: a.eyeR.x * w, y: a.eyeR.y * h };
+  const eyeL = { x: a.eyeL.x * w, y: a.eyeL.y * h };
+  const cx = (eyeR.x + eyeL.x) / 2, cy = (eyeR.y + eyeL.y) / 2;
+  const dx = eyeL.x - eyeR.x, dy = eyeL.y - eyeR.y;
+  const eyeDist = Math.max(1, Math.hypot(dx, dy));
+  const angle = Math.atan2(dy, dx);
+
+  // Express nose/mouth in face space so filters never touch raw pixels.
+  const cos = Math.cos(-angle), sin = Math.sin(-angle);
+  const toFace = p => {
+    const px = p.x * w - cx, py = p.y * h - cy;
+    return { x: (px * cos - py * sin) / eyeDist, y: (px * sin + py * cos) / eyeDist };
+  };
+
+  const nose = toFace(a.nose), mouth = toFace(a.mouth);
+  const earR = toFace(a.earR), earL = toFace(a.earL);
+
+  // Ear span is the honest measure of head width; eye distance alone
+  // under-sizes hats and ears badly on wider or younger faces.
+  const earSpan = Math.max(0.8, Math.hypot(earL.x - earR.x, earL.y - earR.y));
+
+  // Yaw from how far the nose sits off the ear midpoint, as a fraction of the
+  // half-span: -1 fully turned one way, +1 the other. Lets flat stickers slide
+  // across the face instead of floating when the head turns.
+  const earMidX = (earR.x + earL.x) / 2;
+  const yaw = Math.max(-1, Math.min(1, (nose.x - earMidX) / (earSpan / 2)));
+
+  // Top of head, from facial proportion: eye-line-to-crown tracks
+  // eye-line-to-mouth closely enough for hats to sit right.
+  const headTopY = -1.3 * Math.abs(mouth.y);
+
+  return {
+    cx, cy, angle, eyeDist,
+    nose, mouth, earR, earL, earSpan, yaw, headTopY,
+    noseY: nose.y,
+    mouthY: mouth.y,
+    blendshapes: a.blendshapes || {},
+    mesh: a.mesh || null
+  };
+}
+
+let lastRender = performance.now();
+function render() {
+  const now = performance.now();
+  const dt = Math.min(50, now - lastRender);
+  lastRender = now;
+
+  ease(dt);
+  ctx.clearRect(0, 0, fx.width, fx.height);
+
+  const fresh = now - lastResultAt < 800;   // hide the overlay if tracking drops
+  if (active && shown && fresh) {
+    try { active.draw(ctx, buildFace(shown), now); }
+    catch (e) { console.warn("filter", active.id, e); }
+  }
+
+  if (el("hud").classList.contains("show")) {
+    el("hud").textContent =
+      "mode    " + trackerMode +
+      "\nbackend " + (trackerBroken ? "FAILED" : backend) +
+      "\ninfer   " + lastInferMs.toFixed(0) + " ms" +
+      "\ndetect  " + detFps.toFixed(1) + " fps" +
+      "\nrender  " + (1000 / dt).toFixed(0) + " fps" +
+      "\nface    " + (fresh ? "yes" : "no") +
+      (trackerBroken ? "\nerr     " + trackerBroken.slice(0, 90) : "");
+  }
+
+  requestAnimationFrame(render);
+}
+
+/* ------------------------------ Filters ------------------------------ */
+
+function buildStrip() {
+  const strip = el("strip");
+
+  const none = chip("🚫", "None", null);
+  none.classList.add("on");
+  strip.appendChild(none);
+
+  for (const f of FILTERS) strip.appendChild(chip(f.emoji, f.name, f));
+}
+
+function chip(emoji, label, filter) {
+  const b = document.createElement("div");
+  b.className = "chip";
+  b.innerHTML = '<div class="emo"></div><div class="lbl"></div>';
+  b.children[0].textContent = emoji;
+  b.children[1].textContent = label;
+  b.onclick = () => {
+    document.querySelectorAll(".chip").forEach(c => c.classList.remove("on"));
+    b.classList.add("on");
+    active = filter;
+    if (filter) selectTracker(filter);
+  };
+  return b;
+}
+
+// Only pay for the 3.7MB mesh model when a filter actually needs it.
+async function selectTracker(filter) {
+  const want = filter.needsMesh ? "mesh" : "fast";
+  if (want === trackerMode || trackerBroken) return;
+  hint(want === "mesh" ? "Fetching the puppy…" : "Getting ready…", 2500);
+  try {
+    await startTracker(want);
+  } catch (err) {
+    trackerBroken = "" + ((err && err.message) || err);
+    hint("That filter is having a nap", 2500);
+  }
+}
+
+/* --------------------------- Photo capture --------------------------- */
+
+el("shutter").onclick = () => {
+  const w = fx.width, h = fx.height;
+  const out = document.createElement("canvas");
+  out.width = w; out.height = h;
+  const octx = out.getContext("2d");
+
+  // Mirror both layers together so the photo matches what's on screen.
+  octx.translate(w, 0);
+  octx.scale(-1, 1);
+  octx.drawImage(video, 0, 0, w, h);
+  octx.drawImage(fx, 0, 0, w, h);
+
+  el("flash").classList.remove("fire");
+  void el("flash").offsetWidth;
+  el("flash").classList.add("fire");
+
+  const url = out.toDataURL("image/png");
+  el("shot").src = url;
+  el("save").href = url;
+  el("review").classList.add("show");
+};
+
+el("again").onclick = () => el("review").classList.remove("show");
+
+el("hudTap").onclick = () => el("hud").classList.toggle("show");
+
+buildStrip();
+boot();
+</script>
+</body>
+</html>

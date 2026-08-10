@@ -1,0 +1,8 @@
+# Device capability reports POSTed by the probe pages — local diagnostics
+reports/*.json
+
+node_modules/
+.DS_Store
+
+# Local tooling caches
+.impeccable/

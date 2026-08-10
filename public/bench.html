@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PortalSnap — Config Sweep</title>
+<style>
+  :root { --bg:#12131a; --panel:#1c1e29; --line:#2e3140; --ink:#f2f3f7;
+          --dim:#9aa0b4; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#6366f1; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--ink);
+              font:16px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1240px; margin:0 auto; padding:14px; }
+  h1 { font-size:22px; margin:0 0 10px; }
+  .btns { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+  button { font:inherit; font-weight:600; font-size:17px; color:#fff; background:var(--accent);
+           border:0; border-radius:14px; padding:16px 20px; min-height:60px;
+           cursor:pointer; touch-action:manipulation; }
+  button.alt { background:#343850; }
+  button[disabled] { opacity:.45; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+           padding:12px; margin-bottom:14px; }
+  .panel h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em;
+              color:var(--dim); margin:0 0 8px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th,td { padding:7px 6px; border-bottom:1px solid var(--line); text-align:left; }
+  th { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  td { font-family:ui-monospace,Menlo,monospace; }
+  td.name { font-family:inherit; }
+  .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+  #status { font-size:15px; margin-bottom:10px; min-height:22px; }
+  #log { background:#0a0b10; border:1px solid var(--line); border-radius:12px; padding:9px;
+         height:120px; overflow-y:auto; font-family:ui-monospace,Menlo,monospace;
+         font-size:12px; white-space:pre-wrap; }
+  video { width:220px; border-radius:10px; background:#000; transform:scaleX(-1); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Config Sweep</h1>
+  <div id="status">Tap Run sweep. Keep your face in frame the whole time (~60s).</div>
+  <div class="btns">
+    <button id="bRun">Run sweep</button>
+    <button id="bSend" class="alt" disabled>Send report</button>
+  </div>
+  <div class="panel">
+    <h2>Camera</h2>
+    <video id="v" autoplay playsinline muted></video>
+  </div>
+  <div class="panel">
+    <h2>Results — median inference per frame</h2>
+    <table id="tbl">
+      <thead><tr><th>Config</th><th>Input</th><th>Median</th><th>p95</th><th>Max FPS</th><th>Face</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="panel"><h2>Log</h2><div id="log"></div></div>
+</div>
+
+<script type="module">
+import { FaceLandmarker, FaceDetector, FilesetResolver } from "./vendor/mediapipe/vision_bundle.mjs";
+
+const el = id => document.getElementById(id);
+const report = { test:"config-sweep", env:{}, camera:{}, rows:[], errors:[] };
+
+function log(m, cls){ const d=document.createElement("div"); if(cls)d.className=cls;
+  d.textContent=new Date().toISOString().slice(11,19)+"  "+m;
+  el("log").appendChild(d); el("log").scrollTop=el("log").scrollHeight; }
+function status(m, cls){ el("status").className=cls||""; el("status").textContent=m; }
+
+const median = a => { const s=[...a].sort((x,y)=>x-y); return s[Math.floor(s.length/2)] || 0; };
+const p95 = a => { const s=[...a].sort((x,y)=>x-y); return s[Math.min(s.length-1, Math.floor(s.length*0.95))] || 0; };
+
+// Every model instance shares one monotonic clock; VIDEO mode rejects
+// timestamps that do not strictly increase.
+let clock = 0;
+const nextTs = () => (clock += 34);
+
+const FRAMES = 40;          // per config, after warmup
+const WARMUP = 8;           // discard: first calls include lazy GPU setup
+const SIZES = [[1280,720], [640,360], [320,180]];
+
+let stream, landmarkerBS, landmarkerPlain, detector;
+const scratch = document.createElement("canvas");
+const sctx = scratch.getContext("2d", { willReadFrequently:false });
+
+async function setupCamera(w, h) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { width:{ideal:w}, height:{ideal:h}, facingMode:"user" }, audio:false
+  });
+  el("v").srcObject = stream;
+  await el("v").play();
+  const s = stream.getVideoTracks()[0].getSettings();
+  report.camera[w+"x"+h+"_requested"] = (s.width||"?")+"x"+(s.height||"?")+" @"+Math.round(s.frameRate||0);
+  log("camera granted "+s.width+"x"+s.height+" @"+Math.round(s.frameRate||0)+"fps");
+  return s;
+}
+
+async function loadModels() {
+  status("Loading models…", "warn");
+  const fileset = await FilesetResolver.forVisionTasks("./vendor/mediapipe/wasm");
+
+  const t0 = performance.now();
+  landmarkerBS = await FaceLandmarker.createFromOptions(fileset, {
+    baseOptions:{ modelAssetPath:"./models/face_landmarker.task", delegate:"GPU" },
+    runningMode:"VIDEO", numFaces:1, outputFaceBlendshapes:true
+  });
+  log("landmarker+blendshapes loaded in "+Math.round(performance.now()-t0)+"ms");
+
+  const t1 = performance.now();
+  landmarkerPlain = await FaceLandmarker.createFromOptions(fileset, {
+    baseOptions:{ modelAssetPath:"./models/face_landmarker.task", delegate:"GPU" },
+    runningMode:"VIDEO", numFaces:1, outputFaceBlendshapes:false
+  });
+  log("landmarker (no blendshapes) loaded in "+Math.round(performance.now()-t1)+"ms");
+
+  const t2 = performance.now();
+  detector = await FaceDetector.createFromOptions(fileset, {
+    baseOptions:{ modelAssetPath:"./models/blaze_face_short_range.tflite", delegate:"GPU" },
+    runningMode:"VIDEO"
+  });
+  log("blazeface detector loaded in "+Math.round(performance.now()-t2)+"ms");
+}
+
+// Wait for a genuinely new camera frame so we never time the same pixels twice.
+function nextFrame() {
+  const video = el("v");
+  return new Promise(res => {
+    if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) video.requestVideoFrameCallback(() => res());
+    else requestAnimationFrame(() => res());
+  });
+}
+
+async function runConfig(name, w, h, detectFn) {
+  const video = el("v");
+  const native = (w === video.videoWidth && h === video.videoHeight);
+  scratch.width = w; scratch.height = h;
+
+  const times = [];
+  let hits = 0;
+
+  for (let i = 0; i < FRAMES + WARMUP; i++) {
+    await nextFrame();
+
+    // Full-res configs feed the <video> straight in; smaller ones pay a
+    // downscale blit first, which is part of the cost we are measuring.
+    let src = video;
+    if (!native) { sctx.drawImage(video, 0, 0, w, h); src = scratch; }
+
+    const t0 = performance.now();
+    let out = null;
+    try { out = detectFn(src); } catch (e) { report.errors.push(name+": "+e.message); log(name+" threw: "+e.message,"bad"); break; }
+    const dt = performance.now() - t0;
+
+    if (i >= WARMUP) {
+      times.push(dt);
+      const found = out && ((out.faceLandmarks && out.faceLandmarks.length) || (out.detections && out.detections.length));
+      if (found) hits++;
+    }
+  }
+
+  if (!times.length) return null;
+  const med = median(times), p = p95(times);
+  const row = { config:name, input:w+"x"+h, medianMs:+med.toFixed(1), p95Ms:+p.toFixed(1),
+                maxFps:+(1000/med).toFixed(1), faceRate:Math.round(100*hits/times.length)+"%" };
+  report.rows.push(row);
+  addRow(row);
+  log(name+" @"+w+"x"+h+": "+row.medianMs+"ms → "+row.maxFps+"fps, face "+row.faceRate);
+  return row;
+}
+
+function addRow(r) {
+  const tr = document.createElement("tr");
+  const cls = r.maxFps >= 30 ? "ok" : r.maxFps >= 15 ? "warn" : "bad";
+  tr.innerHTML =
+    '<td class="name">'+r.config+'</td><td>'+r.input+'</td><td>'+r.medianMs+' ms</td>' +
+    '<td>'+r.p95Ms+' ms</td><td class="'+cls+'">'+r.maxFps+'</td>' +
+    '<td class="'+(parseInt(r.faceRate)>80?"ok":"warn")+'">'+r.faceRate+'</td>';
+  el("tbl").tBodies[0].appendChild(tr);
+}
+
+async function sweep() {
+  el("bRun").disabled = true;
+  try {
+    await setupCamera(1280, 720);
+    await loadModels();
+
+    for (const [w, h] of SIZES) {
+      status("Testing landmarker+blendshapes @"+w+"x"+h+"…", "warn");
+      await runConfig("landmarker + blendshapes", w, h, s => landmarkerBS.detectForVideo(s, nextTs()));
+
+      status("Testing landmarker only @"+w+"x"+h+"…", "warn");
+      await runConfig("landmarker only", w, h, s => landmarkerPlain.detectForVideo(s, nextTs()));
+
+      status("Testing blazeface @"+w+"x"+h+"…", "warn");
+      await runConfig("blazeface detector", w, h, s => detector.detectForVideo(s, nextTs()));
+    }
+
+    // Does a lower-resolution capture reduce cost beyond the downscale blit?
+    status("Re-testing with a 640x480 camera capture…", "warn");
+    const s = await setupCamera(640, 480);
+    if (s.width <= 800) {
+      await runConfig("landmarker only (640 capture)", s.width, s.height,
+                      src => landmarkerPlain.detectForVideo(src, nextTs()));
+    } else {
+      log("camera ignored the 640x480 request (gave "+s.width+"x"+s.height+") — skipping", "warn");
+    }
+
+    status("Sweep complete. Tap Send report.", "ok");
+    el("bSend").disabled = false;
+  } catch (e) {
+    status("Sweep failed: "+e.message, "bad");
+    log(e.stack || String(e), "bad");
+    report.errors.push(String(e));
+  } finally {
+    el("bRun").disabled = false;
+  }
+}
+
+el("bRun").onclick = sweep;
+el("bSend").onclick = async () => {
+  report.env = { userAgent:navigator.userAgent, cores:navigator.hardwareConcurrency,
+                 deviceMemory:navigator.deviceMemory, screen:screen.width+"x"+screen.height };
+  report.generatedAt = new Date().toISOString();
+  try {
+    const r = await fetch("/report", { method:"POST", headers:{"Content-Type":"application/json"},
+                                       body:JSON.stringify(report, null, 2) });
+    const out = await r.json();
+    status("Report saved as "+out.file, "ok");
+  } catch (e) { status("POST failed: "+e.message, "warn"); }
+};
+
+log("ready — tap Run sweep");
+</script>
+</body>
+</html>
