@@ -95,7 +95,47 @@ cloudflared tunnel --url http://localhost:8080   # terminal 2 — prints an http
 
 Open that HTTPS URL in the Portal's browser and tap **Camera + Mic**.
 
-### Permanent path: the home server
+### Deployed: the home server
+
+Live at `~/docker/portalsnap/` on **homeserver**, behind the existing Cloudflare Tunnel.
+
+The repo is private, and the server's existing GitHub key is a deploy key scoped to a
+different repo, so portalsnap got its own read-only deploy key following the established
+per-repo pattern:
+
+```bash
+# on the server
+ssh-keygen -t ed25519 -f ~/.ssh/portalsnap_deploy -N "" -C "portalsnap-deploy@homeserver"
+cat >> ~/.ssh/config <<'EOF'
+
+Host github.com-portalsnap
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/portalsnap_deploy
+  IdentitiesOnly yes
+EOF
+
+# from a machine with gh authenticated
+gh repo deploy-key add portalsnap_deploy.pub --title "homeserver home server (read-only)"
+
+# back on the server
+git clone git@github.com-portalsnap:sgranman/portalsnap.git ~/docker/portalsnap
+cd ~/docker/portalsnap && docker compose up -d
+```
+
+Redeploying after a push:
+
+```bash
+ssh homeserver 'cd ~/docker/portalsnap && git pull && docker compose restart'
+```
+
+`public/` is read per-request through the bind mount, so **page and filter edits go live on
+`git pull` alone** — the restart is only needed when `server.js` changes.
+
+Routing is a Public Hostname entry in the Cloudflare Zero Trust dashboard
+(`portalsnap.<domain>` → `http://portalsnap:8080`); no ports are published on the host.
+
+### Alternative: quick tunnel
 
 Deploy behind the existing Cloudflare Tunnel at a stable hostname (e.g.
 `portalsnap.example.net`), which is far easier to retype on a touchscreen than a random
