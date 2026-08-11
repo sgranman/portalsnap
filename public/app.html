@@ -623,22 +623,41 @@ function buildFace(a) {
   };
 }
 
-let lastRender = performance.now();
+// Redrawing the overlay every display frame was the largest single cost in the
+// app: measured on-device at +10ms of inference and 24fps of detection down to
+// 18.5. Halving the canvas resolution saved nothing, so the cost is not fill
+// rate or texture upload — it is the fixed price of dirtying a composited layer,
+// paid per frame. The fix is therefore to draw less often, not smaller. 30Hz is
+// the honest ceiling anyway: the camera delivers 30fps and detections arrive
+// slower still, so anything above it redrew the same information twice.
+const RENDER_MIN_DT = 1000 / 30 - 1;
+
+let lastDraw = performance.now(), overlayDirty = false;
 function render() {
+  requestAnimationFrame(render);   // keep the loop alive even on skipped frames
+
   const now = performance.now();
-  const dt = Math.min(50, now - lastRender);
-  lastRender = now;
+  if (now - lastDraw < RENDER_MIN_DT) return;
+  const dt = Math.min(50, now - lastDraw);
+  lastDraw = now;
 
   const hidden = overlayUp();
-  if (!hidden) {
+  const fresh = now - lastResultAt < 800;   // hide the overlay if tracking drops
+  const wantDraw = !!(active && shown && fresh && !hidden);
+
+  if (wantDraw) {
     ease(dt);
     ctx.clearRect(0, 0, fx.width, fx.height);
-  }
-
-  const fresh = now - lastResultAt < 800;   // hide the overlay if tracking drops
-  if (active && shown && fresh && !hidden) {
     try { active.draw(ctx, buildFace(shown), now); }
     catch (e) { console.warn("filter", active.id, e); }
+    overlayDirty = true;
+  } else if (overlayDirty) {
+    // Clear once, then stop touching it. A layer nobody writes to costs the
+    // compositor nothing, but clearing it every frame costs the same as drawing
+    // — which is what the old loop did whenever no filter was picked or no face
+    // was in view.
+    ctx.clearRect(0, 0, fx.width, fx.height);
+    overlayDirty = false;
   }
 
   if (el("hud").classList.contains("show")) {
@@ -650,7 +669,9 @@ function render() {
       // What's left after grab+infer is loop overhead — the number to chase.
       "\ncycle   " + (detFps > 0 ? (1000 / detFps).toFixed(0) : "-") + " ms" +
       "\ndetect  " + detFps.toFixed(1) + " fps" +
-      "\nrender  " + (1000 / dt).toFixed(0) + " fps" +
+      // Capped at 30 on purpose — reads low by design, not as a symptom.
+      "\nrender  " + (1000 / dt).toFixed(0) + " fps (cap 30)" +
+      "\ndrawing " + (wantDraw ? "yes" : "no") +
       "\nface    " + (fresh ? "yes" : "no") +
       "\nmic     " + (stream && stream.getAudioTracks().length ? "yes" : "no") +
       "\nrecfmt  " + ((pickMime() || "none").replace("video/", "").split(";")[0]) +
@@ -661,8 +682,6 @@ function render() {
         : "") +
       (trackerBroken ? "\nerr     " + trackerBroken.slice(0, 90) : "");
   }
-
-  requestAnimationFrame(render);
 }
 
 /* ------------------------------ Filters ------------------------------ */

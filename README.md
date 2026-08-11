@@ -253,11 +253,50 @@ draw was expensive; it would have optimised the one stage that was already free.
 
 **And the preview costs more than recording does.** Row A is 22ms and 30fps, against 35-45ms
 and 17fps for the same tracker inside the app. The only material difference is that this
-page keeps its `<video>` at `display:none`. Displaying a 1280x720 camera feed, with a
-full-size transparent overlay canvas above it inside a mirrored container, redrawn every
-rAF, roughly doubles inference cost and halves the detection rate — in ordinary use, not
-just while recording. That is the largest single cost in the app and it was never suspected,
-because every earlier measurement was taken *through* it.
+page keeps its `<video>` at `display:none` — so the preview itself became the next thing to
+decompose.
+
+### The preview, one layer at a time
+
+Second run, same device, phases that add one thing each:
+
+| | config | `infer` p50 | p95 | `detect` |
+|---|---|---|---|---|
+| A | tracker only, nothing shown | 21 ms | 29 | 30.3 fps |
+| B | + video shown, unmirrored | 26 ms (**+5**) | 36 | 23.8 fps |
+| C | + mirrored, as the app does it | 26 ms (**+0**) | 37 | 23.8 fps |
+| D | + overlay layer present, not redrawn | 25 ms (**−1**) | 38 | 24.0 fps |
+| E | + overlay redrawn every rAF | 35 ms (**+10**) | 48 | 18.5 fps |
+| F | as E, redraw capped to 30fps | 32 ms | 43 | 20.5 fps |
+| G | as E, overlay canvas at half res | 35 ms | 46 | 18.7 fps |
+| H | as E + recording — the real case | 76 ms | 112 | 10.5 fps |
+
+- **Redrawing the overlay is the single largest cost in the app: +10ms**, and 24fps of
+  detection down to 18.5.
+- **The mirror transform is free** (+0ms), and so is having an extra full-size composited
+  layer present (−1ms, i.e. noise). Both were suspects; neither is guilty.
+- **Displaying the video costs 5ms** and is not negotiable — it is the product.
+- **Half resolution saved nothing** (G ≈ E). That is the informative one: the cost is not
+  fill rate or texture upload, it is the fixed per-frame price of *dirtying* a composited
+  layer. So the fix is to draw less **often**, not smaller.
+- H at 76ms / 10.5fps against the app's HUD showing ~100ms / 10fps says the harness
+  reproduces the app closely enough to trust the decomposition.
+
+### What was done about it
+
+Two changes in `render()`, one measured and one free:
+
+1. **The redraw is capped at 30Hz** (`RENDER_MIN_DT`). Measured: 3ms of inference and
+   +2fps of detection. It is also the honest ceiling — the camera delivers 30fps and
+   detections arrive slower still, so drawing at the display rate redrew the same
+   information twice.
+2. **An idle overlay is left untouched.** The old loop cleared the canvas every frame even
+   with no filter picked or no face in view, and clearing costs the same as drawing. It now
+   clears once and then stops writing, so the layer stays clean and costs the compositor
+   nothing. Verified off-device: canvas writes while idle went from ~60/sec to **0**.
+
+The HUD gained a `drawing` line so this is visible, and `render` now prints `(cap 30)` so a
+low number reads as intent rather than a symptom.
 
 ### Leading the target instead of chasing it
 
@@ -272,9 +311,9 @@ cannot follow a sharp reversal. So the lead is scaled by how well each new veloc
 in direction and magnitude with the smoothed one. Confidence collapses on a reversal and
 prediction backs off to plain easing exactly where it was hurting: **-14% / -5% / -1%**.
 
-Modest, and deliberately so — the dominant term is the 100ms inference, which no filter
-can remove. `project` is pure and lives in `anchors.js` precisely so the clamp and the
-lead can be unit-tested without a device or a face:
+Modest, and deliberately so — the dominant term is inference, which no filter can remove.
+`project` is pure and lives in `anchors.js` precisely so the clamp and the lead can be
+unit-tested without a device or a face:
 
 ```bash
 node test-project.js     # no dependencies, no build step — same as the rest of this repo
@@ -282,6 +321,57 @@ node test-project.js     # no dependencies, no build step — same as the rest o
 
 That matters here because the fake camera used for browser testing has no face in it, so
 nothing else in the automated path ever exercises the prediction maths.
+
+## Where this stands, and what to do next
+
+Everything asked for works and is deployed: photos and clips save to the server, clips are
+1280x720 H.264 with AAC audio, and `gallery.html` gets them into a phone's camera roll.
+What follows is tuning of the sticker lag, not the feature.
+
+**Performance budget as measured**, blazeface at 320x180 in the worker:
+
+| | `infer` | `detect` |
+|---|---|---|
+| floor — tracker alone, nothing displayed | 21 ms | 30 fps (camera cap) |
+| with the preview, as it now ships | ~32 ms | ~20 fps |
+| while recording | ~76 ms | ~10 fps |
+
+The preview's 5ms for displaying the video cannot be recovered. The remaining known costs
+are the overlay redraw (now capped, still ~7ms) and, while recording, `captureStream` at
++14ms.
+
+**Take a reading first.** The 30Hz cap and the idle-skip are deployed but have never been
+measured on the device. Bring up the HUD (bottom-right corner of the picture) and read
+`infer` / `detect` / `drawing` idle and recording. Expect roughly 32ms / 20fps idle. If it
+is much worse, that is new information and nothing below is worth doing yet.
+
+**Untested ideas, best first:**
+
+1. **Composite into an undisplayed canvas while recording, and show that instead.** D and E
+   together say a composited layer is free until you write to it. During a recording the
+   app writes to `fx` *and* to the recording canvas, and `fx` is a displayed layer. If
+   `fx` were undisplayed and the recording canvas shown in its place, the +10ms redraw cost
+   might vanish. Unverified, and it trades a video layer for a canvas layer, which B says
+   costs 5ms — so it could be a wash. Add phases to `recdiag.html` before writing it.
+2. **Cap the recording composite rate** below the camera's 30fps. `captureStream` costs
+   +14ms per captured frame; capturing at 20fps would give roughly a third of that back, at
+   the price of a 20fps clip. `frame` in row H was already 41ms (~24fps), so some of this is
+   happening involuntarily.
+3. **Skip the redraw when the drawing would not change.** Filters animate on `t`, so this
+   needs per-filter cooperation — a filter declaring itself static when the face is still.
+   Only worth it if 1 and 2 fail.
+
+**Do not** re-try these; each was measured and is dead: composite resolution (twice), a
+WebGL compositor for the composite *draw* (+1ms — there is nothing there), worker vs
+main-thread inference (~10ms, worker stays), mic DSP, and low light as the explanation for
+the camera's frame rate.
+
+**Method note, learned expensively.** Four theories were deployed and disproved one per
+round, each costing a trip to the device, because they were argued rather than measured. The
+things that actually worked were reading the numbers already on screen (the pump loop's
+16ms of dead polling) and building `recdiag.html` to run controlled A/B phases on-device and
+POST them back. Measure first; the `/report` endpoint has existed since the capability probe
+for exactly this.
 
 The HUD (tap the bottom-right corner) reports the chosen recorder format, whether a mic
 track exists, and the composite rate while recording.
