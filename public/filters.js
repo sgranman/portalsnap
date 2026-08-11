@@ -42,10 +42,33 @@ function unlift(ctx) {
   ctx.shadowOffsetY = 0;
 }
 
+// Where an animal ear attaches to a head.
+//
+// `face.earR/earL` are the *cheek* silhouette — checked against the canonical
+// model, they sit 0.22 face units BELOW the eye line, while the hairline is 0.54
+// above. Ears hung off those points grew out of the jaw, which is most of why
+// the puppy was the worst-fitting filter in the set.
+//
+// The hairline alone is too narrow, though: it is at +-0.58 face units where the
+// temples are at +-0.87. Real ears attach at the side of the skull, so this
+// blends the two — mostly the hairline's height, mostly the temple's width.
+// `pull` draws the attachment in toward the middle of the head: upright ears
+// want their base on the skull, floppy ones hang off the side of it.
+function earPoints(face, pull) {
+  if (!face.skullR || !face.templeR) return [face.earR, face.earL];
+  const k = 1 - (pull || 0);
+  const mix = (s, t) => ({
+    x: (t.x * 0.85 + s.x * 0.15) * k,
+    y: s.y * 0.95 + t.y * 0.05
+  });
+  return [mix(face.skullR, face.templeR), mix(face.skullL, face.templeL)];
+}
+
 // Run fn once per ear, with the origin on that ear and +x pointing outward,
 // so a single drawing works mirrored on both sides.
-function perEar(ctx, face, fn) {
-  for (const ear of [face.earR, face.earL]) {
+function perEar(ctx, face, fn, pull) {
+  const pair = earPoints(face, pull);
+  for (const ear of pair) {
     const out = ear.x < 0 ? -1 : 1;
     ctx.save();
     ctx.translate(ear.x, ear.y);
@@ -63,59 +86,81 @@ const dog = {
   id: "dog", name: "Puppy", emoji: "🐶", needsMesh: true, voice: 0.78,
   draw(ctx, face, t) {
     inFaceSpace(ctx, face, c => {
-      const S = face.earSpan;
+      const S = face.headSpan;
       const sway = Math.sin(t / 500) * 0.05;
 
+      // Radii, not diameters — `ellipse` takes radii, and these were written as
+      // though it took widths, so every ear was drawn twice the intended size.
+      // Rendered against the canonical face, each one stood taller than the whole
+      // head. A floppy ear hangs below where it attaches, which is what the
+      // downward centre offset is for.
       lift(c, face, 0.05);
       perEar(c, face, (cc) => {
-        cc.rotate(0.25 + sway);
-        const w = S * 0.30, h = S * 0.62;
+        cc.rotate(0.30 + sway);
+        const w = S * 0.115, h = S * 0.235;
         cc.fillStyle = "#7d4f24";
-        ellipse(cc, w * 0.15, h * 0.42, w, h);
+        ellipse(cc, w * 0.25, h * 0.82, w, h);
         cc.fill();
         cc.fillStyle = "#5a3517";
-        ellipse(cc, w * 0.18, h * 0.46, w * 0.55, h * 0.72);
+        ellipse(cc, w * 0.30, h * 0.88, w * 0.55, h * 0.72);
         cc.fill();
       });
       unlift(c);
 
-      // Snout on the measured nose point.
-      const nx = face.nose.x, ny = face.nose.y;
+      // Snout seated on measured points rather than offset from the nose tip by
+      // a constant: the muzzle spans the nostrils and reaches down to the upper
+      // lip, both of which the dense model reports.
+      const nx = face.nose.x;
+      const snoutTop = face.nose.y;
+      const snoutBottom = face.mouth ? face.mouth.y : face.nose.y + 0.3;
+      const ny = (snoutTop + snoutBottom) / 2;
+      const halfW = face.nostrilR && face.nostrilL
+        ? Math.max(S * 0.14, Math.abs(face.nostrilL.x - face.nostrilR.x) * 0.95)
+        : S * 0.20;
+      const halfH = Math.max(S * 0.10, (snoutBottom - snoutTop) * 0.80);
+
       lift(c, face, 0.05);
       c.fillStyle = "#d69b5c";
-      ellipse(c, nx, ny + 0.08, S * 0.30, S * 0.22);
+      ellipse(c, nx, ny, halfW, halfH);
       c.fill();
       unlift(c);
 
       c.fillStyle = "#f0e0cc";
-      ellipse(c, nx, ny + 0.14, S * 0.20, S * 0.13);
+      ellipse(c, nx, ny + halfH * 0.28, halfW * 0.66, halfH * 0.6);
       c.fill();
 
-      // Nose leather: rounded triangle, not an oval — an oval reads as a bruise.
+      // Nose leather on the nose tip itself, sized from the nostril span rather
+      // than from head width — noses do not scale with skulls.
       c.fillStyle = "#26190f";
       c.beginPath();
-      const nw = S * 0.135, nh = S * 0.10;
-      c.moveTo(nx - nw, ny - nh * 0.5);
-      c.quadraticCurveTo(nx, ny - nh * 1.25, nx + nw, ny - nh * 0.5);
-      c.quadraticCurveTo(nx + nw * 0.8, ny + nh * 0.95, nx, ny + nh * 1.1);
-      c.quadraticCurveTo(nx - nw * 0.8, ny + nh * 0.95, nx - nw, ny - nh * 0.5);
+      const nw = halfW * 0.40, nh = halfH * 0.34;
+      const lx = nx, ly = snoutTop + nh * 0.85;
+      c.moveTo(lx - nw, ly - nh * 0.5);
+      c.quadraticCurveTo(lx, ly - nh * 1.25, lx + nw, ly - nh * 0.5);
+      c.quadraticCurveTo(lx + nw * 0.8, ly + nh * 0.95, lx, ly + nh * 1.1);
+      c.quadraticCurveTo(lx - nw * 0.8, ly + nh * 0.95, lx - nw, ly - nh * 0.5);
       c.closePath();
       c.fill();
 
       c.fillStyle = "rgba(255,255,255,.5)";
-      ellipse(c, nx - nw * 0.35, ny - nh * 0.5, nw * 0.22, nh * 0.16);
+      ellipse(c, lx - nw * 0.35, ly - nh * 0.5, nw * 0.22, nh * 0.16);
       c.fill();
 
+      // The tongue hangs from the real lower lip and is as wide as the real
+      // mouth, so it lands in an open mouth instead of near one.
       const open = face.blendshapes.jawOpen || 0;
       if (open > 0.10) {
-        const len = S * (0.16 + open * 0.42);
-        const my = face.mouth.y;
+        const my = face.lipBottom ? face.lipBottom.y : face.mouth.y;
+        const mw = face.mouthR && face.mouthL
+          ? Math.abs(face.mouthL.x - face.mouthR.x) * 0.34
+          : S * 0.11;
+        const len = mw * (1.1 + open * 2.2);
         c.fillStyle = "#ef6f8e";
         c.beginPath();
-        c.moveTo(nx - S * 0.13, my);
-        c.lineTo(nx + S * 0.13, my);
-        c.quadraticCurveTo(nx + S * 0.15, my + len, nx, my + len);
-        c.quadraticCurveTo(nx - S * 0.15, my + len, nx - S * 0.13, my);
+        c.moveTo(nx - mw, my);
+        c.lineTo(nx + mw, my);
+        c.quadraticCurveTo(nx + mw * 1.15, my + len, nx, my + len);
+        c.quadraticCurveTo(nx - mw * 1.15, my + len, nx - mw, my);
         c.closePath();
         c.fill();
         c.strokeStyle = "rgba(190,60,90,.75)";
@@ -132,15 +177,20 @@ const dog = {
 /* ------------------------------- Cat ------------------------------- */
 
 const cat = {
-  id: "cat", name: "Kitty", emoji: "🐱", needsMesh: false, voice: 1.42,
+  // Mesh tier for the ears: they belong on the skull, and six keypoints cannot
+  // say where that is.
+  id: "cat", name: "Kitty", emoji: "🐱", needsMesh: true, voice: 1.42,
   draw(ctx, face) {
     inFaceSpace(ctx, face, c => {
-      const S = face.earSpan;
+      const S = face.headSpan;
 
+      // Ear triangles sized against the head: each is a third of its width and
+      // rises a quarter of it. They were half the head wide and ran off the top
+      // of the picture.
       lift(c, face, 0.05);
       perEar(c, face, (cc) => {
         cc.rotate(0.12);
-        const w = S * 0.24, h = S * 0.46;
+        const w = S * 0.115, h = S * 0.30;
         cc.fillStyle = "#55555f";
         cc.beginPath();
         cc.moveTo(-w, 0.06); cc.lineTo(w * 0.35, -h); cc.lineTo(w * 1.1, 0.02);
@@ -149,7 +199,7 @@ const cat = {
         cc.beginPath();
         cc.moveTo(-w * 0.45, 0.0); cc.lineTo(w * 0.33, -h * 0.62); cc.lineTo(w * 0.68, 0.0);
         cc.closePath(); cc.fill();
-      });
+      }, 0.22);
       unlift(c);
 
       const nx = face.nose.x, ny = face.nose.y;
@@ -160,6 +210,9 @@ const cat = {
       c.quadraticCurveTo(nx, ny + S * 0.10, nx - S * 0.09, ny - S * 0.04);
       c.closePath(); c.fill();
 
+      // Whiskers stop just past the cheek instead of a third of a head beyond
+      // it. `reach` is the real cheek half-width where the dense model gives it.
+      const reach = face.earL ? Math.abs(face.earL.x - face.earR.x) * 0.5 : S * 0.5;
       c.strokeStyle = "rgba(255,255,255,.94)";
       c.lineWidth = 0.024;
       c.lineCap = "round";
@@ -169,8 +222,8 @@ const cat = {
           const y = ny + S * (0.02 + i * 0.075);
           c.beginPath();
           c.moveTo(nx + side * S * 0.12, y);
-          c.quadraticCurveTo(nx + side * S * 0.38, y - S * (0.05 - i * 0.03),
-                             nx + side * S * 0.62, y - S * (0.10 - i * 0.07));
+          c.quadraticCurveTo(nx + side * reach * 0.60, y - S * (0.05 - i * 0.03),
+                             nx + side * reach * 1.02, y - S * (0.10 - i * 0.07));
           c.stroke();
         }
       }
@@ -244,10 +297,12 @@ const shades = {
 /* ------------------------------ Crown ------------------------------ */
 
 const crown = {
-  id: "crown", name: "Royal", emoji: "👑", needsMesh: false,
+  // Mesh tier: a crown's whole job is to sit on the top of the head, and in
+  // fast mode that position is a proportion rather than a measurement.
+  id: "crown", name: "Royal", emoji: "👑", needsMesh: true,
   draw(ctx, face, t) {
     inFaceSpace(ctx, face, c => {
-      const S = face.earSpan;
+      const S = face.headSpan;
       const cx = (face.earR.x + face.earL.x) / 2;
       const w = S * 0.92, h = S * 0.42;
 
@@ -351,7 +406,7 @@ const mustache = {
   id: "mustache", name: "Fancy", emoji: "🎩", needsMesh: false, voice: 0.8,
   draw(ctx, face) {
     inFaceSpace(ctx, face, c => {
-      const S = face.earSpan;
+      const S = face.headSpan;
       const cx = (face.earR.x + face.earL.x) / 2;
 
       c.save();
@@ -361,7 +416,9 @@ const mustache = {
       const brimW = S * 1.02, brimH = S * 0.07;
       ellipse(c, 0, 0, brimW / 2, brimH);
       c.fill();
-      const crownW = S * 0.60, crownH = S * 0.62;
+      // Was 0.62 of a head width tall, which ran off the top of a 16:9 frame
+      // once the brim sat at the real hairline instead of above it.
+      const crownW = S * 0.56, crownH = S * 0.34;
       c.fillRect(-crownW / 2, -crownH, crownW, crownH);
       ellipse(c, 0, -crownH, crownW / 2, brimH * 0.8);
       c.fill();
@@ -370,19 +427,24 @@ const mustache = {
       c.fillRect(-crownW / 2, -crownH * 0.28, crownW, crownH * 0.16);
       c.restore();
 
+      // Half-width from the real mouth corners: the old 0.44 of a head width
+      // per side made a mustache as wide as the entire face.
       const mx = face.mouth.x, my = face.mouth.y;
+      const M = face.mouthR && face.mouthL
+        ? Math.max(S * 0.22, Math.abs(face.mouthL.x - face.mouthR.x) * 0.62)
+        : S * 0.30;
       lift(c, face, 0.04);
       c.fillStyle = "#2c1c11";
       c.beginPath();
-      c.moveTo(mx, my - S * 0.13);
-      c.bezierCurveTo(mx - S * 0.16, my - S * 0.20, mx - S * 0.42, my - S * 0.17,
-                      mx - S * 0.44, my + S * 0.02);
-      c.bezierCurveTo(mx - S * 0.28, my - S * 0.05, mx - S * 0.11, my - S * 0.01,
-                      mx, my + S * 0.02);
-      c.bezierCurveTo(mx + S * 0.11, my - S * 0.01, mx + S * 0.28, my - S * 0.05,
-                      mx + S * 0.44, my + S * 0.02);
-      c.bezierCurveTo(mx + S * 0.42, my - S * 0.17, mx + S * 0.16, my - S * 0.20,
-                      mx, my - S * 0.13);
+      c.moveTo(mx, my - M * 0.42);
+      c.bezierCurveTo(mx - M * 0.52, my - M * 0.65, mx - M * 1.37, my - M * 0.55,
+                      mx - M * 1.43, my + M * 0.07);
+      c.bezierCurveTo(mx - M * 0.91, my - M * 0.16, mx - M * 0.36, my - M * 0.03,
+                      mx, my + M * 0.07);
+      c.bezierCurveTo(mx + M * 0.36, my - M * 0.03, mx + M * 0.91, my - M * 0.16,
+                      mx + M * 1.43, my + M * 0.07);
+      c.bezierCurveTo(mx + M * 1.37, my - M * 0.55, mx + M * 0.52, my - M * 0.65,
+                      mx, my - M * 0.42);
       c.closePath();
       c.fill();
       unlift(c);

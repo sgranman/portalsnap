@@ -35,24 +35,48 @@ await p.setViewport({ width: 1280, height: 644 });
 // Replaces the tracker with a controllable one. Same message contract as
 // tracker.worker.js: init -> ready, frame -> result.
 await p.evaluateOnNewDocument(() => {
+  // The face is MediaPipe's own canonical model, orthographically projected —
+  // the geometry the tracker was trained to report, so a filter that fits this
+  // fits a person. Twenty-two of its 468 vertices, taken from
+  // canonical_face_model.obj (CC-BY 4.0), in canonical units: x right, y up,
+  // z out of the face.
+  const CANON = {
+    eyeR: [-4.446, 2.664], eyeL: [4.446, 2.664],
+    nose: [0.000, -1.127], mouth: [0.000, -3.994],
+    earR: [-7.664, 0.673], earL: [7.664, 0.673],
+    headTop: [0.000, 8.262], skullR: [-5.133, 7.486], skullL: [5.133, 7.486],
+    templeR: [-7.743, 2.365], templeL: [7.743, 2.365],
+    browR: [-3.987, 5.109], browL: [3.987, 5.109],
+    chin: [0.000, -9.403], jawR: [-5.941, -6.224], jawL: [5.941, -6.224],
+    noseUnder: [0.000, -2.089], nostrilR: [-1.406, -1.714], nostrilL: [1.406, -1.714],
+    lipBottom: [0.000, -4.542], mouthR: [-2.456, -4.343], mouthL: [2.456, -4.343]
+  };
+  const CORE = ["eyeR", "eyeL", "nose", "mouth", "earR", "earL"];
+  const SCALE = 18, CXP = 640, CYP = 331, W = 1280, H = 720;
+  // Where a landmark lands in the frame, for the fit assertions to compare against.
+  window.__at = k => ({
+    x: (CXP + CANON[k][0] * SCALE) / W,
+    y: (CYP - CANON[k][1] * SCALE) / H
+  });
+
   // `jitterPx` reproduces the thing a fake camera cannot: a real tracker never
   // reports the same point twice, so "still" in the app means "moving by the
   // noise floor". A test with a perfectly motionless face passes on a threshold
   // far too tight to ever fire on the device.
-  window.__face = { mode: "still", phase: 0, jitterPx: 0 };
+  window.__face = { mode: "still", phase: 0, jitterPx: 0, dense: true };
   window.__anchors = () => {
     const f = window.__face;
     if (f.mode === "gone") return null;
     // A drift big enough to be visible, applied only in "move".
     const d = f.mode === "move" ? Math.sin((f.phase += 0.25)) * 0.06 : 0;
     const n = () => (f.jitterPx ? (Math.random() - 0.5) * 2 * f.jitterPx / 1280 : 0);
-    const at = (x, y) => ({ x: x + d + n(), y: y + n() });
-    return {
-      eyeR: at(0.45, 0.42), eyeL: at(0.55, 0.42),
-      nose: at(0.50, 0.50), mouth: at(0.50, 0.58),
-      earR: at(0.40, 0.45), earL: at(0.60, 0.45),
-      blendshapes: { jawOpen: 0.2 }
-    };
+    const a = { blendshapes: f.dense ? { jawOpen: 0.45 } : {}, dense: !!f.dense };
+    for (const k in CANON) {
+      if (!f.dense && CORE.indexOf(k) < 0) continue;
+      const p = window.__at(k);
+      a[k] = { x: p.x + d + n(), y: p.y + n() };
+    }
+    return a;
   };
   window.Worker = class {
     postMessage(m) {
@@ -203,6 +227,106 @@ check("the overlay survives a filter throwing mid-draw", (await inked()) > 0.004
 await pickFilter("None");
 await sleep(300);
 check("clearing still covers the whole canvas afterwards", (await inked()) < 0.001, "inked: " + (await inked()).toFixed(4));
+
+// ---- Fit ----
+//
+// "It draws something" was all the old tests checked, and a puppy whose ears
+// grew out of its cheeks passed that easily. These compare where the ink
+// actually lands against where the landmarks are, which is the only way a
+// misplaced sticker can fail a test rather than a person's eyes.
+//
+// Ink is summarised as a bounding box and a centroid in normalised frame
+// coordinates, per horizontal band, so a claim like "the ears are above the eyes"
+// becomes arithmetic.
+const inkStats = () => p.evaluate(() => {
+  const cv = document.getElementById("fx");
+  const w = cv.width, h = cv.height;
+  const d = cv.getContext("2d").getImageData(0, 0, w, h).data;
+  let n = 0, sx = 0, sy = 0, minX = 1, maxX = 0, minY = 1, maxY = 0;
+  let aboveEye = 0, belowChin = 0;
+  const eyeY = window.__at("eyeR").y, chinY = window.__at("chin").y;
+  for (let y = 0; y < h; y += 2) {
+    for (let x = 0; x < w; x += 2) {
+      if (d[(y * w + x) * 4 + 3] <= 8) continue;
+      const nx = x / w, ny = y / h;
+      n++; sx += nx; sy += ny;
+      if (nx < minX) minX = nx;
+      if (nx > maxX) maxX = nx;
+      if (ny < minY) minY = ny;
+      if (ny > maxY) maxY = ny;
+      if (ny < eyeY) aboveEye++;
+      if (ny > chinY) belowChin++;
+    }
+  }
+  if (!n) return null;
+  return { n, cx: sx / n, cy: sy / n, minX, maxX, minY, maxY,
+           aboveEye: aboveEye / n, belowChin: belowChin / n };
+});
+const at = k => p.evaluate(kk => window.__at(kk), k);
+
+await setJitter(0);
+await setFace("still");
+const eye = await at("eyeR"), chin = await at("chin"), top = await at("headTop");
+const temR = await at("templeR"), temL = await at("templeL");
+const headW = temL.x - temR.x;
+
+await pickFilter("Puppy");
+await sleep(1200);
+{
+  const s = await inkStats();
+  check("puppy: most of the drawing is not below the chin", s && s.belowChin < 0.12,
+    s ? "below chin " + (s.belowChin * 100).toFixed(0) + "%" : "no ink");
+  // The bug: ears drawn on the cheek anchors, 0.22 face units below the eye line.
+  check("puppy: ears reach above the eye line", s && s.minY < eye.y - 0.02,
+    s ? "top of ink " + s.minY.toFixed(3) + " vs eye " + eye.y.toFixed(3) : "no ink");
+  check("puppy: nothing floats above the top of the head", s && s.minY > top.y - 0.06,
+    s ? "top of ink " + s.minY.toFixed(3) + " vs head top " + top.y.toFixed(3) : "no ink");
+  check("puppy: ears stay near the width of the head", s && s.maxX - s.minX < headW * 1.35,
+    s ? "ink width " + (s.maxX - s.minX).toFixed(3) + " vs head " + headW.toFixed(3) : "no ink");
+  check("puppy: the drawing is centred on the face", s && Math.abs(s.cx - 0.5) < 0.03,
+    s ? "centroid x " + s.cx.toFixed(3) : "no ink");
+}
+
+await pickFilter("Kitty");
+await sleep(1200);
+{
+  const s = await inkStats();
+  check("kitty: ears rise above the head top", s && s.minY < top.y + 0.01,
+    s ? "top of ink " + s.minY.toFixed(3) + " vs head top " + top.y.toFixed(3) : "no ink");
+  check("kitty: ears do not run off the frame", s && s.minY > 0.01, s ? s.minY.toFixed(3) : "no ink");
+  check("kitty: whiskers stay within half a head of the face",
+    s && s.maxX - s.minX < headW * 1.6,
+    s ? "ink width " + (s.maxX - s.minX).toFixed(3) + " vs head " + headW.toFixed(3) : "no ink");
+}
+
+await pickFilter("Royal");
+await sleep(1200);
+{
+  const s = await inkStats();
+  check("royal: the crown sits above the brows, not on the face",
+    s && s.aboveEye > 0.95, s ? "above eye line " + (s.aboveEye * 100).toFixed(0) + "%" : "no ink");
+  check("royal: the crown does not float off the head",
+    s && s.maxY > top.y - 0.02, s ? "bottom of ink " + s.maxY.toFixed(3) + " vs head top " + top.y.toFixed(3) : "no ink");
+}
+
+await pickFilter("Cool");
+await sleep(900);
+{
+  const s = await inkStats();
+  check("cool: the lenses sit on the eye line", s && Math.abs(s.cy - eye.y) < 0.04,
+    s ? "centroid y " + s.cy.toFixed(3) + " vs eye " + eye.y.toFixed(3) : "no ink");
+}
+
+await pickFilter("Fancy");
+await sleep(900);
+{
+  const s = await inkStats();
+  check("fancy: the hat clears the head and the mustache is on the lip",
+    s && s.minY < top.y + 0.02 && s.maxY > eye.y, JSON.stringify(s && { minY: +s.minY.toFixed(3), maxY: +s.maxY.toFixed(3) }));
+  check("fancy: the mustache is not as wide as the whole head",
+    s && s.maxX - s.minX < headW * 1.25,
+    s ? "ink width " + (s.maxX - s.minX).toFixed(3) + " vs head " + headW.toFixed(3) : "no ink");
+}
 
 // Every filter has to draw without throwing — including the mesh-tier one,
 // which swaps trackers on selection.

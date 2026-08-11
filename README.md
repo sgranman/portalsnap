@@ -129,6 +129,71 @@ because the measurement said it was never the variable — see below. `REC_WIDTH
 can't encode odd ones); it costs nothing to keep and makes the ceiling adjustable if the
 camera ever delivers more than it does today.
 
+## Making the filters actually fit
+
+The filters sat badly on faces, the puppy worst of all, and the reason was not the drawing.
+
+**The dense model was being paid for and thrown away.** `toAnchors()` extracted six landmarks
+in mesh mode and never populated `mesh`, so `face.mesh` was always null. The puppy loaded a
+3.7MB model and spent ~10ms a frame on 478 landmarks to read exactly one number from it
+(`jawOpen`), then placed its ears from the same six blazeface-equivalent points as everything
+else.
+
+Rather than trust recollection of MediaPipe's numbering, every index used here was checked
+against [`canonical_face_model.obj`](https://github.com/google-ai-edge/mediapipe/blob/master/mediapipe/modules/face_geometry/data/canonical_face_model.obj)
+— a wrong index puts a sticker on the wrong part of a face and looks exactly like a maths bug.
+That turned two vague complaints into numbers:
+
+| | as drawn | measured truth |
+|---|---|---|
+| top of head (`headTopY`) | `-1.3 × |mouth.y|` = 0.97 above the eye line | landmark 10, the highest of the 468, at **0.63** |
+| where animal ears attached | `earR/earL`, **0.22 below** the eye line — the cheeks | the hairline, **0.54 above** |
+
+So hats floated 1.55x too high, and the puppy's ears grew out of its jaw. The invented `1.3`
+is now a measured `0.84` for the fast tier, and mesh-tier filters use the landmark itself.
+
+**Fifteen named landmarks, not a raw mesh.** `MESH_EXTRA` in `anchors.js` adds the head top,
+hairline, temples, brows, chin, jaw, nostrils, lip bottom and mouth corners. Named points go
+through the same easing, leading and deadband as the original six, which a flat array of 478
+could not — and the drawing code stays declarative about anatomy instead of indexing a model.
+
+**A third fault the numbers never showed.** Rendered against a real face, each puppy ear stood
+taller than the whole head: `ellipse()` takes radii and the ear sizes had been written as
+though it took widths. Same for the cat. Both are halved, and the cat's whiskers now stop just
+past the cheek rather than a third of a head beyond it.
+
+**Puppy, Kitty and Royal are mesh tier now**; Cool, Fancy and Googly stay on blazeface, since
+an eye line and a lip are all they need. Selecting a mesh filter swaps the model, as it always
+has, and costs detection rate while it is on.
+
+### Seeing it instead of arguing about it
+
+The fit was judged by rendering each filter over MediaPipe's own canonical face —
+orthographically projected, wireframed, with the real app running behind a stubbed tracker — at
+close and normal framing and with the head turned 26°. Guessing at proportions and asking
+someone to go and look at a Portal is how the performance work went wrong four times over;
+a picture on this machine costs nothing.
+
+That rig is now assertions in `test/filters.mjs`, which uses the canonical geometry as its
+synthetic face and checks *where the ink lands* rather than that ink exists. On the old
+geometry they fail exactly as a person would describe it: **32% of the puppy below the chin**,
+ears never reaching above the eye line, ink wider than the head.
+
+### What about downloadable filters?
+
+Asked, and worth recording: there is no filter pack for a framework like this. What exists is
+the **canonical face mesh UV template** — MediaPipe's `.obj` carries 468 texture coordinates
+and 1,200 triangles, and ARCore ships [`canonical_face_mesh.fbx`/`.psd`](https://developers.google.com/ar/develop/c/augmented-faces/create-assets)
+as a painting template (CC-BY 4.0), with more reference textures salvaged in
+[Spark AR's asset repo](https://github.com/RobbieConceptuel/Spark-AR-Face-Assets). Those are
+templates to paint into, not finished faces. Lens Studio, DeepAR and Banuba are proprietary
+SDKs with nothing portable in them.
+
+Consuming such a texture means drawing 1,200 textured triangles per frame, which is a
+non-starter in canvas 2D on a device where the overlay redraw already costs 11ms — it would
+need a WebGL overlay. That remains a real option, and the UV data is available if the hand-drawn
+filters ever stop being enough.
+
 ## Silly voices
 
 Four filters change how you sound in a clip: **Puppy** growls (0.78), **Fancy** goes plummy

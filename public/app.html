@@ -593,7 +593,16 @@ async function pump() {
 
 /* ---------------------- Smoothing + render loop ---------------------- */
 
-const KEYS = ["eyeR", "eyeL", "nose", "mouth", "earR", "earL"];
+// The six blazeface keypoints, then the dense-model extras. Every loop over
+// KEYS skips a point the current tracker didn't supply, so one list serves both
+// tiers — and the extras get the same easing, leading and deadband as the rest
+// rather than a private path of their own.
+const KEYS = [
+  "eyeR", "eyeL", "nose", "mouth", "earR", "earL",
+  "headTop", "skullR", "skullL", "templeR", "templeL", "browR", "browL",
+  "chin", "jawR", "jawL", "noseUnder", "nostrilR", "nostrilL",
+  "lipBottom", "mouthR", "mouthL"
+];
 
 // Detections land at 17-30fps but we draw at the display rate, so `shown`
 // eases toward `target`. Alpha rises with distance: snappy on fast head
@@ -661,18 +670,39 @@ function buildFace(a) {
   const earMidX = (earR.x + earL.x) / 2;
   const yaw = Math.max(-1, Math.min(1, (nose.x - earMidX) / (earSpan / 2)));
 
-  // Top of head, from facial proportion: eye-line-to-crown tracks
-  // eye-line-to-mouth closely enough for hats to sit right.
-  const headTopY = -1.3 * Math.abs(mouth.y);
-
-  return {
+  const face = {
     cx, cy, angle, eyeDist,
-    nose, mouth, earR, earL, earSpan, yaw, headTopY,
+    nose, mouth, earR, earL, earSpan, yaw,
     noseY: nose.y,
     mouthY: mouth.y,
     blendshapes: a.blendshapes || {},
-    mesh: a.mesh || null
+    dense: !!a.dense
   };
+
+  // Whatever the dense model supplied, in the same face space. A filter reading
+  // any of these must declare `needsMesh`; in fast mode they are simply absent
+  // and `dense` is false.
+  for (const k of KEYS) {
+    if (!(k in face) && a[k]) face[k] = toFace(a[k]);
+  }
+
+  // Real head width, measured at the widest vertices of the canonical model
+  // (+-7.74) rather than at the cheeks, which sit lower and further back.
+  face.headSpan = face.templeR && face.templeL
+    ? Math.max(0.8, Math.hypot(face.templeL.x - face.templeR.x, face.templeL.y - face.templeR.y))
+    : earSpan;
+
+  // Top of the head. With the dense model this is a measured landmark — the
+  // highest of the 468.
+  //
+  // Without it, it stays a proportion of eye-line-to-mouth, but a measured one.
+  // The old factor of 1.3 was invented, and against the canonical model it
+  // overshoots by 1.55x: the crown sits 0.630 face units above the eye line
+  // where the mouth sits 0.749 below, so the honest ratio is 0.84. That single
+  // wrong constant is why hats floated above heads in fast mode.
+  face.headTopY = face.headTop ? face.headTop.y : -0.84 * Math.abs(mouth.y);
+
+  return face;
 }
 
 // Redrawing the overlay every display frame was the largest single cost in the

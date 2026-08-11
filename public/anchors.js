@@ -13,6 +13,36 @@
   // filter never learns which tracker tier produced them.
   const MESH = { eyeR: 33, eyeL: 263, nose: 1, mouth: 13, earR: 234, earL: 454 };
 
+  // Everything the dense model knows that six keypoints cannot. Only present in
+  // mesh mode, so a filter that reads these must declare `needsMesh`.
+  //
+  // Every index below was checked against canonical_face_model.obj rather than
+  // recalled, because a wrong index here is a sticker on the wrong part of a
+  // face and looks exactly like a maths bug. The rank in that model is quoted
+  // where it settles the question: `headTop` really is the single highest vertex
+  // of 468, and the temples really are the widest.
+  //
+  // Side naming follows the six above: "R" is negative x in the canonical model,
+  // which is what 33 and 234 are, so 127 and 103 belong with them.
+  const MESH_EXTRA = {
+    headTop: 10,      // highest vertex of the 468. Hats and crowns sit here.
+    skullR: 103,      // hairline at the side of the skull, +0.54 face units up:
+    skullL: 332,      //   where an animal's ears belong, not the cheeks.
+    templeR: 127,     // widest vertices of the model, +-7.74 — true head width,
+    templeL: 356,     //   measured at eye height rather than at the jaw.
+    browR: 105,
+    browL: 334,
+    chin: 152,        // lowest vertex of the 468.
+    jawR: 172,        // the wide, low corner of the jaw.
+    jawL: 397,
+    noseUnder: 2,     // underside of the nose, for seating a snout.
+    nostrilR: 98,
+    nostrilL: 327,
+    lipBottom: 14,    // inner lower lip; `mouth` (13) is the inner upper lip.
+    mouthR: 61,       // mouth corners.
+    mouthL: 291
+  };
+
   function toAnchors(res, mode) {
     if (!res) return null;
 
@@ -20,11 +50,19 @@
       const faces = res.faceLandmarks || [];
       if (!faces.length) return null;
       const lm = faces[0];
-      const a = { blendshapes: {} };
+      const a = { blendshapes: {}, dense: true };
       for (const k in MESH) {
         const p = lm[MESH[k]];
         if (!p) return null;
         a[k] = { x: p.x, y: p.y };
+      }
+      // Named points rather than the raw 478: everything a filter draws against
+      // goes through the same smoothing, prediction and deadband as the six
+      // core anchors, and a flat mesh array could not. Fifteen extra points cost
+      // nothing to ease; 478 would have to be special-cased everywhere.
+      for (const k in MESH_EXTRA) {
+        const p = lm[MESH_EXTRA[k]];
+        if (p) a[k] = { x: p.x, y: p.y };
       }
       if (res.faceBlendshapes && res.faceBlendshapes[0]) {
         for (const c of res.faceBlendshapes[0].categories) a.blendshapes[c.categoryName] = c.score;
@@ -82,5 +120,5 @@
     return { x: pt.x + dx, y: pt.y + dy };
   }
 
-  root.Anchors = { KP, MESH, toAnchors, createDetector, project };
+  root.Anchors = { KP, MESH, MESH_EXTRA, toAnchors, createDetector, project };
 })(typeof self !== "undefined" ? self : this);

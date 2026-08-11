@@ -24,7 +24,7 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 
 | | what it covers |
 |---|---|
-| `filters.mjs` | the drawing path: filters ink the canvas, still faces stop repainting, a lost face clears it, a throwing filter doesn't corrupt the context |
+| `filters.mjs` | the drawing path, and *fit*: where the ink lands against the landmarks, still faces stop repainting, a lost face clears it, a throwing filter doesn't corrupt the context |
 | `render.mjs` | the render loop's 30Hz cap and its idle skip |
 | `e2e.mjs` | capture → upload → in-app album → delete, and `gallery.html` |
 | `rechud.mjs` | the recording HUD lines appear, read plausibly, and clear afterwards |
@@ -38,6 +38,13 @@ instead — same three messages as `tracker.worker.js`, returning synthetic anch
 drives on demand. Everything downstream of a detection is testable that way; a test relying
 on the fake camera alone can only ever assert that nothing is being drawn, which is how a
 filter regression once shipped green.
+
+Those anchors are 22 vertices of MediaPipe's canonical face model, so the synthetic face is
+anatomically real and the fit assertions mean something: "the ears reach above the eye line"
+is a claim about geometry, and it fails on the old code with the ears 0.22 face units below it.
+An earlier version of this stub used made-up coordinates for a perfectly motionless face, and
+that single unrealistic detail hid two shipped bugs — no jitter to defeat the still-face
+threshold, no anatomy to catch ears on the cheeks.
 
 `recdiag.mjs` takes about three minutes and asserts on *structure*, not timings — it checks
 that phase L really hides the video and shows the composite, that phase I really halves the
