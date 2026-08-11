@@ -874,7 +874,16 @@ async function selectTracker(filter) {
 // themselves when they watch it back, which is the funnier half anyway.
 const voiceOf = f => (f && f.voice) || 1;
 
+// Every node in this graph is held in a variable that outlives the function that
+// built it, and that is not tidiness — it is the fix for a real bug. A
+// MediaStreamAudioSourceNode is collectable as soon as script can no longer
+// reach it, *even while it is connected and producing sound*. Held only by a
+// local, it survived the first clip or two and then vanished on the next
+// collection, leaving a graph that ran happily and output silence. Reproduced by
+// forcing a collection between clips: clip 1 at -22dB, clip 2 at -68dB, clips 3
+// and 4 at -inf. See test/voice-gc.mjs, which now does exactly that.
 let actx = null, voiceNode = null, voiceOut = null, voiceSetup = null;
+let voiceSrc = null, voiceIn = null, voiceOutStream = null;
 
 // Built on the first recording and then reused. An AudioContext per clip would
 // spend one of this device's few audio threads every time, and creating it
@@ -889,12 +898,15 @@ function ensureVoice() {
     const ctxa = new Ctx();
     if (!ctxa.audioWorklet) { try { ctxa.close(); } catch (e) {} return null; }
     await ctxa.audioWorklet.addModule("./pitch.worklet.js");
-    const src = ctxa.createMediaStreamSource(new MediaStream([mic[0]]));
-    const node = new AudioWorkletNode(ctxa, "pitch-shift");
-    const out = ctxa.createMediaStreamDestination();
-    src.connect(node).connect(out);                     // never to ctxa.destination
-    actx = ctxa; voiceNode = node; voiceOut = out;
-    return out.stream.getAudioTracks()[0] || null;
+    // Assigned to the outer variables, not locals: see the note above them.
+    voiceIn = new MediaStream([mic[0]]);
+    voiceSrc = ctxa.createMediaStreamSource(voiceIn);
+    voiceNode = new AudioWorkletNode(ctxa, "pitch-shift");
+    voiceOut = ctxa.createMediaStreamDestination();
+    voiceOutStream = voiceOut.stream;
+    voiceSrc.connect(voiceNode).connect(voiceOut);      // never to ctxa.destination
+    actx = ctxa;
+    return voiceOutStream.getAudioTracks()[0] || null;
   })().catch(err => {
     // A missing voice must never cost a recording, the same way a refused mic
     // is not allowed to cost the camera.

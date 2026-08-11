@@ -159,6 +159,18 @@ the filter *is*.
 - **A missing voice never costs a recording.** If `AudioWorklet` is absent, the module fails to
   load, or there is no mic, the bare microphone track is used and the HUD says `voice 1.42
   (off)`. Same rule as the camera: a refused mic is not allowed to cost the video.
+- **Every node is held in a variable that outlives the function that built it.** Not tidiness:
+  a `MediaStreamAudioSourceNode` is collectable as soon as script can no longer reach it, *even
+  while it is connected and producing sound*. Held only by a local, it survived a clip or two
+  and then vanished on the next collection, leaving a graph that ran perfectly and recorded
+  silence. It shipped that way, and the first report of it was "after one or two videos the
+  audio stops".
+
+  Reproduced by forcing a collection between clips, which turned a vague
+  intermittent complaint into an exact one: **-22dB, -68dB, -inf, -inf**. With the references
+  held, eight consecutive clips with a collection between each stayed at -22dB. Reverting the
+  fix reproduces the failure on demand, which is the only reason to believe the diagnosis
+  rather than the first plausible story about it.
 
 Verified two ways, because the browser and the arithmetic answer different questions.
 `node test-pitch.js` drives the worklet straight from Node — it needs only two globals to

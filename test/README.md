@@ -30,6 +30,7 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 | `rechud.mjs` | the recording HUD lines appear, read plausibly, and clear afterwards |
 | `fullscreen.mjs` | the full screen button toggles both ways and doesn't cover the camera controls |
 | `voice.mjs` | the encoder gets the pitch-shifted track, the ratio follows the filter, the graph parks when idle |
+| `voice-gc.mjs` | clips still contain sound after a forced garbage collection — see below |
 | `recdiag.mjs` | `recdiag.html`'s thirteen phases really configure what they claim to |
 
 **The fake camera has no face in it.** That is why `filters.mjs` stubs the tracker worker
@@ -42,6 +43,12 @@ filter regression once shipped green.
 that phase L really hides the video and shows the composite, that phase I really halves the
 canvas, and so on. The timings it prints are meaningless on a Mac, where every phase lands
 at 7ms; only the Portal can answer those.
+
+`voice-gc.mjs` forces a collection through CDP between clips and then decodes each saved file
+back with `decodeAudioData` to measure it, so it needs no ffmpeg. It exists because an audio
+node held only by a local was collected mid-session and every later clip recorded silence: the
+graph ran, the encoder ran, and the result was -inf dB. Anything that builds a Web Audio graph
+here should be assumed vulnerable to that and tested this way.
 
 `e2e.mjs` counts album tiles, so it empties the album through the API before it starts —
 every other browser test saves a photo, and running them in sequence used to make it fail with
