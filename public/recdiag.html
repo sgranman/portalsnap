@@ -48,8 +48,7 @@
   #stage.mir > .mirror { transform:scaleX(-1); }
   #stage > .mirror > video, #stage > .mirror > canvas {
     position:absolute; inset:0; width:100%; height:100%; display:block; object-fit:cover; }
-  #fx.off { display:none; }
-  #rc { display:none; }
+  #fx.off, #rc.off, #v.off { display:none; }
 </style>
 </head>
 <body>
@@ -58,19 +57,23 @@
   <div class="mirror">
     <video id="v" autoplay playsinline muted></video>
     <canvas id="fx"></canvas>
+    <!-- The recording canvas lives in the stage so one phase can display it in
+         place of the video and overlay. It is mirrored internally, so when it is
+         the visible layer the stage's own mirror stays off. -->
+    <canvas id="rc" class="off"></canvas>
   </div>
 </div>
-<canvas id="rc"></canvas>
 <div id="status"></div>
 
 <div id="ui">
   <h1>Preview and recording cost</h1>
   <p class="sub">
-    The last run found something unexpected: with the camera preview hidden, inference is
-    22ms and detection runs at the camera's full 30fps — against 40ms and 17fps inside the
-    app. So displaying the preview may cost more than recording does. This walks the
-    preview up one layer at a time, then adds recording on top. About a minute and a half.
-    Keep your face in view; it needs real detections to time.
+    Rows A–H walk the preview up one layer at a time and then add recording, which is how
+    we learned that redrawing the overlay costs more than recording does. I–L test what to
+    do about it: whether capping the redraw rate and shrinking the canvas are the same
+    saving twice, how the cost falls as the rate drops, and whether recording can composite
+    less often or display the composite it already makes instead of the video. About two
+    and a half minutes. Keep your face in view; it needs real detections to time.
   </p>
   <button id="go">Start</button>
   <table id="out" hidden>
@@ -104,7 +107,31 @@ const PHASES = [
   { id:"F", name:"as E, redraw capped to 30fps",  show:true, mirror:true, overlay:"live", hz:30 },
   { id:"G", name:"as E, overlay at half res",     show:true, mirror:true, overlay:"live", ovScale:0.5 },
   { id:"H", name:"as E + recording (real case)",  show:true, mirror:true, overlay:"live",
-            composite:true, capture:true, record:"canvas" }
+            composite:true, capture:true, record:"canvas" },
+
+  // Everything below answers a specific open question rather than decomposing
+  // the preview, so each is a variation on a row above it.
+  //
+  // I and J: the cap and the half-res saving were measured separately — are
+  // they additive, and does the cost fall linearly with the rate? J also stands
+  // in for the app's still-face skip, which simply lowers the redraw rate: if
+  // 15Hz lands halfway between 30Hz and never redrawing at all, the skip is
+  // worth the same as another halving whenever a child holds still.
+  { id:"I", name:"as F, 30fps cap + half res",    show:true, mirror:true, overlay:"live", hz:30, ovScale:0.5 },
+  { id:"J", name:"as E, redraw capped to 15fps",  show:true, mirror:true, overlay:"live", hz:15 },
+
+  // K: recording composites once per camera frame. Half of that still exceeds
+  // the detection rate, and captureStream was the single largest cost measured.
+  { id:"K", name:"as H, composite capped to 15fps", show:true, mirror:true, overlay:"live",
+            composite:true, capture:true, record:"canvas", compHz:15 },
+
+  // L: while recording, the composite already holds exactly what the preview is
+  // showing. Displaying it instead of the video and the overlay trades two live
+  // layers for one. If the video element stops producing frames once it is
+  // hidden the composite rate collapses, which shows up as a missing comp count
+  // rather than as a win.
+  { id:"L", name:"as H, but the preview IS the composite", show:true, overlay:"live",
+            composite:true, capture:true, record:"canvas", showComposite:true }
 ];
 
 let stream = null, worker = null, results = [], reportBody = null;
@@ -226,9 +253,9 @@ function endOverlay() {
 
 /* ------------------------------ composite ------------------------------ */
 
-let rctx = null, compositing = false, capTrack = null, lastFrameAt = 0;
+let rctx = null, compositing = false, capTrack = null, lastFrameAt = 0, lastCompAt = 0;
 
-function beginComposite(withCapture) {
+function beginComposite(withCapture, hz) {
   rc.width = video.videoWidth || 1280;
   rc.height = video.videoHeight || 720;
   rctx = rc.getContext("2d", { alpha:false });
@@ -247,15 +274,22 @@ function beginComposite(withCapture) {
 
   compositing = true;
   lastFrameAt = 0;
+  lastCompAt = 0;
+  const minCompDt = hz ? 1000 / hz - 1 : 0;
   const step = () => {
     if (!compositing) return;
     const t0 = performance.now();
+    // The camera's own delivery interval, recorded whether or not this frame is
+    // composited — it is the clock everything else is measured against.
     if (lastFrameAt && collecting && sample) sample.frame.push(t0 - lastFrameAt);
     lastFrameAt = t0;
-    rctx.drawImage(video, 0, 0, rc.width, rc.height);
-    rctx.drawImage(fx, 0, 0, rc.width, rc.height);
-    if (capTrack && capTrack.requestFrame) { try { capTrack.requestFrame(); } catch (e) {} }
-    if (collecting && sample) sample.comp.push(performance.now() - t0);
+    if (t0 - lastCompAt >= minCompDt) {
+      lastCompAt = t0;
+      rctx.drawImage(video, 0, 0, rc.width, rc.height);
+      rctx.drawImage(fx, 0, 0, rc.width, rc.height);
+      if (capTrack && capTrack.requestFrame) { try { capTrack.requestFrame(); } catch (e) {} }
+      if (collecting && sample) sample.comp.push(performance.now() - t0);
+    }
     next();
   };
   const next = () => {
@@ -271,6 +305,7 @@ function endComposite() {
   compositing = false;
   if (capTrack) { try { capTrack.stop(); } catch (e) {} capTrack = null; }
   rctx = null;
+  rc.classList.add("off");
 }
 
 /* ------------------------------- encoder ------------------------------- */
@@ -308,7 +343,16 @@ async function runPhase(ph, i) {
     stage.classList.toggle("mir", !!ph.mirror);
     if (ph.overlay) beginOverlay(ph.overlay, ph.ovScale, ph.hz);
     else fx.classList.add("off");
-    if (ph.composite) capture = beginComposite(ph.capture);
+    if (ph.composite) capture = beginComposite(ph.capture, ph.compHz);
+    // Swap the two live layers for the one that already holds both. The overlay
+    // keeps being redrawn — the composite reads from it — it just isn't shown.
+    if (ph.showComposite) {
+      rc.classList.remove("off");
+      fx.classList.add("off");
+      video.classList.add("off");
+    } else {
+      video.classList.remove("off");
+    }
     if (ph.record) {
       const track = ph.record === "canvas" ? capture : stream.getVideoTracks()[0];
       if (!track) throw new Error("no track to record");
@@ -337,9 +381,14 @@ async function runPhase(ph, i) {
     show: !!ph.show, mirror: !!ph.mirror, overlay: ph.overlay || null,
     ovScale: ph.ovScale || 1, hz: ph.hz || null,
     composite: !!ph.composite, capture: !!ph.capture, record: ph.record || null, mime: mime || null,
+    compHz: ph.compHz || null, showComposite: !!ph.showComposite,
     inferP50: round(pick(sample.infer, .5)), inferP95: round(pick(sample.infer, .95)),
     grabP50: round(pick(sample.grab, .5)),
     compP50: round(pick(sample.comp, .5)), frameP50: round(pick(sample.frame, .5)),
+    // How many frames were actually composited. A phase that hides the video
+    // has to be read against this: no composites means no measurement, not a
+    // free lunch.
+    compN: sample.comp.length,
     detectFps: round(sample.dets / (MEASURE_MS / 1000), 1),
     faceRate: sample.dets ? Math.round(100 * sample.faces / sample.dets) + "%" : "n/a",
     samples: sample.infer.length,
@@ -394,6 +443,43 @@ function verdict() {
     const g = v("E") - v("G");
     out += "Halving the overlay resolution: " + (g > 0 ? "saves " + g + "ms" : "no help") + ".\n";
   }
+
+  // Are the two savings the same saving twice, or do they add up?
+  if (v("I") != null && v("E") != null && v("F") != null && v("G") != null) {
+    const both = v("E") - v("I"), apart = (v("E") - v("F")) + (v("E") - v("G"));
+    out += "Cap and half res together: saves " + both + "ms, against " + apart +
+           "ms if the two were independent";
+    // Below a couple of milliseconds these are noise, and calling noise
+    // "additive" is how a diagnostic starts lying to you.
+    out += apart < 3 ? " — both too small here to tell apart.\n"
+                     : (both >= apart - 1 ? " — they add up.\n" : " — they overlap.\n");
+  }
+
+  // The rate curve. Redrawing less often is the only lever that has worked, and
+  // the app's still-face skip is exactly a lower rate, so this bounds it.
+  if (v("J") != null && v("D") != null && v("E") != null) {
+    out += "Redraw rate: 60fps " + v("E") + "ms, 30fps " + (v("F") != null ? v("F") : "?") +
+           "ms, 15fps " + v("J") + "ms, never " + v("D") + "ms.\n" +
+           "  So skipping redraws on a still face is worth at most " +
+           ((v("F") != null ? v("F") : v("E")) - v("D")) + "ms.\n";
+  }
+
+  out += "\n";
+  const rec = id => (by[id] || null);
+  const H = rec("H");
+  for (const id of ["K", "L"]) {
+    const r = rec(id);
+    if (!r || !H) continue;
+    // A recording variation that composited far fewer frames than H did not get
+    // cheaper, it got skipped — say so instead of reporting a saving.
+    const ratio = H.compN ? r.compN / H.compN : 0;
+    const g = H.inferP50 - r.inferP50;
+    const expected = r.compHz ? 0.4 : 0.75;   // a deliberate cap composites less by design
+    out += id + " (" + r.name + "): " + (g > 0 ? "saves " + g + "ms" : "no help") +
+           ", composited " + r.compN + " frames against H's " + H.compN +
+           (ratio < expected ? "  <-- too few to trust; the frame source likely stalled" : "") + "\n";
+  }
+
   if (worst) out += "\nDominant preview cost: " + worst[0] + " (" + fmt(worst[1]) + ").";
   return out;
 }
@@ -472,6 +558,7 @@ el("go").onclick = async () => {
     clearTimeout(pumpTimer);
     endComposite();
     endOverlay();
+    video.classList.remove("off");
     stage.classList.remove("on", "mir");
     el("ui").classList.remove("running");
     if (worker) { worker.terminate(); worker = null; }

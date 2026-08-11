@@ -624,15 +624,66 @@ function buildFace(a) {
 }
 
 // Redrawing the overlay every display frame was the largest single cost in the
-// app: measured on-device at +10ms of inference and 24fps of detection down to
-// 18.5. Halving the canvas resolution saved nothing, so the cost is not fill
-// rate or texture upload — it is the fixed price of dirtying a composited layer,
-// paid per frame. The fix is therefore to draw less often, not smaller. 30Hz is
-// the honest ceiling anyway: the camera delivers 30fps and detections arrive
+// app: measured on-device at +11ms of inference, and 24fps of detection down to
+// 18.5. Most of that is the fixed price of dirtying a composited layer rather
+// than fill rate — halving the canvas resolution recovered 3ms of the 11 —
+// so the fix is mainly to draw less often, and only secondarily smaller. 30Hz
+// is the honest ceiling anyway: the camera delivers 30fps and detections arrive
 // slower still, so anything above it redrew the same information twice.
 const RENDER_MIN_DT = 1000 / 30 - 1;
 
+// Two things make a redraw pointless, and both are common. Nothing has moved
+// since the last paint — a child sitting still holds `shown` inside a fraction
+// of a pixel — or the filter has no clock of its own, so the same anchors
+// produce the same picture. Skipping is worth roughly what capping the rate was
+// worth, because it is the same saving: a frame not drawn.
+const STILL_EPS = 0.0005;    // normalized units, so 0.6px across a 1280 frame
+
+// Three of the six filters animate on their own clock — a sway, a sparkle, a
+// pupil bob — so they cannot be skipped outright when the face holds still. The
+// slowest of those cycles takes about a second, though, so half the redraws
+// were showing the same picture twice. They get 15Hz instead of 30.
+const ANIM_MIN_DT = 1000 / 15 - 1;
+
+// Compared against the last *painted* state rather than the previous frame, so
+// a slow drift still repaints once it adds up to something visible.
+let painted = null, paintedId = "", lastPaintAt = 0;
+
+function needsPaint(now) {
+  if (!painted || paintedId !== active.id) return true;
+  for (const k of KEYS) {
+    const a = painted[k], b = shown[k];
+    if (!a !== !b) return true;
+    if (a && (Math.abs(a.x - b.x) > STILL_EPS || Math.abs(a.y - b.y) > STILL_EPS)) return true;
+  }
+  const pb = painted.blendshapes, sb = shown.blendshapes || {};
+  for (const k in sb) if (Math.abs((pb[k] || 0) - sb[k]) > 0.01) return true;
+  // Nothing moved. Whether there is still a reason to redraw depends on the
+  // filter having a clock, which is read off its signature: a filter that
+  // declares the time argument uses it. Keeping that in the signature rather
+  // than in a flag means it cannot drift out of step with the filter itself.
+  return active.draw.length >= 3 && now - lastPaintAt >= ANIM_MIN_DT;
+}
+
+// A filter that throws part-way through leaves the context transformed, and
+// every later clearRect would then clear a rotated sliver instead of the canvas
+// — one bad filter freezing the overlay for the rest of the session. reset()
+// puts the transform and the save stack back as well as clearing.
+function wipe() {
+  if (ctx.reset) ctx.reset();
+  else { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, fx.width, fx.height); }
+}
+
+// Only the anchors and blendshapes, never the mesh: a 478-point copy 30 times
+// a second would cost more than the redraw it saves.
+function snapshot(a) {
+  const s = { blendshapes: Object.assign({}, a.blendshapes) };
+  for (const k of KEYS) if (a[k]) s[k] = { x: a[k].x, y: a[k].y };
+  return s;
+}
+
 let lastDraw = performance.now(), overlayDirty = false;
+let paintTimes = [], paintFps = 0;
 function render() {
   requestAnimationFrame(render);   // keep the loop alive even on skipped frames
 
@@ -643,22 +694,34 @@ function render() {
 
   const hidden = overlayUp();
   const fresh = now - lastResultAt < 800;   // hide the overlay if tracking drops
-  const wantDraw = !!(active && shown && fresh && !hidden);
+  // Gated on `target`, not `shown`: `shown` is seeded by the first ease() call,
+  // so requiring it here meant a filter picked from a cold start could never
+  // begin drawing at all.
+  const wantDraw = !!(active && target && fresh && !hidden);
 
   if (wantDraw) {
     ease(dt);
-    ctx.clearRect(0, 0, fx.width, fx.height);
-    try { active.draw(ctx, buildFace(shown), now); }
-    catch (e) { console.warn("filter", active.id, e); }
-    overlayDirty = true;
+    if (needsPaint(now)) {
+      wipe();
+      try { active.draw(ctx, buildFace(shown), now); }
+      catch (e) { console.warn("filter", active.id, e); }
+      painted = snapshot(shown);
+      paintedId = active.id;
+      overlayDirty = true;
+      lastPaintAt = now;
+      paintTimes.push(now);
+    }
   } else if (overlayDirty) {
     // Clear once, then stop touching it. A layer nobody writes to costs the
     // compositor nothing, but clearing it every frame costs the same as drawing
     // — which is what the old loop did whenever no filter was picked or no face
     // was in view.
-    ctx.clearRect(0, 0, fx.width, fx.height);
+    wipe();
     overlayDirty = false;
+    painted = null;
   }
+  while (paintTimes.length && now - paintTimes[0] > 1000) paintTimes.shift();
+  paintFps = paintTimes.length;
 
   if (el("hud").classList.contains("show")) {
     el("hud").textContent =
@@ -671,6 +734,9 @@ function render() {
       "\ndetect  " + detFps.toFixed(1) + " fps" +
       // Capped at 30 on purpose — reads low by design, not as a symptom.
       "\nrender  " + (1000 / dt).toFixed(0) + " fps (cap 30)" +
+      // Redraws actually issued. Well under `render` means the still-face skip
+      // is earning its keep; equal to it means every frame changed something.
+      "\npaint   " + paintFps + " /s" +
       "\ndrawing " + (wantDraw ? "yes" : "no") +
       "\nface    " + (fresh ? "yes" : "no") +
       "\nmic     " + (stream && stream.getAudioTracks().length ? "yes" : "no") +

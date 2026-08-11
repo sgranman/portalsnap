@@ -234,6 +234,12 @@ carry the previous config's scheduling. Recorded chunks are dropped on the floor
 measures cost, it doesn't keep video. The page prints its own verdict, and the raw JSON
 stays on screen if the POST fails.
 
+That was the first version. What it found sent the investigation somewhere else, so the page
+was rewritten around the preview instead: it now runs **twelve** phases and takes about two
+and a half minutes — A–H decomposing the preview layer by layer as below, and I–L testing the
+candidate fixes, described at the end of this file. The table above is kept because the
+numbers under it are still the reason recording is not where the cost is.
+
 ### What it found
 
 Measured on the Portal, blazeface at 320x180, worker backend:
@@ -282,21 +288,81 @@ Second run, same device, phases that add one thing each:
 - H at 76ms / 10.5fps against the app's HUD showing ~100ms / 10fps says the harness
   reproduces the app closely enough to trust the decomposition.
 
+**The same phases run again the next morning**, which is the only reason the last bullet
+above is qualified below rather than deleted:
+
+| | A | B | C | D | E | F | G | H |
+|---|---|---|---|---|---|---|---|---|
+| first run | 21 | 26 | 26 | 25 | 35 | 32 | 35 | 76 |
+| second run | 22 | 25 | 25 | 24 | 35 | 30 | 32 | 76 |
+
+Everything reproduced within a millisecond or two except G: **half resolution recovered 3ms
+of the 11**, where the first run put it at zero. So the redraw cost is mostly the fixed
+per-frame price, but not entirely — there is a fill-rate component worth about a quarter of
+it. Drawing less *often* is still the lever that matters most; drawing *smaller* is a real
+but secondary one, and phase I now tests whether the two savings are the same saving twice.
+
 ### What was done about it
 
-Two changes in `render()`, one measured and one free:
+Three changes in `render()`, all of them the same idea — a frame not drawn is the only frame
+that is free:
 
-1. **The redraw is capped at 30Hz** (`RENDER_MIN_DT`). Measured: 3ms of inference and
-   +2fps of detection. It is also the honest ceiling — the camera delivers 30fps and
+1. **The redraw is capped at 30Hz** (`RENDER_MIN_DT`). Measured on-device: 5ms of inference
+   and +2.7fps of detection. It is also the honest ceiling — the camera delivers 30fps and
    detections arrive slower still, so drawing at the display rate redrew the same
    information twice.
 2. **An idle overlay is left untouched.** The old loop cleared the canvas every frame even
    with no filter picked or no face in view, and clearing costs the same as drawing. It now
    clears once and then stops writing, so the layer stays clean and costs the compositor
    nothing. Verified off-device: canvas writes while idle went from ~60/sec to **0**.
+3. **A still face is not repainted at all.** Once `shown` has converged, successive frames
+   differ by a fraction of a pixel, and the picture that results is identical. `needsPaint()`
+   compares the anchors against the last *painted* state — not the previous frame, so a slow
+   drift still repaints once it adds up to something visible — and skips the redraw when
+   nothing has moved by more than 0.6px across the frame.
 
-The HUD gained a `drawing` line so this is visible, and `render` now prints `(cap 30)` so a
-low number reads as intent rather than a symptom.
+   Three of the six filters animate on their own clock (the puppy's ear sway, the crown's
+   sparkle, the googly pupils' bob) and cannot be skipped outright. They are read off the
+   `draw` signature: a filter that declares the time argument uses it. Keeping that in the
+   signature rather than in a separate flag means it cannot drift out of step with the filter
+   it describes — worth caring about, because getting it wrong in the other direction freezes
+   a filter, and getting it wrong in this direction silently costs the saving. Those three
+   repaint at 15Hz instead of 30 while the face is still, since the slowest thing any of them
+   animates cycles in about a second.
+
+   Off-device: a static filter on a still face paints **0** times per second, a moving face
+   paints 25–30, and an animated filter on a still face paints 13–15.
+
+The HUD gained a `drawing` line and a `paint /s` line, and `render` prints `(cap 30)` so a
+low number reads as intent rather than a symptom. `paint` well under `render` means the skip
+is earning its keep; equal to it means every frame genuinely changed something.
+
+### The overlay froze: two bugs behind one symptom
+
+The morning after the 30Hz cap shipped, filters stopped drawing on the device entirely. Two
+separate faults, and the first was mine from the night before:
+
+- **`wantDraw` required `shown`, but only `ease()` ever assigns `shown`, and `ease()` only
+  ran when `wantDraw` was true.** A deadlock: from a cold start nothing could ever begin
+  drawing. It is gated on `target` now, and `ease()` seeds `shown` on its first call.
+- **A filter that throws part-way through a draw left the canvas context transformed.**
+  `inFaceSpace` does `save()`, transform, `fn()`, `restore()` — an exception skips the
+  `restore()`, so every later `clearRect(0, 0, w, h)` cleared a rotated, scaled sliver
+  instead of the canvas. One bad frame in one filter froze the overlay for the rest of the
+  session, and the `catch` around the draw made it look survivable. The clear is now
+  `wipe()`, which prefers `ctx.reset()` — that puts the transform and the save stack back as
+  well as clearing.
+
+**Why the test suite missed the first one.** Chrome's fake camera shows a rolling test
+pattern with no face in it, so no automated test had ever reached the drawing path — the
+suite asserted `drawing: no` and passed while the app was broken. The fix is not another
+assertion but a different fake: `filters.mjs` replaces the tracker worker with a stub that
+speaks the same three messages and returns synthetic anchors the test drives on demand,
+still or moving or absent. Everything downstream of a detection is then testable without a
+device or a face, and it asserts on pixels: that a picked filter inks the canvas, that all
+six filters draw, that a still face stops repainting without the drawing disappearing, that
+a lost face clears it, and — for the second bug — that breaking one draw on purpose does not
+stop later clears from covering the whole canvas.
 
 ### Leading the target instead of chasing it
 
@@ -319,8 +385,9 @@ unit-tested without a device or a face:
 node test-project.js     # no dependencies, no build step — same as the rest of this repo
 ```
 
-That matters here because the fake camera used for browser testing has no face in it, so
-nothing else in the automated path ever exercises the prediction maths.
+That matters because the browser tests can put a face in front of the tracker but cannot
+assert on where a hat *should* have landed; the clamp and the lead need arithmetic, not
+pixels. See `test/README.md` for the rest of the suite and what each part covers.
 
 ## Where this stands, and what to do next
 
@@ -336,30 +403,32 @@ What follows is tuning of the sticker lag, not the feature.
 | with the preview, as it now ships | ~32 ms | ~20 fps |
 | while recording | ~76 ms | ~10 fps |
 
-The preview's 5ms for displaying the video cannot be recovered. The remaining known costs
-are the overlay redraw (now capped, still ~7ms) and, while recording, `captureStream` at
-+14ms.
+The preview's 3–5ms for displaying the video cannot be recovered. The overlay redraw is
+capped and now skipped on a still face; while recording, `captureStream` is the +14ms that
+remains untouched.
 
-**Take a reading first.** The 30Hz cap and the idle-skip are deployed but have never been
-measured on the device. Bring up the HUD (bottom-right corner of the picture) and read
-`infer` / `detect` / `drawing` idle and recording. Expect roughly 32ms / 20fps idle. If it
-is much worse, that is new information and nothing below is worth doing yet.
+**Next: run `recdiag.html` and read rows I to L.** The four phases below the decomposition
+each answer one open question, and none of them can be answered off-device — a Mac runs the
+whole thing at 7ms and every delta disappears into noise.
 
-**Untested ideas, best first:**
+1. **I — cap and half res together.** 30Hz saves 5ms and half resolution saves 3ms
+   separately. If they add up, halving the overlay canvas is free money on top of what is
+   already deployed. If they overlap, they were always the same saving measured two ways.
+2. **J — the redraw rate curve.** 60 / 30 / 15 / never, with D as the floor. This also prices
+   the still-face skip that just shipped, because the skip *is* a lower rate: whatever 15Hz
+   is worth against 30Hz is roughly what a child sitting still now saves.
+3. **K — composite at 15fps while recording.** `captureStream` costs +14ms per captured
+   frame, and half of 30fps still exceeds the detection rate. The price is a 15fps clip.
+4. **L — display the composite instead of the video and overlay.** While recording, the
+   composite canvas already holds exactly what the preview shows, so this trades two live
+   layers for one. The risk is that a hidden `<video>` stops producing frames and the
+   composite silently stalls; the row reports `compN`, and the verdict calls it out rather
+   than reporting the stall as a win. (Off-device, `requestVideoFrameCallback` kept firing on
+   a `display:none` video — but desktop Chrome is not this device.)
 
-1. **Composite into an undisplayed canvas while recording, and show that instead.** D and E
-   together say a composited layer is free until you write to it. During a recording the
-   app writes to `fx` *and* to the recording canvas, and `fx` is a displayed layer. If
-   `fx` were undisplayed and the recording canvas shown in its place, the +10ms redraw cost
-   might vanish. Unverified, and it trades a video layer for a canvas layer, which B says
-   costs 5ms — so it could be a wash. Add phases to `recdiag.html` before writing it.
-2. **Cap the recording composite rate** below the camera's 30fps. `captureStream` costs
-   +14ms per captured frame; capturing at 20fps would give roughly a third of that back, at
-   the price of a 20fps clip. `frame` in row H was already 41ms (~24fps), so some of this is
-   happening involuntarily.
-3. **Skip the redraw when the drawing would not change.** Filters animate on `t`, so this
-   needs per-filter cooperation — a filter declaring itself static when the face is still.
-   Only worth it if 1 and 2 fail.
+Read the HUD too, idle and recording: `infer` / `detect` / `paint` / `drawing`. Expect
+roughly 30ms and 21fps idle with a filter on, and `paint` dropping to 0 when the child holds
+still. That last number is the one that says the newest change works.
 
 **Do not** re-try these; each was measured and is dead: composite resolution (twice), a
 WebGL compositor for the composite *draw* (+1ms — there is nothing there), worker vs
