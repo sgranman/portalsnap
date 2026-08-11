@@ -121,30 +121,48 @@ The 🎥 button records the composited view with mic audio, capped at 30 seconds
   for the upload and for a gallery that loads many at once. `toBlob` also avoids
   materialising a multi-megabyte base64 string on a 2GB device.
 
-### Why clips are 540p (measured on-device, recording a sticker filter)
+### Clips composite at 540p
 
-The first on-device HUD reading, taken mid-recording at 720p:
+A still composites once; a clip composites thirty times a second, so it pays for its
+resolution over and over. 960x540 is 56% of the pixels of 720p, which cuts the canvas
+draw and the encoder's work together. The width is a single constant (`REC_WIDTH` in
+`app.html`) and dimensions round to even, since H.264's 4:2:0 chroma can't encode odd
+ones. The HUD's `rec` line reports the composite rate *and* the size it is compositing
+at, so a photo of the HUD is self-describing.
 
-| | idle (from the sweep) | recording at 720p |
+This was originally changed to chase a detection-rate problem it did not fix — see below.
+It is kept because the reasoning above stands on its own, not because it was the cure.
+
+## Open: inference is ~4x slower in the app than in the sweep
+
+The first on-device HUD reading, taken mid-recording at 720p, against the sweep's
+blazeface-at-320x180 figure:
+
+| | `bench.html` sweep | app, recording |
 |---|---|---|
 | `infer` | 23.3 ms | **96 ms** |
 | `detect` | ~30 fps (camera-capped) | **8.5 fps** |
-| `render` | display rate | 23 fps |
-| `rec` | — | 20.8 fps composited |
 
-Inference ran ~4x slower while recording. The tracker's GPU delegate, a 1280x720 canvas
-draw done twice per frame, and the H.264 encoder all contend for the same memory
-bandwidth on a 2GB 32-bit device, and the tracker is what loses. That matters more than
-it looks: at 8.5 detections per second the sticker trails a fast head turn by ~120ms, and
-**that lag is baked into the saved clip**, not just the preview.
+Dropping the composite to 540p **did not move `detect`**, which rules out the first
+theory — that the draw and the encoder were starving the tracker.
 
-A still composites once; a clip composites thirty times a second, so it pays for its
-resolution over and over. 960x540 is 56% of the pixels, which cuts the draw and the
-encoder's work together. The width is a single constant (`REC_WIDTH` in `app.html`) and
-dimensions round to even, since H.264's 4:2:0 chroma can't encode odd ones.
+The confound: **`bench.html` has no Worker in it.** Every number in the sweep table was
+measured with the detector created and run on the *main thread*, where the page has a
+normal WebGL context. The app runs it in a **classic Web Worker**, where MediaPipe's
+`delegate: "GPU"` needs OffscreenCanvas and can silently fall back to CPU on an old
+driver. So the 23.3ms and the 96ms differ in two variables, not one, and 96ms for
+blazeface is slower than the *mesh* model measured on GPU (64.2ms) — which is the tell.
 
-The HUD's `rec` line reports the composite rate *and* the size it is compositing at, so a
-photo of the HUD is self-describing.
+Two things worth noting if this turns out to be a CPU fallback in the worker: the worker
+would be a pessimisation rather than an optimisation on this device, and the main-thread
+path already exists (`startMainThread`) and is what the sweep measured. The tradeoff is
+that main-thread inference blocks for the duration of each detection.
+
+**To measure it:** bring up the HUD (tap the bottom-right corner of the picture), then tap
+the **bottom-left** corner to swap the tracker between the worker and the main thread and
+compare `infer`. The tap target is inert unless the HUD is showing. Read it *idle* first —
+the original reading was taken while recording, which is what made the comparison
+ambiguous in the first place.
 
 The HUD (tap the bottom-right corner) reports the chosen recorder format, whether a mic
 track exists, and the composite rate while recording.

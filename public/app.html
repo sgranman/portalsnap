@@ -219,6 +219,8 @@
   }
   #hud.show { display: block; }
   #hudTap { position: absolute; z-index: 21; right: 0; bottom: 0; width: 64px; height: 64px; }
+  /* Only live while the HUD is up, so a child can't wander into it. */
+  #backendTap { position: absolute; z-index: 21; left: 0; bottom: 0; width: 64px; height: 64px; }
 </style>
 </head>
 <body>
@@ -233,6 +235,7 @@
     <div id="flash"></div>
     <div id="hud"></div>
     <div id="hudTap"></div>
+    <div id="backendTap"></div>
     <div id="loader">
       <div class="spinner"></div>
       <h1>PortalSnap</h1>
@@ -288,6 +291,9 @@ const video = el("v"), fx = el("fx"), ctx = fx.getContext("2d");
 let worker = null, stream = null;
 let mainDetector = null, backend = "worker", mainClock = 0;
 let trackerBroken = null;
+// Diagnostic override, set by the bottom-left tap target. null = prefer the
+// worker and fall back, "main" = force main-thread inference.
+let forceBackend = null;
 let active = null;              // current filter, null = none
 let trackerMode = "fast";       // "fast" = blazeface, "mesh" = full landmarks
 let inFlight = false, seq = 0;
@@ -367,15 +373,22 @@ function onResult(m) {
 async function startTracker(mode) {
   target = shown = null;
   inFlight = false;
-  try {
-    await startWorker(mode);
-    backend = "worker";
-  } catch (err) {
-    console.warn("worker unavailable:", err.message);
-    el("loadMsg").textContent = "Almost there…";
-    await startMainThread(mode);
-    backend = "main";
+  if (forceBackend !== "main") {
+    try {
+      await startWorker(mode);
+      // Releasing the main-thread detector matters once these can be swapped:
+      // two loaded models on a 2GB device is a model too many.
+      if (mainDetector) { try { mainDetector.close(); } catch (e) {} mainDetector = null; }
+      backend = "worker";
+      trackerMode = mode;
+      return;
+    } catch (err) {
+      console.warn("worker unavailable:", err.message);
+      el("loadMsg").textContent = "Almost there…";
+    }
   }
+  await startMainThread(mode);
+  backend = "main";
   trackerMode = mode;
 }
 
@@ -1038,6 +1051,25 @@ el("vdel").onclick = async () => {
 };
 
 el("hudTap").onclick = () => el("hud").classList.toggle("show");
+
+// The config sweep in bench.html measured the detector on the MAIN THREAD; the
+// app runs it in a worker, where MediaPipe's GPU delegate needs OffscreenCanvas
+// and can quietly fall back to CPU. Those two are not the same speed on this
+// device, so this swaps between them in one tap and makes `infer` directly
+// comparable — no rebuild, no retyping a URL on a touchscreen.
+el("backendTap").onclick = async () => {
+  if (!el("hud").classList.contains("show") || recording || overlayUp()) return;
+  forceBackend = forceBackend === "main" ? null : "main";
+  hint("Tracker → " + (forceBackend || "worker") + "…", 2500);
+  try {
+    await startTracker(trackerMode);
+    trackerBroken = null;
+    hint("Tracker on " + backend, 2500);
+  } catch (err) {
+    trackerBroken = "" + ((err && err.message) || err);
+    hint("That backend wouldn't start", 2500);
+  }
+};
 
 buildStrip();
 boot();
