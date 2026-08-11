@@ -591,7 +591,9 @@ function render() {
       "\nmic     " + (stream && stream.getAudioTracks().length ? "yes" : "no") +
       "\nrecfmt  " + ((pickMime() || "none").replace("video/", "").split(";")[0]) +
       (recording && recCanvas
-        ? "\nrec     " + recFps.toFixed(1) + " fps @" + recCanvas.width + "x" + recCanvas.height
+        ? "\nrec     " + recFps.toFixed(1) + " fps @" + recCanvas.width + "x" + recCanvas.height +
+          "\ncomp    " + compMs.toFixed(0) + " ms" +
+          "\nframe   " + frameMs.toFixed(0) + " ms"
         : "") +
       (trackerBroken ? "\nerr     " + trackerBroken.slice(0, 90) : "");
   }
@@ -661,6 +663,11 @@ let pending = null;        // { kind, blob, url, ext } awaiting Keep or discard
 let recorder = null, recTrack = null, recCanvas = null, recCtx = null;
 let recChunks = [], recMime = "", recording = false;
 let recStartedAt = 0, recTick = 0, recFrames = 0, recFps = 0;
+// Split the recording loop: time inside the composite itself, versus the
+// interval at which the camera actually hands us frames. 540p composited at
+// the same rate as 720p, so one of these is resolution-independent and it
+// matters a great deal which. Smoothed, because single frames are noisy.
+let compMs = 0, frameMs = 0, lastFrameAt = 0;
 
 function overlayUp() {
   return el("review").classList.contains("show") || el("gallery").classList.contains("show");
@@ -784,6 +791,7 @@ function startRec() {
   recording = true;
   recFrames = 0;
   recFps = 0;
+  compMs = frameMs = lastFrameAt = 0;   // don't carry a previous clip's numbers in
   recStartedAt = performance.now();
   el("record").classList.add("on");
   el("record").textContent = "⏹";
@@ -801,10 +809,17 @@ function startRec() {
 // Driven by the camera's own frame callback where available: one composite per
 // delivered frame, no duplicated work when the camera stalls below 30fps.
 function pumpRecFrames(manual) {
+  const ema = (prev, v) => (prev ? prev * 0.8 + v * 0.2 : v);
   const step = () => {
     if (!recording || !recCanvas) return;
+    const t0 = performance.now();
+    if (lastFrameAt) frameMs = ema(frameMs, t0 - lastFrameAt);
+    lastFrameAt = t0;
+
     compose(recCanvas, recCtx);
     if (manual) { try { recTrack.requestFrame(); } catch (e) {} }
+
+    compMs = ema(compMs, performance.now() - t0);
     recFrames++;
     schedule();
   };
