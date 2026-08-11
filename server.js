@@ -4,6 +4,11 @@
 // Serves ./public and accepts POST /report, so the Portal — which has no
 // devtools and no way to read a JSON blob off its screen — can ship its
 // capability report back to this machine.
+//
+// It also owns the photo album. The Portal browser refuses file downloads
+// outright ("File Downloads are Unavailable on the Portal") and no web API
+// can reach the device's own gallery, so captures are POSTed here instead
+// and served back from /media — see the album section below.
 
 const http = require("http");
 const fs = require("fs");
@@ -12,6 +17,7 @@ const path = require("path");
 const PORT = Number(process.env.PORT || 8080);
 const PUBLIC = path.join(__dirname, "public");
 const REPORTS = path.join(__dirname, "reports");
+const MEDIA = path.join(__dirname, "media");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -24,11 +30,25 @@ const MIME = {
   ".jpg": "image/jpeg",
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
+  ".webm": "video/webm",
+  ".mp4": "video/mp4",
   ".task": "application/octet-stream",  // MediaPipe model bundles
   ".bin": "application/octet-stream"
 };
 
+// Uploads are accepted by extension, never by the client's Content-Type.
+const UPLOAD_EXT = { jpg: "pic", png: "pic", webm: "vid", mp4: "vid" };
+
+// Every stored name is minted by mintName below; anything that doesn't match
+// is not ours and is not served or deleted.
+const MEDIA_NAME = /^(pic|vid)-[0-9TZ-]+-[a-z0-9]{4}\.(jpg|png|webm|mp4)$/;
+
+// A 30s clip at the app's 2.5Mbps cap is ~10MB. This is a runaway guard, and
+// it sits under the 100MB body limit on a Cloudflare quick tunnel.
+const MAX_UPLOAD = 64 * 1024 * 1024;
+
 fs.mkdirSync(REPORTS, { recursive: true });
+fs.mkdirSync(MEDIA, { recursive: true });
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
@@ -36,37 +56,191 @@ const server = http.createServer((req, res) => {
   if (req.method === "POST" && url.pathname === "/report") {
     return receiveReport(req, res);
   }
+  if (req.method === "POST" && url.pathname === "/media") {
+    return receiveMedia(req, res, url);
+  }
+  if (req.method === "GET" && url.pathname === "/media/list") {
+    return listMedia(res);
+  }
+  if (req.method === "DELETE" && url.pathname.startsWith("/media/")) {
+    return deleteMedia(res, url);
+  }
   if (req.method !== "GET" && req.method !== "HEAD") {
     return send(res, 405, "text/plain", "Method Not Allowed");
   }
 
-  // Resolve inside PUBLIC only — reject any path that escapes it.
+  // Two roots: the app under PUBLIC, saved captures under MEDIA. Resolve
+  // inside whichever applies and reject any path that escapes it.
   const rel = decodeURIComponent(url.pathname);
-  let file = path.join(PUBLIC, rel === "/" ? "index.html" : rel);
-  if (!file.startsWith(PUBLIC + path.sep) && file !== PUBLIC) {
+  const inMedia = rel.startsWith("/media/");
+  const root = inMedia ? MEDIA : PUBLIC;
+  let file = inMedia
+    ? path.join(MEDIA, path.basename(rel))
+    : path.join(PUBLIC, rel === "/" ? "index.html" : rel);
+  if (!file.startsWith(root + path.sep) && file !== root) {
     return send(res, 403, "text/plain", "Forbidden");
+  }
+  if (inMedia && !MEDIA_NAME.test(path.basename(file))) {
+    return send(res, 404, "text/plain", "Not found");
   }
 
   fs.stat(file, (err, st) => {
-    if (!err && st.isDirectory()) file = path.join(file, "index.html");
+    if (!err && st.isDirectory()) { file = path.join(file, "index.html"); st = null; }
+
+    // Vendored runtime and models are content-stable and ~12MB combined —
+    // without a long cache the Portal re-downloads them on every launch.
+    // Saved captures are immutable too: every name is minted once.
+    // App code stays uncached so edits land on reload.
+    const immutable = inMedia || rel.startsWith("/vendor/") || rel.startsWith("/models/");
+    const head = {
+      "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream",
+      "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-store",
+      // Needed later if we run WASM face tracking with threads.
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp"
+    };
+
+    // Video needs byte ranges to be scrubbable, and streaming keeps a 10MB
+    // clip out of the server's heap. Everything else is small — read it whole.
+    if (inMedia) return sendRange(req, res, file, st, head);
+
     fs.readFile(file, (err2, body) => {
       if (err2) return send(res, 404, "text/plain", "Not found: " + rel);
-      // Vendored runtime and models are content-stable and ~12MB combined —
-      // without a long cache the Portal re-downloads them on every launch.
-      // App code stays uncached so edits land on reload.
-      const immutable = rel.startsWith("/vendor/") || rel.startsWith("/models/");
-
-      res.writeHead(200, {
-        "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream",
-        "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-store",
-        // Needed later if we run WASM face tracking with threads.
-        "Cross-Origin-Opener-Policy": "same-origin",
-        "Cross-Origin-Embedder-Policy": "require-corp"
-      });
+      res.writeHead(200, head);
       res.end(req.method === "HEAD" ? undefined : body);
     });
   });
 });
+
+/* ----------------------------- Photo album ----------------------------- */
+
+// Streams `file`, honouring a single-range `Range: bytes=…` request so the
+// review player and the gallery can seek without refetching the whole clip.
+function sendRange(req, res, file, st, head) {
+  if (!st || !st.isFile()) return send(res, 404, "text/plain", "Not found");
+
+  const total = st.size;
+  let start = 0, end = total - 1, code = 200;
+
+  const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
+  if (m && (m[1] || m[2])) {
+    if (m[1]) {
+      start = Number(m[1]);
+      if (m[2]) end = Math.min(Number(m[2]), end);
+    } else {
+      start = Math.max(0, total - Number(m[2]));   // suffix range: last N bytes
+    }
+    if (!(start <= end) || start >= total) {
+      res.writeHead(416, { "Content-Range": "bytes */" + total });
+      return res.end();
+    }
+    code = 206;
+    head["Content-Range"] = "bytes " + start + "-" + end + "/" + total;
+  }
+
+  res.writeHead(code, Object.assign({
+    "Accept-Ranges": "bytes",
+    "Content-Length": end - start + 1
+  }, head));
+  if (req.method === "HEAD") return res.end();
+
+  const rs = fs.createReadStream(file, { start, end });
+  rs.on("error", () => res.destroy());
+  res.on("close", () => rs.destroy());   // client navigated away mid-stream
+  rs.pipe(res);
+}
+
+// Names are minted here, never taken from the client: kind, UTC stamp, and
+// four random chars so two captures in the same second can't collide.
+function mintName(ext) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace(/-\d{3}Z$/, "Z");
+  const salt = Math.random().toString(36).slice(2, 6).padEnd(4, "0");
+  return UPLOAD_EXT[ext] + "-" + stamp + "-" + salt + "." + ext;
+}
+
+// Captures arrive as a raw body — the Portal can't download them, so this is
+// the only way a photo leaves the device.
+function receiveMedia(req, res, url) {
+  const ext = String(url.searchParams.get("ext") || "").toLowerCase();
+  if (!UPLOAD_EXT[ext]) {
+    return send(res, 400, "application/json", JSON.stringify({ error: "unsupported type" }));
+  }
+
+  // Cheap next to an upload, and it keeps a wiped or freshly remounted volume
+  // from silently turning every save into an error.
+  try { fs.mkdirSync(MEDIA, { recursive: true }); } catch (e) {}
+
+  const name = mintName(ext);
+  const dest = path.join(MEDIA, name);
+  // Write to .part and rename: a listing must never show a half-uploaded file.
+  const tmp = dest + ".part";
+  const out = fs.createWriteStream(tmp);
+  let size = 0, failed = false;
+
+  const abort = (code, msg) => {
+    if (failed) return;
+    failed = true;
+    out.destroy();
+    fs.unlink(tmp, () => {});
+    if (!res.headersSent) send(res, code, "application/json", JSON.stringify({ error: msg }));
+    req.destroy();
+  };
+
+  req.on("data", chunk => {
+    size += chunk.length;
+    if (size > MAX_UPLOAD) abort(413, "too big");
+  });
+  req.on("error", () => abort(400, "upload interrupted"));
+  req.on("aborted", () => abort(400, "upload aborted"));
+  out.on("error", err => abort(500, err.message));
+
+  req.pipe(out);
+
+  out.on("finish", () => {
+    if (failed) return;
+    if (size === 0) return abort(400, "empty upload");
+    fs.rename(tmp, dest, err => {
+      if (err) return abort(500, err.message);
+      console.log("saved media/" + name + "  " + (size / 1048576).toFixed(1) + "MB");
+      send(res, 200, "application/json",
+        JSON.stringify({ ok: true, name, url: "/media/" + name, size }));
+    });
+  });
+}
+
+function listMedia(res) {
+  fs.readdir(MEDIA, (err, names) => {
+    // A missing album is an empty album, not a server error.
+    if (err) return send(res, 200, "application/json", JSON.stringify({ items: [] }));
+    const items = [];
+    for (const n of names.filter(n => MEDIA_NAME.test(n))) {
+      try {
+        const st = fs.statSync(path.join(MEDIA, n));
+        items.push({
+          name: n,
+          url: "/media/" + n,
+          kind: n.startsWith("vid-") ? "video" : "photo",
+          size: st.size,
+          at: st.mtime.toISOString()
+        });
+      } catch (e) { /* deleted between readdir and stat */ }
+    }
+    items.sort((a, b) => (a.at < b.at ? 1 : -1));   // newest first
+    send(res, 200, "application/json", JSON.stringify({ items }));
+  });
+}
+
+function deleteMedia(res, url) {
+  const name = path.basename(decodeURIComponent(url.pathname));
+  if (!MEDIA_NAME.test(name)) {
+    return send(res, 400, "application/json", JSON.stringify({ error: "bad name" }));
+  }
+  fs.unlink(path.join(MEDIA, name), err => {
+    if (err) return send(res, 404, "application/json", JSON.stringify({ error: "not found" }));
+    console.log("deleted media/" + name);
+    send(res, 200, "application/json", JSON.stringify({ ok: true }));
+  });
+}
 
 function receiveReport(req, res) {
   let body = "";

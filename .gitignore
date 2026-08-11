@@ -1,6 +1,10 @@
 # Device capability reports POSTed by the probe pages — local diagnostics
 reports/*.json
 
+# Photos and clips kept from the Portal. They live beside the app because the
+# device can't download them; they are not source.
+media/
+
 node_modules/
 .DS_Store
 

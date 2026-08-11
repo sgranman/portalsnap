@@ -62,10 +62,66 @@ filters that need expressions or warps. A lower-resolution *capture* (640x480) s
   hides if no face is seen for 800ms.
 - **The video is never drawn to canvas during preview.** It stays a `<video>` element the
   compositor handles, so we pay zero per-frame upload; only the transparent overlay is
-  drawn. Compositing happens once, at capture.
+  drawn. Compositing happens once, at capture — or once per camera frame while recording.
 - **`filters.js`** — filters are pure `(ctx, face, t)` functions drawn in a face space
   where the origin is between the eyes, +x runs along the eye line, and one unit is the
   inter-eye distance. Scale and rotation come free. All vector art, no image assets.
+
+## Saving a capture: the Portal can't download
+
+Tapping Save on a data URL gets you **"File Downloads are Unavailable on the Portal"**.
+The browser shell has downloads disabled outright, and there is no web API that reaches
+the device's own photo album — the gallery lives behind Android's MediaStore, which the
+web sandbox cannot touch. Nothing in a page can fix this. The only in-browser route that
+could ever reach the album is `navigator.share({files})`, which needs the shell to
+implement share targets; the app offers a **Send** button if it detects support and hides
+it otherwise, so this costs nothing when it isn't there.
+
+So the album moved to the server. **Keep it** POSTs the capture to `/media`, and the
+snaps live on the home server rather than the device:
+
+| Route | |
+|---|---|
+| `POST /media?ext=jpg\|png\|webm\|mp4` | Streams the raw body to `media/`, capped at 64MB. Writes to a `.part` file and renames, so a listing never shows a half-uploaded file. The server mints the filename — `pic-<UTC stamp>-<salt>.jpg` — and never trusts a client-supplied one. |
+| `GET /media/list` | Newest-first JSON: name, url, kind, size, timestamp. |
+| `GET /media/<name>` | Serves the file, streamed, with `Range` support so clips are scrubbable. Only server-minted names resolve. |
+| `DELETE /media/<name>` | Removes it. |
+
+Two front ends read that API:
+
+- **In-app album** (the 🖼️ button) — for looking at snaps on the Portal itself. Tracking
+  is suspended whenever it or the review screen is up, since the stage is covered anyway
+  and inference would just compete with the video decoder.
+- **`gallery.html`** — open it on a phone or laptop, where saving *does* work. **Save**
+  goes through the share sheet when the browser has one (on iOS that's "Save Image" /
+  "Save Video", straight into the camera roll) and falls back to a plain download.
+
+`media/` is gitignored and sits inside the bind mount, so it survives redeploys.
+
+## Video with sound
+
+The 🎥 button records the composited view with mic audio, capped at 30 seconds.
+
+- **The mic is acquired at startup**, alongside the camera, so there is one permission
+  prompt rather than a second one mid-session. A single `getUserMedia` rejection covers
+  both tracks, so a refused mic would otherwise cost us the camera — the call retries
+  video-only if the first attempt fails. The track is never routed to an output, so there
+  is no feedback loop.
+- **Recording is the one time we do composite per frame.** Video and overlay are drawn
+  into an offscreen canvas that is mirrored once at setup, and `captureStream(0)` plus
+  `requestFrame()` means we encode exactly one frame per *camera* frame instead of
+  resampling against a fixed clock — no duplicated work when the camera dips below 30fps.
+  The loop is driven by `requestVideoFrameCallback`.
+- **Format is picked at runtime, mp4 first.** H.264 is the codec most likely to have a
+  hardware encoder on this SoC, and an mp4 opens anywhere the family might view it; webm
+  is the fallback. Verified end to end against a fake device: H.264 720p with a 48kHz AAC
+  track, correctly mirrored, overlay included.
+- **Stills are JPEG now, not PNG** — a 720p frame drops from ~2MB to ~250KB, which matters
+  for the upload and for a gallery that loads many at once. `toBlob` also avoids
+  materialising a multi-megabyte base64 string on a 2GB device.
+
+The HUD (tap the bottom-right corner) reports the chosen recorder format, whether a mic
+track exists, and the composite rate while recording.
 
 ## Why the probe came first
 
@@ -180,15 +236,18 @@ means the Portal's own software is holding the camera.
 2. WebGL mesh warp: the landmark triangulation drives vertex displacement for big-eyes,
    bulge, and stretch effects. Only if the perf numbers allow it.
 
-**Audio** — WebAudio pitch shifting for a voice changer, and `MediaRecorder` to save clips.
-Gated on the `MediaRecorder` format list from the probe.
+**Audio** — `MediaRecorder` clips with mic sound are **built** (see above). Still planned:
+WebAudio pitch shifting for a voice changer, inserted between the mic track and the
+recorder so the saved clip carries the altered voice rather than only the monitor.
 
 **Assets are all self-hosted.** No CDNs: the model files, WASM binaries, and stickers ship
 with the app. A discontinued device on an aging browser should not depend on third-party
 hosts staying reachable, and self-hosting keeps it working if Portal cloud services die.
 
-**UI** is full-screen and touch-first — large filter thumbnails, one big shutter button,
-no typing anywhere, since the users are small children on a touchscreen at arm's length.
+**UI** is full-screen and touch-first — large filter thumbnails and three 96px round
+buttons (album, record, shutter), no typing anywhere, since the users are small children
+on a touchscreen at arm's length. Destructive actions arm on the first tap and fire on the
+second, rather than opening a `confirm()` dialog that is easy to mis-tap and hard to read.
 
 ## Vendored assets
 

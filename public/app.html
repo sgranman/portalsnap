@@ -34,7 +34,11 @@
     position: relative; height: 100%; aspect-ratio: 16 / 9;
     transform: scaleX(-1);
   }
-  #stage video, #stage canvas {
+  /* Scoped to .mirror, not #stage: the review and album overlays live in the
+     stage too, and a bare `#stage video` rule made their players full-bleed
+     and absolutely positioned — swallowing taps meant for the buttons under
+     them. Only the two preview layers get this treatment. */
+  #stage > .mirror > video, #stage > .mirror > canvas {
     position: absolute; inset: 0; width: 100%; height: 100%;
     display: block; object-fit: cover;
   }
@@ -66,6 +70,26 @@
   }
   #hint.show { opacity: 1; }
 
+  /* Recording badge. Sits opposite the hint so the two never collide. */
+  #rectimer {
+    position: absolute; z-index: 22; left: 18px; top: 18px;
+    display: none; align-items: center; gap: 10px;
+    background: rgba(0,0,0,.66); border-radius: 999px;
+    padding: 10px 20px 10px 16px;
+    font: 700 20px/1 "Segoe UI", sans-serif; font-variant-numeric: tabular-nums;
+  }
+  #rectimer.show { display: flex; }
+  #rectimer .dot {
+    width: 16px; height: 16px; border-radius: 50%; background: #ff3b5c;
+    animation: blink 1s steps(1, end) infinite;
+  }
+  @keyframes blink { 50% { opacity: .15; } }
+  /* A red frame is the unmissable "we are recording" cue on a shared screen. */
+  #stage.recording::after {
+    content: ""; position: absolute; inset: 0; z-index: 19; pointer-events: none;
+    border: 5px solid #ff3b5c;
+  }
+
   /* Bottom bar */
   #bar {
     flex: 0 0 auto; background: var(--bar); border-top: 1px solid var(--line);
@@ -89,29 +113,96 @@
   .chip.on .lbl { color: #fff; }
   .chip:active { transform: scale(.94); }
 
-  #shutter {
+  /* Three round buttons, all the same size: nothing here needs a small target. */
+  .big {
     flex: 0 0 auto; width: 96px; height: 96px; border-radius: 50%;
     border: 5px solid #fff; background: var(--hot);
     font-size: 34px; color: #fff; cursor: pointer; touch-action: manipulation;
     display: flex; align-items: center; justify-content: center;
   }
-  #shutter:active { transform: scale(.92); }
+  .big:active { transform: scale(.92); }
+  .big:disabled { opacity: .35; }
+  #record { background: #2b3350; }
+  #record.on { background: #ff3b5c; border-radius: 26px; }
+  #album { background: #2b3350; border-color: #6b7290; font-size: 32px; }
 
-  /* Photo review */
-  #review {
-    position: absolute; inset: 0; z-index: 40; background: rgba(8,9,14,.96);
+  /* Review — one overlay for both a still and a clip.
+     Fixed and opaque, covering the filter strip too: these are modes, not
+     stage decorations. A translucent panel left the live preview ghosting
+     through and the chips underneath tappable to no effect. */
+  #review, #gallery {
+    position: fixed; inset: 0; z-index: 40; background: #0b0c13;
     display: none; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
     padding: 18px;
   }
-  #review.show { display: flex; }
-  #review img { max-width: 78%; max-height: 66%; border-radius: 16px; border: 3px solid #fff; }
-  #review .acts { display: flex; gap: 16px; }
-  #review a, #review button {
+  #review.show, #gallery.show { display: flex; }
+  /* Fixed box + contain rather than max-*: a still and a clip then occupy the
+     same space, so the buttons don't jump down when a clip's metadata loads
+     and a tapping child doesn't hit a moving target. */
+  #review img, #review video {
+    width: 78%; height: 56%; object-fit: contain;
+    border-radius: 16px; border: 3px solid #fff; background: #000;
+  }
+  .acts { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+  .acts button {
     font: inherit; font-size: 22px; font-weight: 700; color: #fff;
     background: var(--accent); border: 0; border-radius: 16px;
-    padding: 18px 30px; text-decoration: none; cursor: pointer;
+    padding: 18px 30px; cursor: pointer; touch-action: manipulation;
   }
-  #review button.alt { background: #343850; }
+  .acts button.alt { background: #343850; }
+  .acts button.danger { background: #7c2340; }
+  .acts button:disabled { opacity: .5; }
+  #saveMsg { font-size: 19px; color: var(--dim); min-height: 24px; text-align: center; }
+  #saveMsg.good { color: var(--ok); }
+  #saveMsg.bad { color: #ff8fa8; }
+
+  /* Album */
+  #gallery { justify-content: flex-start; gap: 14px; }
+  .gtop {
+    width: 100%; display: flex; align-items: center; gap: 16px;
+    flex: 0 0 auto;
+  }
+  .gtop h2 { font-size: 30px; margin: 0; flex: 1; }
+  .gtop button {
+    font: inherit; font-size: 20px; font-weight: 700; color: #fff;
+    background: #343850; border: 0; border-radius: 14px; padding: 14px 22px;
+    cursor: pointer; touch-action: manipulation;
+  }
+  #grid {
+    flex: 1; min-height: 0; width: 100%; overflow-y: auto;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px; align-content: start;
+  }
+  #grid .tile {
+    position: relative; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden;
+    background: #1c1f2c; border: 2px solid #2b2e3d; cursor: pointer;
+  }
+  #grid .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* Videos get a placeholder tile, not a <video> — a grid of decoders would
+     flatten a 2GB device. The clip only loads when it's opened. */
+  #grid .tile.vid {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 46px; background: #241f4d;
+  }
+  #grid .tile .when {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,.8));
+    font-size: 13px; font-weight: 700; padding: 14px 8px 6px; text-align: center;
+  }
+  #grid .empty { grid-column: 1 / -1; color: var(--dim); font-size: 20px; padding: 24px 4px; }
+  #ghelp { flex: 0 0 auto; font-size: 16px; color: var(--dim); text-align: center; }
+  #ghelp b { color: #cbd0e2; }
+
+  #viewer {
+    position: absolute; inset: 0; z-index: 45; background: #0b0c13;
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; padding: 18px;
+  }
+  #viewer.show { display: flex; }
+  #viewer img, #viewer video {
+    width: 84%; height: 62%; object-fit: contain;
+    border-radius: 16px; border: 3px solid #fff; background: #000;
+  }
 
   #flash {
     position: absolute; inset: 0; z-index: 35; background: #fff;
@@ -138,6 +229,7 @@
       <canvas id="fx"></canvas>
     </div>
     <div id="hint"></div>
+    <div id="rectimer"><span class="dot"></span><span id="recclock">0:00</span></div>
     <div id="flash"></div>
     <div id="hud"></div>
     <div id="hudTap"></div>
@@ -147,19 +239,41 @@
       <p id="loadMsg">Waking up the camera…</p>
     </div>
     <div id="review">
-      <!-- Transparent 1x1 until a photo exists, so no broken-image box can flash. -->
-      <img id="shot" alt="Your photo"
-           src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+      <!-- Both stay `hidden` until a capture fills one in, so neither can
+           flash as a broken-image box. -->
+      <img id="shot" alt="Your photo" hidden>
+      <video id="clip" playsinline loop controls hidden></video>
       <div class="acts">
-        <a id="save" download="portalsnap.png">Save</a>
+        <button id="keep">Keep it</button>
+        <button id="share" class="alt" hidden>Send</button>
         <button id="again" class="alt">Take another</button>
+      </div>
+      <div id="saveMsg"></div>
+    </div>
+
+    <div id="gallery">
+      <div class="gtop">
+        <h2>Photos</h2>
+        <button id="gclose">Back to camera</button>
+      </div>
+      <div id="grid"></div>
+      <div id="ghelp"></div>
+      <div id="viewer">
+        <img id="vimg" alt="Saved photo" hidden>
+        <video id="vvid" playsinline controls hidden></video>
+        <div class="acts">
+          <button id="vclose" class="alt">Back</button>
+          <button id="vdel" class="danger">Delete</button>
+        </div>
       </div>
     </div>
   </div>
 
   <div id="bar">
     <div id="strip"></div>
-    <button id="shutter" aria-label="Take photo">📸</button>
+    <button id="album" class="big" aria-label="See saved photos">🖼️</button>
+    <button id="record" class="big" aria-label="Record a video">🎥</button>
+    <button id="shutter" class="big" aria-label="Take photo">📸</button>
   </div>
 </div>
 
@@ -195,10 +309,21 @@ function hint(msg, ms = 2200) {
 async function boot() {
   try {
     el("loadMsg").textContent = "Waking up the camera…";
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
-      audio: false
-    });
+    const wantVideo = { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" };
+
+    // Mic comes up with the camera so there is one permission prompt, not two
+    // mid-session. The track is never routed to an output — it exists only to
+    // be handed to MediaRecorder — so there is no feedback loop.
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: wantVideo,
+        audio: { echoCancellation: true, noiseSuppression: true }
+      });
+    } catch (err) {
+      // One rejection covers both tracks, so a missing or refused mic would
+      // otherwise cost us the camera too. Silent video beats no video.
+      stream = await navigator.mediaDevices.getUserMedia({ video: wantVideo, audio: false });
+    }
     video.srcObject = stream;
     await video.play();
 
@@ -296,7 +421,9 @@ async function startMainThread(mode) {
 // Only ever one frame in the worker: queueing them would add latency without
 // adding detections, and every queued bitmap is memory this device lacks.
 async function pump() {
-  if (video.readyState >= 2 && !inFlight && (worker || mainDetector)) {
+  // Review and album cover the stage completely, and both may be playing a
+  // clip. Inference there would be invisible work competing for the decoder.
+  if (video.readyState >= 2 && !inFlight && !overlayUp() && (worker || mainDetector)) {
     inFlight = true;
     let bmp = null;
     try {
@@ -406,11 +533,14 @@ function render() {
   const dt = Math.min(50, now - lastRender);
   lastRender = now;
 
-  ease(dt);
-  ctx.clearRect(0, 0, fx.width, fx.height);
+  const hidden = overlayUp();
+  if (!hidden) {
+    ease(dt);
+    ctx.clearRect(0, 0, fx.width, fx.height);
+  }
 
   const fresh = now - lastResultAt < 800;   // hide the overlay if tracking drops
-  if (active && shown && fresh) {
+  if (active && shown && fresh && !hidden) {
     try { active.draw(ctx, buildFace(shown), now); }
     catch (e) { console.warn("filter", active.id, e); }
   }
@@ -423,6 +553,9 @@ function render() {
       "\ndetect  " + detFps.toFixed(1) + " fps" +
       "\nrender  " + (1000 / dt).toFixed(0) + " fps" +
       "\nface    " + (fresh ? "yes" : "no") +
+      "\nmic     " + (stream && stream.getAudioTracks().length ? "yes" : "no") +
+      "\nrecfmt  " + ((pickMime() || "none").replace("video/", "").split(";")[0]) +
+      (recording ? "\nrec     " + recFps.toFixed(1) + " fps composited" : "") +
       (trackerBroken ? "\nerr     " + trackerBroken.slice(0, 90) : "");
   }
 
@@ -469,31 +602,426 @@ async function selectTracker(filter) {
   }
 }
 
-/* --------------------------- Photo capture --------------------------- */
+/* ----------------------------- Capture ------------------------------ */
+
+// The Portal browser refuses file downloads outright, and no web API can
+// reach the device's own photo album, so a capture is only "saved" once the
+// server has it. Everything below funnels into upload().
+
+const MAX_CLIP_MS = 30000;
+
+let pending = null;        // { kind, blob, url, ext } awaiting Keep or discard
+let recorder = null, recTrack = null, recCanvas = null, recCtx = null;
+let recChunks = [], recMime = "", recording = false;
+let recStartedAt = 0, recTick = 0, recFrames = 0, recFps = 0;
+
+function overlayUp() {
+  return el("review").classList.contains("show") || el("gallery").classList.contains("show");
+}
+
+// The loader covers the stage but not the bar, so all three buttons are
+// tappable while the camera is still coming up — or after it has failed.
+function ready() {
+  return !!stream && video.readyState >= 2;
+}
+
+// Composites video + overlay into `c`, mirrored to match what's on screen.
+function compose(c, cctx) {
+  cctx.drawImage(video, 0, 0, c.width, c.height);
+  cctx.drawImage(fx, 0, 0, c.width, c.height);
+}
+
+/* ------------------------------- Photo ------------------------------- */
 
 el("shutter").onclick = () => {
+  if (recording || overlayUp() || !ready()) return;
   const w = fx.width, h = fx.height;
   const out = document.createElement("canvas");
   out.width = w; out.height = h;
-  const octx = out.getContext("2d");
-
-  // Mirror both layers together so the photo matches what's on screen.
+  const octx = out.getContext("2d", { alpha: false });
   octx.translate(w, 0);
   octx.scale(-1, 1);
-  octx.drawImage(video, 0, 0, w, h);
-  octx.drawImage(fx, 0, 0, w, h);
+  compose(out, octx);
 
   el("flash").classList.remove("fire");
   void el("flash").offsetWidth;
   el("flash").classList.add("fire");
 
-  const url = out.toDataURL("image/png");
-  el("shot").src = url;
-  el("save").href = url;
-  el("review").classList.add("show");
+  // JPEG, not PNG: a 720p still drops from ~2MB to ~250KB, which matters for
+  // both the upload and a gallery that loads a lot of them at once. toBlob
+  // also avoids materialising a multi-megabyte base64 string on a 2GB device.
+  out.toBlob(blob => {
+    if (!blob) return hint("That photo didn't come out — try again");
+    showReview({ kind: "photo", blob, ext: "jpg" });
+  }, "image/jpeg", 0.92);
 };
 
-el("again").onclick = () => el("review").classList.remove("show");
+/* ------------------------------- Video ------------------------------- */
+
+// mp4 first: H.264 is the codec most likely to have a hardware encoder on this
+// SoC, and an mp4 plays on anything the family might open the album with.
+// Memoised — the HUD asks for this every frame it's visible.
+let cachedMime;
+function pickMime() {
+  if (cachedMime !== undefined) return cachedMime;
+  cachedMime = null;
+  if (typeof MediaRecorder !== "undefined") {
+    const want = [
+      "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+      "video/mp4",
+      "video/webm;codecs=vp8,opus",
+      "video/webm;codecs=vp9,opus",
+      "video/webm"
+    ];
+    for (const t of want) {
+      try { if (MediaRecorder.isTypeSupported(t)) { cachedMime = t; break; } } catch (e) {}
+    }
+  }
+  return cachedMime;
+}
+
+function startRec() {
+  if (recording || overlayUp() || !ready()) return;
+
+  recMime = pickMime();
+  if (!recMime || typeof HTMLCanvasElement.prototype.captureStream !== "function") {
+    return hint("Video recording isn't available here", 3000);
+  }
+
+  recCanvas = document.createElement("canvas");
+  recCanvas.width = fx.width;
+  recCanvas.height = fx.height;
+  recCtx = recCanvas.getContext("2d", { alpha: false });
+  recCtx.translate(recCanvas.width, 0);
+  recCtx.scale(-1, 1);            // mirrored once; every later draw inherits it
+
+  // frameRate 0 means "only the frames I ask for", so we encode exactly one
+  // frame per camera frame instead of resampling to a fixed clock. If this
+  // build can't do manual frames, fall back to a 30fps auto capture.
+  let cs = recCanvas.captureStream(0);
+  recTrack = cs.getVideoTracks()[0];
+  const manual = recTrack && typeof recTrack.requestFrame === "function";
+  if (!manual) {
+    cs = recCanvas.captureStream(30);
+    recTrack = cs.getVideoTracks()[0];
+  }
+
+  const mic = stream.getAudioTracks();
+  const mixed = new MediaStream([recTrack].concat(mic));
+
+  try {
+    recorder = new MediaRecorder(mixed, {
+      mimeType: recMime,
+      videoBitsPerSecond: 2500000,
+      audioBitsPerSecond: 96000
+    });
+  } catch (err) {
+    // Bitrate hints are advisory; some builds reject the combination outright.
+    try {
+      recorder = new MediaRecorder(mixed, { mimeType: recMime });
+    } catch (err2) {
+      recTrack.stop();
+      recCanvas = recCtx = recTrack = null;
+      return hint("Video recording isn't available here", 3000);
+    }
+  }
+
+  recChunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+  recorder.onerror = () => { hint("Recording stopped early"); stopRec(); };
+  recorder.onstop = finishRec;
+  recorder.start(1000);           // periodic chunks, so a crash loses ~1s, not all
+
+  recording = true;
+  recFrames = 0;
+  recFps = 0;
+  recStartedAt = performance.now();
+  el("record").classList.add("on");
+  el("record").textContent = "⏹";
+  el("record").setAttribute("aria-label", "Stop recording");
+  el("stage").classList.add("recording");
+  el("rectimer").classList.add("show");
+  el("shutter").disabled = true;
+  el("album").disabled = true;
+  hint(mic.length ? "Recording — say something!" : "Recording (no microphone)", 2000);
+
+  recTick = setInterval(tickRec, 200);
+  pumpRecFrames(manual);
+}
+
+// Driven by the camera's own frame callback where available: one composite per
+// delivered frame, no duplicated work when the camera stalls below 30fps.
+function pumpRecFrames(manual) {
+  const step = () => {
+    if (!recording || !recCanvas) return;
+    compose(recCanvas, recCtx);
+    if (manual) { try { recTrack.requestFrame(); } catch (e) {} }
+    recFrames++;
+    schedule();
+  };
+  const schedule = () => {
+    if (!recording) return;
+    if (typeof video.requestVideoFrameCallback === "function") {
+      video.requestVideoFrameCallback(step);
+    } else {
+      setTimeout(step, 33);
+    }
+  };
+  schedule();
+}
+
+function tickRec() {
+  const ms = performance.now() - recStartedAt;
+  recFps = recFrames / (ms / 1000);
+  const s = Math.floor(ms / 1000);
+  el("recclock").textContent =
+    Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") +
+    " / 0:" + (MAX_CLIP_MS / 1000);
+  if (ms >= MAX_CLIP_MS) stopRec();
+}
+
+function stopRec() {
+  if (!recording) return;
+  recording = false;
+  clearInterval(recTick);
+  el("record").classList.remove("on");
+  el("record").textContent = "🎥";
+  el("record").setAttribute("aria-label", "Record a video");
+  el("stage").classList.remove("recording");
+  el("rectimer").classList.remove("show");
+  el("shutter").disabled = false;
+  el("album").disabled = false;
+  try { recorder.stop(); } catch (e) { finishRec(); }
+}
+
+// Runs once the recorder has flushed its last chunk.
+function finishRec() {
+  // Only now is it safe to drop the canvas track — stopping it earlier can
+  // truncate the tail of the clip.
+  if (recTrack) { try { recTrack.stop(); } catch (e) {} recTrack = null; }
+  recCanvas = recCtx = null;
+
+  const blob = new Blob(recChunks, { type: recMime || "video/webm" });
+  recChunks = [];
+  recorder = null;
+  if (!blob.size) return hint("That clip came out empty");
+
+  showReview({ kind: "video", blob, ext: recMime.indexOf("mp4") >= 0 ? "mp4" : "webm" });
+}
+
+el("record").onclick = () => (recording ? stopRec() : startRec());
+
+/* ------------------------------ Review ------------------------------- */
+
+function showReview(item) {
+  discardPending();
+  pending = item;
+  pending.url = URL.createObjectURL(item.blob);
+
+  const isVid = item.kind === "video";
+  el("shot").hidden = isVid;
+  el("clip").hidden = !isVid;
+  if (isVid) {
+    el("clip").src = pending.url;
+    el("clip").play().catch(() => {});   // controls are there if autoplay is blocked
+  } else {
+    el("shot").src = pending.url;
+  }
+
+  el("keep").disabled = false;
+  el("keep").textContent = "Keep it";
+  say("");
+  el("share").hidden = !canShare(item);
+  el("review").classList.add("show");
+}
+
+function say(msg, tone) {
+  const n = el("saveMsg");
+  n.textContent = msg;
+  n.className = tone || "";
+}
+
+function discardPending() {
+  if (!pending) return;
+  if (pending.url) URL.revokeObjectURL(pending.url);
+  pending = null;
+}
+
+function closeReview() {
+  el("review").classList.remove("show");
+  const clip = el("clip");
+  clip.pause();
+  clip.removeAttribute("src");
+  clip.load();                 // release the decoder before revoking the URL
+  el("shot").removeAttribute("src");
+  discardPending();
+}
+
+el("again").onclick = closeReview;
+
+el("keep").onclick = async () => {
+  if (!pending) return;
+  el("keep").disabled = true;
+  el("keep").textContent = "Saving…";
+  say("");
+  try {
+    const res = await fetch("/media?ext=" + pending.ext, {
+      method: "POST",
+      headers: { "Content-Type": pending.blob.type || "application/octet-stream" },
+      body: pending.blob
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || !out.ok) throw new Error(out.error || ("server said " + res.status));
+    el("keep").textContent = "Saved ✓";
+    say("It's in Photos now", "good");
+  } catch (err) {
+    el("keep").disabled = false;
+    el("keep").textContent = "Try again";
+    say("Couldn't save it: " + ((err && err.message) || err), "bad");
+  }
+};
+
+// The one route that could reach the Portal's own album, if its browser shell
+// happens to implement share targets. Hidden entirely when it doesn't.
+function shareFile(item) {
+  try {
+    return new File([item.blob], "portalsnap." + item.ext,
+                    { type: item.blob.type || "application/octet-stream" });
+  } catch (e) { return null; }
+}
+
+function canShare(item) {
+  const f = shareFile(item);
+  try { return !!(f && navigator.canShare && navigator.canShare({ files: [f] })); }
+  catch (e) { return false; }
+}
+
+el("share").onclick = async () => {
+  if (!pending) return;
+  const f = shareFile(pending);
+  if (!f) return;
+  try { await navigator.share({ files: [f], title: "PortalSnap" }); }
+  catch (err) { if (err && err.name !== "AbortError") say("Couldn't send it", "bad"); }
+};
+
+/* ------------------------------- Album ------------------------------- */
+
+let viewing = null;   // the item open in the full-size viewer
+
+el("album").onclick = openAlbum;
+el("gclose").onclick = () => {
+  closeViewer();
+  el("gallery").classList.remove("show");
+};
+
+async function openAlbum() {
+  if (recording) return;
+  el("gallery").classList.add("show");
+  el("ghelp").innerHTML =
+    "To get these onto a phone, open <b>" + location.host + "/gallery.html</b> there " +
+    "— the Portal itself can't save files.";
+
+  const grid = el("grid");
+  grid.textContent = "";
+  grid.appendChild(note("Looking…"));
+  try {
+    const res = await fetch("/media/list", { cache: "no-store" });
+    const out = await res.json();
+    drawGrid(out.items || []);
+  } catch (err) {
+    grid.textContent = "";
+    grid.appendChild(note("Can't reach the album right now."));
+  }
+}
+
+function note(text) {
+  const d = document.createElement("div");
+  d.className = "empty";
+  d.textContent = text;
+  return d;
+}
+
+function when(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleString([], {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+  });
+}
+
+function drawGrid(items) {
+  const grid = el("grid");
+  grid.textContent = "";
+  if (!items.length) {
+    grid.appendChild(note("Nothing saved yet. Take a photo and tap Keep it!"));
+    return;
+  }
+  for (const it of items) {
+    const tile = document.createElement("div");
+    tile.className = "tile" + (it.kind === "video" ? " vid" : "");
+    if (it.kind === "video") {
+      tile.textContent = "▶";
+    } else {
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = "";
+      img.src = it.url;
+      tile.appendChild(img);
+    }
+    const cap = document.createElement("div");
+    cap.className = "when";
+    cap.textContent = when(it.at);
+    tile.appendChild(cap);
+    tile.onclick = () => openViewer(it);
+    grid.appendChild(tile);
+  }
+}
+
+function openViewer(it) {
+  viewing = it;
+  const isVid = it.kind === "video";
+  el("vimg").hidden = isVid;
+  el("vvid").hidden = !isVid;
+  if (isVid) {
+    el("vvid").src = it.url;
+    el("vvid").play().catch(() => {});
+  } else {
+    el("vimg").src = it.url;
+  }
+  el("vdel").disabled = false;
+  el("vdel").textContent = "Delete";
+  el("viewer").classList.add("show");
+}
+
+function closeViewer() {
+  viewing = null;
+  const v = el("vvid");
+  v.pause();
+  v.removeAttribute("src");
+  v.load();
+  el("vimg").removeAttribute("src");
+  el("viewer").classList.remove("show");
+}
+
+el("vclose").onclick = closeViewer;
+
+// Two taps to delete: the first arms it, the second does it. A confirm()
+// dialog on the Portal's browser is easy to mis-tap and hard to read.
+el("vdel").onclick = async () => {
+  if (!viewing) return;
+  const btn = el("vdel");
+  if (btn.textContent !== "Really delete?") { btn.textContent = "Really delete?"; return; }
+  btn.disabled = true;
+  const gone = viewing;
+  try {
+    const res = await fetch(gone.url, { method: "DELETE" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    closeViewer();
+    openAlbum();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Delete failed";
+  }
+};
 
 el("hudTap").onclick = () => el("hud").classList.toggle("show");
 

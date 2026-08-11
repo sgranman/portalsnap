@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PortalSnap — Photos</title>
+<style>
+  :root {
+    --bg: #0e0f16;
+    --card: #191b26;
+    --line: #2b2e3d;
+    --ink: #ffffff;
+    --dim: #a2a8bd;
+    --accent: #6d5bf5;
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; min-height: 100%;
+    background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", -apple-system, Roboto, sans-serif;
+    padding: 20px 16px 40px;
+  }
+
+  header { max-width: 1100px; margin: 0 auto 18px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -.02em; }
+  .sub { color: var(--dim); font-size: 15px; line-height: 1.5; margin: 0; }
+  .sub b { color: #cbd0e2; }
+
+  #grid {
+    max-width: 1100px; margin: 0 auto;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px;
+  }
+  .tile {
+    position: relative; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden;
+    background: var(--card); border: 1px solid var(--line); cursor: pointer;
+  }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile.vid {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 42px; background: #241f4d;
+  }
+  .tile .when {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,.82));
+    font-size: 12px; font-weight: 600; padding: 16px 8px 6px; text-align: center;
+  }
+  .msg { color: var(--dim); font-size: 17px; padding: 30px 2px; }
+
+  /* Lightbox */
+  #box {
+    position: fixed; inset: 0; z-index: 10; background: rgba(8,9,14,.97);
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; padding: 16px;
+  }
+  #box.show { display: flex; }
+  #box img, #box video {
+    max-width: 100%; max-height: 62vh; border-radius: 12px; background: #000;
+  }
+  .acts { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .acts a, .acts button {
+    font: inherit; font-size: 17px; font-weight: 700; color: #fff;
+    background: var(--accent); border: 0; border-radius: 12px;
+    padding: 14px 22px; text-decoration: none; cursor: pointer;
+  }
+  .acts .alt { background: #343850; }
+  .acts .danger { background: #7c2340; }
+  #note { font-size: 15px; color: var(--dim); min-height: 22px; text-align: center; }
+  #note.good { color: var(--ok); }
+  #note.bad { color: #ff8fa8; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PortalSnap Photos</h1>
+  <!-- The whole point of this page: the Portal can't save files, so the
+       photos live on the server and you collect them from a device that can. -->
+  <p class="sub">
+    Everything kept on the Portal lands here. Open a photo and tap <b>Save</b> to put it in
+    this device's camera roll, or long-press the picture and choose <b>Save&nbsp;image</b>.
+  </p>
+</header>
+
+<div id="grid"><div class="msg">Loading…</div></div>
+
+<div id="box">
+  <img id="bimg" alt="Saved photo" hidden>
+  <video id="bvid" playsinline controls hidden></video>
+  <div class="acts">
+    <button id="save">Save</button>
+    <a id="open" class="alt" target="_blank" rel="noopener">Open full size</a>
+    <button id="close" class="alt">Close</button>
+    <button id="del" class="danger">Delete</button>
+  </div>
+  <div id="note"></div>
+</div>
+
+<script>
+const el = id => document.getElementById(id);
+let current = null;
+
+function when(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleString([], {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+  });
+}
+
+async function load() {
+  const grid = el("grid");
+  try {
+    const res = await fetch("/media/list", { cache: "no-store" });
+    const out = await res.json();
+    draw(out.items || []);
+  } catch (err) {
+    grid.innerHTML = '<div class="msg"></div>';
+    grid.firstChild.textContent = "Couldn't reach the server: " + ((err && err.message) || err);
+  }
+}
+
+function draw(items) {
+  const grid = el("grid");
+  grid.textContent = "";
+  if (!items.length) {
+    const m = document.createElement("div");
+    m.className = "msg";
+    m.textContent = "Nothing saved yet.";
+    grid.appendChild(m);
+    return;
+  }
+  for (const it of items) {
+    const tile = document.createElement("div");
+    tile.className = "tile" + (it.kind === "video" ? " vid" : "");
+    if (it.kind === "video") {
+      // No <video> in the grid: a page full of decoders is slow everywhere and
+      // burns mobile data. The clip loads when you open it.
+      tile.textContent = "▶";
+    } else {
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = "";
+      img.src = it.url;
+      tile.appendChild(img);
+    }
+    const cap = document.createElement("div");
+    cap.className = "when";
+    cap.textContent = when(it.at) + (it.kind === "video" ? " · video" : "");
+    tile.appendChild(cap);
+    tile.onclick = () => openItem(it);
+    grid.appendChild(tile);
+  }
+}
+
+function say(msg, tone) {
+  el("note").textContent = msg;
+  el("note").className = tone || "";
+}
+
+function openItem(it) {
+  current = it;
+  const isVid = it.kind === "video";
+  el("bimg").hidden = isVid;
+  el("bvid").hidden = !isVid;
+  if (isVid) el("bvid").src = it.url; else el("bimg").src = it.url;
+  el("open").href = it.url;
+  el("save").disabled = false;
+  el("save").textContent = "Save";
+  el("del").textContent = "Delete";
+  el("del").disabled = false;
+  say("");
+  el("box").classList.add("show");
+}
+
+function closeBox() {
+  current = null;
+  const v = el("bvid");
+  v.pause();
+  v.removeAttribute("src");
+  v.load();
+  el("bimg").removeAttribute("src");
+  el("box").classList.remove("show");
+}
+
+el("close").onclick = closeBox;
+
+// The share sheet is the only route into a phone's camera roll — on iOS it
+// offers "Save Image" / "Save Video". Where it isn't available, the plain
+// download link beside this button does the job on a desktop browser.
+el("save").onclick = async () => {
+  if (!current) return;
+  const btn = el("save");
+  btn.disabled = true;
+  btn.textContent = "Getting it…";
+  try {
+    const res = await fetch(current.url);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const blob = await res.blob();
+    const file = new File([blob], current.name, { type: blob.type });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: "PortalSnap" });
+      btn.textContent = "Save";
+      btn.disabled = false;
+      say("");
+      return;
+    }
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = current.name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    btn.textContent = "Saved";
+    say("Downloaded to this device.", "good");
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Save";
+    if (err && err.name === "AbortError") return;          // user dismissed the sheet
+    say("Long-press the picture and choose Save image instead.", "bad");
+  }
+};
+
+el("del").onclick = async () => {
+  if (!current) return;
+  const btn = el("del");
+  if (btn.textContent !== "Really delete?") { btn.textContent = "Really delete?"; return; }
+  btn.disabled = true;
+  try {
+    const res = await fetch(current.url, { method: "DELETE" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    closeBox();
+    load();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Delete failed";
+  }
+};
+
+load();
+</script>
+</body>
+</html>
