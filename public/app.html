@@ -336,16 +336,16 @@ async function boot() {
     // Mic comes up with the camera so there is one permission prompt, not two
     // mid-session. The track is never routed to an output — it exists only to
     // be handed to MediaRecorder — so there is no feedback loop.
-    // AEC and noise suppression are off deliberately. Chrome doesn't start the
-    // audio processing graph until something consumes the track, so they cost
-    // nothing at idle and then all spin up the moment MediaRecorder attaches —
-    // which is exactly when inference was measured collapsing from 40ms to
-    // 100ms+, resolution-independently. Nothing is played out during a
-    // recording, so there is no echo to cancel in the first place.
+    // Mic DSP left on. It was turned off on the theory that Chrome only starts
+    // that processing graph once something consumes the track — which
+    // MediaRecorder does, matching where inference collapses. Measured
+    // on-device: no effect, `infer` stayed at ~100ms. So the theory is dead and
+    // the setting goes back to the one that sounds better, since what this
+    // records is small children talking in a room.
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: wantVideo,
-        audio: { echoCancellation: false, noiseSuppression: false }
+        audio: { echoCancellation: true, noiseSuppression: true }
       });
     } catch (err) {
       // One rejection covers both tracks, so a missing or refused mic would

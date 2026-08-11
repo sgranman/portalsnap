@@ -188,17 +188,32 @@ Splitting the recording loop settled it:
 | `comp` | — | a couple of ms |
 | `frame` | — | ~50 ms |
 
-`grab` is main-thread GPU work and it did not move, so the GPU is not saturated. `comp` is
-near zero, so compositing is not the cost. And `frame` at ~50ms says the camera only hands
-over ~20fps while recording — which is almost certainly the *room*, not the load: cameras
-lengthen exposure in low light by dropping frame rate. That is why halving the composite
-resolution twice changed nothing, and why it was reverted.
+`frame` at ~50ms says the camera only hands over ~20fps while recording — probably the
+*room* rather than the load, since cameras lengthen exposure in low light by dropping
+frame rate. That, plus `grab` not moving, is why halving the composite resolution twice
+changed nothing, and why it was reverted.
 
-What is left is resolution-independent, recording-only, and CPU-bound. The prime suspect
-is the audio pipeline: `echoCancellation` and `noiseSuppression` were requested on the mic
-track, and Chrome does not start that processing graph until something *consumes* the
-track — which is exactly what MediaRecorder does. Both are now off. Nothing is played out
-during a recording, so there was no echo to cancel in the first place.
+**`comp` is a weaker signal than it looks.** `drawImage` returns once the commands are
+queued; the upload, conversion and readback happen afterwards. So `comp ≈ 2ms` shows only
+that *issuing* the composite is cheap, not that performing it is. An early conclusion here
+that "compositing is innocent" was over-read from the instrument.
+
+Ruled out by measurement, in order:
+
+1. **Composite resolution** — 720p → 540p, twice, moved neither the composite rate nor
+   inference. Reverted.
+2. **Worker vs main-thread inference** — the worker costs ~10ms, not 4x. It stays, since
+   that is cheap next to keeping the main thread free.
+3. **Pump loop overhead** — real, and fixed: ~16ms per cycle of dead polling. Worth ~2.5fps
+   of detection, but present idle *and* recording, so not the recording penalty.
+4. **Mic DSP** — `echoCancellation` / `noiseSuppression` off changed nothing. Restored.
+
+What remains is resolution-independent, recording-only and CPU-bound. The live candidate
+is the video-frame-to-canvas path itself: making a 1280x720 camera frame available to a 2D
+canvas costs the same regardless of destination size, which is the one shape that fits
+every measurement above. If so, the lever is a WebGL compositor — the probe measured WebGL
+texture upload at 60fps against canvas2D draw at 53fps, and it keeps frames GPU-resident
+instead of round-tripping them.
 
 ### Leading the target instead of chasing it
 
