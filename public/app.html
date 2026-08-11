@@ -555,7 +555,9 @@ function render() {
       "\nface    " + (fresh ? "yes" : "no") +
       "\nmic     " + (stream && stream.getAudioTracks().length ? "yes" : "no") +
       "\nrecfmt  " + ((pickMime() || "none").replace("video/", "").split(";")[0]) +
-      (recording ? "\nrec     " + recFps.toFixed(1) + " fps composited" : "") +
+      (recording && recCanvas
+        ? "\nrec     " + recFps.toFixed(1) + " fps @" + recCanvas.width + "x" + recCanvas.height
+        : "") +
       (trackerBroken ? "\nerr     " + trackerBroken.slice(0, 90) : "");
   }
 
@@ -609,6 +611,16 @@ async function selectTracker(filter) {
 // server has it. Everything below funnels into upload().
 
 const MAX_CLIP_MS = 30000;
+
+// A still composites once; a clip composites thirty times a second, so it pays
+// for its resolution over and over. Measured on the Portal at 720p: inference
+// fell from 23ms to 96ms and detection from ~30fps to 8.5fps, because the
+// draw and the H.264 encoder were starving the tracker's GPU delegate — and a
+// lagging filter gets baked into the saved clip. 540p is 56% of the pixels.
+// Stills are unaffected and stay at the full camera resolution.
+const REC_WIDTH = 960;
+const REC_VIDEO_BPS = 1800000;
+const REC_AUDIO_BPS = 96000;
 
 let pending = null;        // { kind, blob, url, ext } awaiting Keep or discard
 let recorder = null, recTrack = null, recCanvas = null, recCtx = null;
@@ -688,9 +700,11 @@ function startRec() {
     return hint("Video recording isn't available here", 3000);
   }
 
+  // Round to even: H.264's 4:2:0 chroma can't encode odd dimensions.
+  const scale = Math.min(1, REC_WIDTH / fx.width);
   recCanvas = document.createElement("canvas");
-  recCanvas.width = fx.width;
-  recCanvas.height = fx.height;
+  recCanvas.width = Math.round(fx.width * scale / 2) * 2;
+  recCanvas.height = Math.round(fx.height * scale / 2) * 2;
   recCtx = recCanvas.getContext("2d", { alpha: false });
   recCtx.translate(recCanvas.width, 0);
   recCtx.scale(-1, 1);            // mirrored once; every later draw inherits it
@@ -712,8 +726,8 @@ function startRec() {
   try {
     recorder = new MediaRecorder(mixed, {
       mimeType: recMime,
-      videoBitsPerSecond: 2500000,
-      audioBitsPerSecond: 96000
+      videoBitsPerSecond: REC_VIDEO_BPS,
+      audioBitsPerSecond: REC_AUDIO_BPS
     });
   } catch (err) {
     // Bitrate hints are advisory; some builds reject the combination outright.

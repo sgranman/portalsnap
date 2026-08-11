@@ -114,11 +114,37 @@ The 🎥 button records the composited view with mic audio, capped at 30 seconds
   The loop is driven by `requestVideoFrameCallback`.
 - **Format is picked at runtime, mp4 first.** H.264 is the codec most likely to have a
   hardware encoder on this SoC, and an mp4 opens anywhere the family might view it; webm
-  is the fallback. Verified end to end against a fake device: H.264 720p with a 48kHz AAC
-  track, correctly mirrored, overlay included.
+  is the fallback. The Portal reports `mp4`, so clips are H.264 with a 48kHz AAC track.
+- **Clips composite at 960x540, not 720p** — see the measurement below. Stills are
+  unaffected and stay at the full camera resolution.
 - **Stills are JPEG now, not PNG** — a 720p frame drops from ~2MB to ~250KB, which matters
   for the upload and for a gallery that loads many at once. `toBlob` also avoids
   materialising a multi-megabyte base64 string on a 2GB device.
+
+### Why clips are 540p (measured on-device, recording a sticker filter)
+
+The first on-device HUD reading, taken mid-recording at 720p:
+
+| | idle (from the sweep) | recording at 720p |
+|---|---|---|
+| `infer` | 23.3 ms | **96 ms** |
+| `detect` | ~30 fps (camera-capped) | **8.5 fps** |
+| `render` | display rate | 23 fps |
+| `rec` | — | 20.8 fps composited |
+
+Inference ran ~4x slower while recording. The tracker's GPU delegate, a 1280x720 canvas
+draw done twice per frame, and the H.264 encoder all contend for the same memory
+bandwidth on a 2GB 32-bit device, and the tracker is what loses. That matters more than
+it looks: at 8.5 detections per second the sticker trails a fast head turn by ~120ms, and
+**that lag is baked into the saved clip**, not just the preview.
+
+A still composites once; a clip composites thirty times a second, so it pays for its
+resolution over and over. 960x540 is 56% of the pixels, which cuts the draw and the
+encoder's work together. The width is a single constant (`REC_WIDTH` in `app.html`) and
+dimensions round to even, since H.264's 4:2:0 chroma can't encode odd ones.
+
+The HUD's `rec` line reports the composite rate *and* the size it is compositing at, so a
+photo of the HUD is self-describing.
 
 The HUD (tap the bottom-right corner) reports the chosen recorder format, whether a mic
 track exists, and the composite rate while recording.
