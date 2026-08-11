@@ -353,6 +353,13 @@ that is free:
    The HUD gained `jit`, the median largest anchor step between detections, so the noise
    floor is now something the device can be asked about instead of assumed.
 
+   **Confirmed on the device**: sitting still with a filter on, `jit` reads near zero and
+   `paint` fell from 20–22/s to **5–10/s**. That is the end of this thread rather than a
+   partial result — row J measured a 15Hz redraw at 24ms, the same as never redrawing at all,
+   so anything at or below 15 paints/sec is already at the floor and driving it to zero would
+   buy nothing. The residual is the 15Hz animation gate on the three filters with clocks of
+   their own, plus the tail of the noise distribution on the three without.
+
 The HUD gained a `drawing` line and a `paint /s` line, and `render` prints `(cap 30)` so a
 low number reads as intent rather than a symptom. `paint` well under `render` means the skip
 is earning its keep; equal to it means every frame genuinely changed something.
@@ -487,21 +494,18 @@ What follows is tuning of the sticker lag, not the feature.
 Displaying the video costs 3-5ms and that is not recoverable — it is the product. Everything
 else that was worth taking has been taken.
 
-**Read the HUD next**, sitting as still as possible with a filter on. Two numbers:
+**The tuning is finished.** Every lever that measured anything has been pulled, and the two
+that remain are judgement calls rather than measurements — see the end of this section. The
+last three readings on the device confirmed all of it: `detect` at 13.5–14fps while recording
+(from 10), `jit` near zero when still, and `paint` at 5–10/s (from 20–22). Since row J priced
+a 15Hz redraw at the same 24ms as no redraw at all, anything at or under 15 paints/sec is at
+the floor.
 
-- **`jit`** — the tracker's noise floor in overlay pixels. If it reads comfortably under 4,
-  the deadband covers it. If it reads 6, 8, 12, then `EASE_DEADBAND` is set below the noise
-  and the skip will still be firing only intermittently. That is one constant, and `jit` is
-  the measurement that says what to set it to — no more guessing at it.
-- **`paint`** — should now be near 0 while still, and rise to ~20 while moving. It read
-  20–22/s regardless before the deadband.
-
-`detect` while recording is already confirmed at 13.5–14fps, up from 10, which is the 20fps
-composite cap doing its job.
-
-Running `recdiag.html` again would confirm row M, the 20fps composite the app now ships — K
-measured 15fps and M is the interpolation that was deployed. Not urgent; the HUD answers the
-same question more cheaply.
+Should it need re-opening, the HUD is the cheap instrument and it now reports enough to
+diagnose without a harness: `grab` / `infer` / `cycle` split the tracker's loop, `render` and
+`paint` separate frames offered from frames drawn, `jit` gives the tracker's noise floor in
+overlay pixels, and `rec` / `comp` / `frame` appear while recording. `recdiag.html` row M —
+the 20fps composite the app ships, as against K's measured 15 — is the one row never run.
 
 **Do not** re-try these; each was measured and is dead: composite resolution (twice), a
 WebGL compositor for the composite *draw* (+1ms — there is nothing there), worker vs
