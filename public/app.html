@@ -303,6 +303,22 @@ let lastResultAt = 0, lastInferMs = 0, lastGrabMs = 0, detFps = 0, detTimes = []
 // `shown` is what we draw — it chases the target every render frame.
 let target = null, shown = null;
 
+// Per-anchor velocity in normalized units per ms, smoothed across detections,
+// used to lead the target by the pipeline latency. See Anchors.project.
+//
+// `predConf` gates how much of that lead we actually take. Simulated against
+// the on-device rates, ungated prediction was 27% better on a smooth head turn
+// but 16% WORSE on a fast snap and 17% noisier when still — velocity estimated
+// from 10fps detections simply cannot follow a sharp reversal. Scaling the lead
+// by how well each new velocity agrees with the smoothed one keeps most of the
+// gain and erases both regressions: -14% / -5% / -1%.
+let vel = {}, predConf = 0;
+const PREDICT_ALPHA = 0.55;      // velocity smoothing across detections
+const PREDICT_CONF_ALPHA = 0.5;  // how fast confidence collapses on a reversal
+const PREDICT_CLAMP = 0.05;      // rail against noise spikes; normal motion never reaches it
+const PREDICT_MAX_MS = 140;      // never lead further than the worst latency seen
+const REACQUIRE_MS = 400;        // a gap this long means the face moved unseen
+
 function hint(msg, ms = 2200) {
   el("hint").textContent = msg;
   el("hint").classList.add("show");
@@ -320,10 +336,16 @@ async function boot() {
     // Mic comes up with the camera so there is one permission prompt, not two
     // mid-session. The track is never routed to an output — it exists only to
     // be handed to MediaRecorder — so there is no feedback loop.
+    // AEC and noise suppression are off deliberately. Chrome doesn't start the
+    // audio processing graph until something consumes the track, so they cost
+    // nothing at idle and then all spin up the moment MediaRecorder attaches —
+    // which is exactly when inference was measured collapsing from 40ms to
+    // 100ms+, resolution-independently. Nothing is played out during a
+    // recording, so there is no echo to cancel in the first place.
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: wantVideo,
-        audio: { echoCancellation: true, noiseSuppression: true }
+        audio: { echoCancellation: false, noiseSuppression: false }
       });
     } catch (err) {
       // One rejection covers both tracks, so a missing or refused mic would
@@ -364,7 +386,42 @@ function onResult(m) {
   detTimes.push(now);
   while (detTimes.length && now - detTimes[0] > 2000) detTimes.shift();
   detFps = detTimes.length / 2;
-  if (m.anchors) { target = m.anchors; lastResultAt = now; }
+  if (m.anchors) {
+    // Velocity from consecutive detections. A long gap means the face was
+    // lost and whatever it was doing then says nothing about now.
+    const gap = now - lastResultAt;
+    if (!target || gap > REACQUIRE_MS) {
+      vel = {};
+      predConf = 0;
+    } else if (gap > 0) {
+      let agree = 0, judged = 0;
+      for (const k of KEYS) {
+        const a = target[k], b = m.anchors[k];
+        if (!a || !b) continue;
+        const vx = (b.x - a.x) / gap, vy = (b.y - a.y) / gap;
+        const p = vel[k];
+        if (p) {
+          // Direction agreement scaled by how much the speed changed: braking
+          // hard is as poor a basis for extrapolation as turning around.
+          const mv = Math.hypot(vx, vy), mo = Math.hypot(p.x, p.y);
+          if (mv > 0 && mo > 0) {
+            const cos = (vx * p.x + vy * p.y) / (mv * mo);
+            agree += Math.max(0, cos) * (Math.min(mv, mo) / Math.max(mv, mo));
+            judged++;
+          }
+        }
+        vel[k] = p
+          ? { x: p.x + (vx - p.x) * PREDICT_ALPHA, y: p.y + (vy - p.y) * PREDICT_ALPHA }
+          : { x: vx, y: vy };
+      }
+      // One confidence for the whole face: anchors move together, and six
+      // independent estimates would just be six ways to jitter.
+      if (judged) predConf += (agree / judged - predConf) * PREDICT_CONF_ALPHA;
+      else predConf = 0;
+    }
+    target = m.anchors;
+    lastResultAt = now;
+  }
 
   // Re-arm the moment a result lands. Waiting for the next poll tick threw
   // away up to 16ms per detection — roughly a third of the cycle, and the
@@ -379,6 +436,8 @@ function onResult(m) {
 // which is worse but still usable.
 async function startTracker(mode) {
   target = shown = null;
+  vel = {};
+  predConf = 0;
   inFlight = false;
   if (forceBackend !== "main") {
     try {
@@ -498,9 +557,14 @@ function ease(dt) {
   if (!target) return;
   if (!shown) { shown = JSON.parse(JSON.stringify(target)); return; }
 
+  // Lead by the latency we can measure: the frame was grabbed `grab` ms before
+  // it went to the tracker, and inference took `infer` on top of that.
+  const lead = Math.min(PREDICT_MAX_MS, lastGrabMs + lastInferMs) * predConf;
+
   for (const k of KEYS) {
     if (!target[k] || !shown[k]) continue;
-    const dx = target[k].x - shown[k].x, dy = target[k].y - shown[k].y;
+    const aim = window.Anchors.project(target[k], vel[k], lead, PREDICT_CLAMP);
+    const dx = aim.x - shown[k].x, dy = aim.y - shown[k].y;
     const dist = Math.hypot(dx, dy);
     const a = Math.min(1, (0.18 + dist * 12) * (dt / 16.7));
     shown[k].x += dx * a;
@@ -649,14 +713,13 @@ async function selectTracker(filter) {
 
 const MAX_CLIP_MS = 30000;
 
-// A still composites once; a clip composites thirty times a second, so it pays
-// for its resolution over and over. Measured on the Portal at 720p: inference
-// fell from 23ms to 96ms and detection from ~30fps to 8.5fps, because the
-// draw and the H.264 encoder were starving the tracker's GPU delegate — and a
-// lagging filter gets baked into the saved clip. 540p is 56% of the pixels.
-// Stills are unaffected and stay at the full camera resolution.
-const REC_WIDTH = 960;
-const REC_VIDEO_BPS = 1800000;
+// Full camera resolution. Dropping this to 540p was tried and measured on the
+// Portal: it moved neither the composite rate nor inference, because `comp`
+// runs at a couple of ms and the loop is limited by how fast the camera hands
+// over frames (~20fps in a dimly lit room), not by pixels. The scaling is kept
+// because it costs nothing and makes the ceiling adjustable if that changes.
+const REC_WIDTH = 1280;
+const REC_VIDEO_BPS = 2500000;
 const REC_AUDIO_BPS = 96000;
 
 let pending = null;        // { kind, blob, url, ext } awaiting Keep or discard

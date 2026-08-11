@@ -62,5 +62,25 @@
     });
   }
 
-  root.Anchors = { KP, MESH, toAnchors, createDetector };
+  // Project an anchor forward along its recent velocity.
+  //
+  // A detection describes where the face was when the frame was grabbed, and
+  // it arrives grab+infer milliseconds later — ~50ms idle, ~110ms while
+  // recording. Easing toward a target that stale can only ever trail the head;
+  // it cannot catch up. So lead the target by the latency we can actually
+  // measure. This is the half of a one-euro filter the smoothing never had.
+  //
+  // `clamp` is the safety rail: velocity estimated from detections 100ms apart
+  // is noisy, and unclamped extrapolation would fling a hat off the head on a
+  // single bad frame. Distances are normalized (fractions of frame size), so
+  // a clamp of 0.05 is roughly half an inter-eye distance.
+  function project(pt, v, leadMs, clamp) {
+    if (!pt || !v || !leadMs) return pt;
+    let dx = v.x * leadMs, dy = v.y * leadMs;
+    const d = Math.hypot(dx, dy);
+    if (d > clamp) { const s = clamp / d; dx *= s; dy *= s; }
+    return { x: pt.x + dx, y: pt.y + dy };
+  }
+
+  root.Anchors = { KP, MESH, toAnchors, createDetector, project };
 })(typeof self !== "undefined" ? self : this);

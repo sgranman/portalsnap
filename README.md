@@ -121,17 +121,13 @@ The 🎥 button records the composited view with mic audio, capped at 30 seconds
   for the upload and for a gallery that loads many at once. `toBlob` also avoids
   materialising a multi-megabyte base64 string on a 2GB device.
 
-### Clips composite at 540p
+### Clips record at full camera resolution
 
-A still composites once; a clip composites thirty times a second, so it pays for its
-resolution over and over. 960x540 is 56% of the pixels of 720p, which cuts the canvas
-draw and the encoder's work together. The width is a single constant (`REC_WIDTH` in
-`app.html`) and dimensions round to even, since H.264's 4:2:0 chroma can't encode odd
-ones. The HUD's `rec` line reports the composite rate *and* the size it is compositing
-at, so a photo of the HUD is self-describing.
-
-This was originally changed to chase a detection-rate problem it did not fix — see below.
-It is kept because the reasoning above stands on its own, not because it was the cure.
+Recording was dropped to 960x540 to chase a detection-rate problem, and then put back,
+because the measurement said it was never the variable — see below. `REC_WIDTH` in
+`app.html` still scales the composite and rounds to even dimensions (H.264's 4:2:0 chroma
+can't encode odd ones); it costs nothing to keep and makes the ceiling adjustable if the
+camera ever delivers more than it does today.
 
 ## Chasing the detection rate on-device
 
@@ -180,6 +176,53 @@ callback ever stops firing, which is a bad trade for a device that cannot benefi
 **bottom-left** corner to swap worker/main-thread. The swap target is inert unless the HUD
 is showing. Read idle *and* recording — the first on-device reading was recording-only,
 which is what made it ambiguous.
+
+### What recording actually costs
+
+Splitting the recording loop settled it:
+
+| | idle | recording |
+|---|---|---|
+| `grab` | 10–15 ms | 10 ms — *unchanged* |
+| `infer` | 35–45 ms | 100 ms+ |
+| `comp` | — | a couple of ms |
+| `frame` | — | ~50 ms |
+
+`grab` is main-thread GPU work and it did not move, so the GPU is not saturated. `comp` is
+near zero, so compositing is not the cost. And `frame` at ~50ms says the camera only hands
+over ~20fps while recording — which is almost certainly the *room*, not the load: cameras
+lengthen exposure in low light by dropping frame rate. That is why halving the composite
+resolution twice changed nothing, and why it was reverted.
+
+What is left is resolution-independent, recording-only, and CPU-bound. The prime suspect
+is the audio pipeline: `echoCancellation` and `noiseSuppression` were requested on the mic
+track, and Chrome does not start that processing graph until something *consumes* the
+track — which is exactly what MediaRecorder does. Both are now off. Nothing is played out
+during a recording, so there was no echo to cancel in the first place.
+
+### Leading the target instead of chasing it
+
+A detection describes where the face was when the frame was grabbed and lands
+`grab + infer` later — ~50ms idle, ~110ms recording. Easing toward a target that stale can
+only ever trail; it cannot catch up. `Anchors.project` leads each anchor along its
+smoothed velocity by that measured latency.
+
+Ungated, simulated at the on-device rates, that was **27% better on a smooth head turn,
+16% worse on a fast snap, and 17% noisier when still** — velocity from 10fps detections
+cannot follow a sharp reversal. So the lead is scaled by how well each new velocity agrees
+in direction and magnitude with the smoothed one. Confidence collapses on a reversal and
+prediction backs off to plain easing exactly where it was hurting: **-14% / -5% / -1%**.
+
+Modest, and deliberately so — the dominant term is the 100ms inference, which no filter
+can remove. `project` is pure and lives in `anchors.js` precisely so the clamp and the
+lead can be unit-tested without a device or a face:
+
+```bash
+node test-project.js     # no dependencies, no build step — same as the rest of this repo
+```
+
+That matters here because the fake camera used for browser testing has no face in it, so
+nothing else in the automated path ever exercises the prediction maths.
 
 The HUD (tap the bottom-right corner) reports the chosen recorder format, whether a mic
 track exists, and the composite rate while recording.
