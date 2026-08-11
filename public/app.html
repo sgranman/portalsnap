@@ -807,6 +807,10 @@ function render() {
       "\ndrawing " + (wantDraw ? "yes" : "no") +
       "\nface    " + (fresh ? "yes" : "no") +
       "\nmic     " + (stream && stream.getAudioTracks().length ? "yes" : "no") +
+      // The pitch the next clip will record at, and whether the graph exists to
+      // apply it — "1.42 (off)" means the shifter never came up and the clip
+      // will be in the room's own voice.
+      "\nvoice   " + voiceOf(active).toFixed(2) + (voiceNode ? "" : " (off)") +
       "\nrecfmt  " + ((pickMime() || "none").replace("video/", "").split(";")[0]) +
       (recording && recCanvas
         ? "\nrec     " + recFps.toFixed(1) + " fps @" + recCanvas.width + "x" + recCanvas.height +
@@ -839,6 +843,7 @@ function chip(emoji, label, filter) {
     document.querySelectorAll(".chip").forEach(c => c.classList.remove("on"));
     b.classList.add("on");
     active = filter;
+    setVoice(voiceOf(filter));   // no-op unless a clip has already built the graph
     if (filter) selectTracker(filter);
   };
   return b;
@@ -855,6 +860,55 @@ async function selectTracker(filter) {
     trackerBroken = "" + ((err && err.message) || err);
     hint("That filter is having a nap", 2500);
   }
+}
+
+/* ------------------------------ Voices ------------------------------ */
+
+// Four of the filters change how you sound in a clip: the puppy growls, the
+// kitten squeaks. The ratio lives on the filter beside `needsMesh`, because it
+// is part of what the filter *is* — see `voice` in filters.js.
+//
+// It is heard on playback, never live. Routing a processed mic to the speakers
+// two feet from that same mic is a feedback loop, and this device has no
+// headphones. So the effect goes into the recording and the children hear
+// themselves when they watch it back, which is the funnier half anyway.
+const voiceOf = f => (f && f.voice) || 1;
+
+let actx = null, voiceNode = null, voiceOut = null, voiceSetup = null;
+
+// Built on the first recording and then reused. An AudioContext per clip would
+// spend one of this device's few audio threads every time, and creating it
+// inside the record tap keeps it inside the user gesture that lets it start.
+function ensureVoice() {
+  if (voiceSetup) return voiceSetup;
+  voiceSetup = (async () => {
+    const mic = stream && stream.getAudioTracks();
+    if (!mic || !mic.length) return null;               // silent clips need no help
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    const ctxa = new Ctx();
+    if (!ctxa.audioWorklet) { try { ctxa.close(); } catch (e) {} return null; }
+    await ctxa.audioWorklet.addModule("./pitch.worklet.js");
+    const src = ctxa.createMediaStreamSource(new MediaStream([mic[0]]));
+    const node = new AudioWorkletNode(ctxa, "pitch-shift");
+    const out = ctxa.createMediaStreamDestination();
+    src.connect(node).connect(out);                     // never to ctxa.destination
+    actx = ctxa; voiceNode = node; voiceOut = out;
+    return out.stream.getAudioTracks()[0] || null;
+  })().catch(err => {
+    // A missing voice must never cost a recording, the same way a refused mic
+    // is not allowed to cost the camera.
+    console.warn("voice unavailable:", (err && err.message) || err);
+    return null;
+  });
+  return voiceSetup;
+}
+
+// Safe to call at any time, including mid-clip when a child taps a new filter.
+function setVoice(ratio) {
+  if (!voiceNode) return;
+  const p = voiceNode.parameters.get("ratio");
+  if (p) p.value = ratio;
 }
 
 /* ----------------------------- Capture ------------------------------ */
@@ -887,7 +941,7 @@ const REC_COMPOSITE_HZ = 20;
 
 let pending = null;        // { kind, blob, url, ext } awaiting Keep or discard
 let recorder = null, recTrack = null, recCanvas = null, recCtx = null;
-let recChunks = [], recMime = "", recording = false;
+let recChunks = [], recMime = "", recording = false, recArming = false;
 let recStartedAt = 0, recTick = 0, recFrames = 0, recFps = 0;
 // Split the recording loop: time inside the composite itself, versus the
 // interval at which the camera actually hands us frames. 540p composited at
@@ -960,8 +1014,10 @@ function pickMime() {
   return cachedMime;
 }
 
-function startRec() {
-  if (recording || overlayUp() || !ready()) return;
+async function startRec() {
+  // recArming as well as recording: the voice graph is built with an await, and
+  // two taps inside that window would otherwise start two recorders.
+  if (recording || recArming || overlayUp() || !ready()) return;
 
   recMime = pickMime();
   if (!recMime || typeof HTMLCanvasElement.prototype.captureStream !== "function") {
@@ -991,8 +1047,18 @@ function startRec() {
     recTrack = cs.getVideoTracks()[0];
   }
 
+  // The mic goes through the shifter whenever the graph is available, even at a
+  // ratio of 1 — which is a bit-exact passthrough — because that is what lets a
+  // child change filters part-way through a clip and have the voice follow. If
+  // anything about the audio graph failed, the bare mic is used instead.
+  recArming = true;
+  const shifted = await ensureVoice();
+  recArming = false;
+  if (actx && actx.state === "suspended") { try { await actx.resume(); } catch (e) {} }
+  setVoice(voiceOf(active));
+
   const mic = stream.getAudioTracks();
-  const mixed = new MediaStream([recTrack].concat(mic));
+  const mixed = new MediaStream([recTrack].concat(shifted ? [shifted] : mic));
 
   try {
     recorder = new MediaRecorder(mixed, {
@@ -1029,7 +1095,9 @@ function startRec() {
   el("rectimer").classList.add("show");
   el("shutter").disabled = true;
   el("album").disabled = true;
-  hint(mic.length ? "Recording — say something!" : "Recording (no microphone)", 2000);
+  hint(!mic.length ? "Recording (no microphone)"
+       : shifted && voiceOf(active) !== 1 ? "Recording — say something in your " + active.name + " voice!"
+       : "Recording — say something!", 2000);
 
   recTick = setInterval(tickRec, 200);
   pumpRecFrames(manual);
@@ -1100,6 +1168,12 @@ function finishRec() {
   // truncate the tail of the clip.
   if (recTrack) { try { recTrack.stop(); } catch (e) {} recTrack = null; }
   recCanvas = recCtx = null;
+
+  // Park the audio graph until the next clip. A connected worklet keeps running
+  // 375 blocks a second whether or not anyone is recording, and this device has
+  // nothing to spare for that. Suspended here rather than in stopRec, because
+  // the encoder is still flushing until onstop has run.
+  if (actx && actx.state === "running") { try { actx.suspend(); } catch (e) {} }
 
   const blob = new Blob(recChunks, { type: recMime || "video/webm" });
   recChunks = [];

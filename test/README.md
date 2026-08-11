@@ -1,9 +1,12 @@
 # Tests
 
-`node test-project.js` (in the repo root) is the only one with no prerequisites: it loads
-`public/anchors.js` in a `vm` and checks the projection maths. The app itself ships with no
-dependencies and no build step, and that stays true — everything here is a development tool
-that happens to live in the same repo.
+Two tests in the repo root have no prerequisites at all. `node test-project.js` loads
+`public/anchors.js` in a `vm` and checks the projection maths; `node test-pitch.js` does the
+same to `public/pitch.worklet.js`, shimming the two globals an AudioWorklet needs and measuring
+the output frequency of a sine at each ratio. Both check arithmetic a browser cannot see.
+
+The app itself ships with no dependencies and no build step, and that stays true — everything
+here is a development tool that happens to live in the same repo.
 
 The rest drive a real browser, so they need `puppeteer-core` and a Chrome, neither of which
 is vendored:
@@ -26,7 +29,8 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 | `e2e.mjs` | capture → upload → in-app album → delete, and `gallery.html` |
 | `rechud.mjs` | the recording HUD lines appear, read plausibly, and clear afterwards |
 | `fullscreen.mjs` | the full screen button toggles both ways and doesn't cover the camera controls |
-| `recdiag.mjs` | `recdiag.html`'s twelve phases really configure what they claim to |
+| `voice.mjs` | the encoder gets the pitch-shifted track, the ratio follows the filter, the graph parks when idle |
+| `recdiag.mjs` | `recdiag.html`'s thirteen phases really configure what they claim to |
 
 **The fake camera has no face in it.** That is why `filters.mjs` stubs the tracker worker
 instead — same three messages as `tracker.worker.js`, returning synthetic anchors the test
@@ -39,5 +43,7 @@ that phase L really hides the video and shows the composite, that phase I really
 canvas, and so on. The timings it prints are meaningless on a Mac, where every phase lands
 at 7ms; only the Portal can answer those.
 
-`e2e.mjs` writes into `media/` and deletes what it created. Clear the album through the API
-(`DELETE /media/<name>`) rather than `rm -rf media` while the server is running.
+`e2e.mjs` counts album tiles, so it empties the album through the API before it starts —
+every other browser test saves a photo, and running them in sequence used to make it fail with
+two tiles where it expected one. Clear the album that way rather than with `rm -rf media`
+while the server is running: there are `.part` files mid-upload.

@@ -14,6 +14,20 @@ function check(name, ok, extra = "") {
   if (!ok) failures++;
 }
 
+// This one counts album tiles, so it needs an empty album. Every other browser
+// test in here saves a photo, and running them in sequence used to make this
+// fail with two tiles where it expected one — twice diagnosed as an app bug
+// before being recognised as the harness leaving its litter behind. Clear it
+// through the API rather than with rm: the server is live and holds `.part`
+// files mid-upload.
+{
+  const list = await (await fetch(BASE + "/media/list")).json();
+  for (const item of list.items || []) {
+    await fetch(BASE + "/media/" + item.name, { method: "DELETE" });
+  }
+  if ((list.items || []).length) log("  (cleared " + list.items.length + " leftover item(s) from the album)");
+}
+
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: true,

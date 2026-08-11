@@ -129,6 +129,45 @@ because the measurement said it was never the variable — see below. `REC_WIDTH
 can't encode odd ones); it costs nothing to keep and makes the ceiling adjustable if the
 camera ever delivers more than it does today.
 
+## Silly voices
+
+Four filters change how you sound in a clip: **Puppy** growls (0.78), **Fancy** goes plummy
+(0.8), **Kitty** squeaks (1.42) and **Googly** is a chipmunk (1.75). Cool and Royal are left
+alone, so the effect reads as deliberate rather than as something wrong with the microphone.
+
+The ratio lives on the filter in `filters.js`, next to `needsMesh`, because it is part of what
+the filter *is*.
+
+- **It is heard on playback, never live.** Routing a processed microphone to speakers two feet
+  from that same microphone is a feedback loop, and this device has no headphones. So the
+  effect goes into the recording, and the children hear themselves when they watch it back —
+  which is the funnier half anyway.
+- **`pitch.worklet.js` is a delay-line granular shifter**, about forty lines on the audio
+  render thread. Hold the recent input in a ring; read it back with a delay that slides
+  linearly. A delay shrinking by 0.4 samples per output sample means the read head advances
+  1.4 samples per output sample — the voice played 1.4x faster, a fifth up, without the clip
+  getting shorter. The delay must wrap, and a wrap is a discontinuity, so two read heads half
+  a grain apart are crossfaded with the one at the wrap point always faded out.
+- **It is not a phase vocoder and does not pretend to be.** Two correlated copies of a voice
+  summed together comb-filter slightly, which reads as a faint warble. For a puppy and a
+  kitten that is a feature, and it costs a handful of multiply-adds per sample instead of an
+  FFT — this device spends everything it has on face detection.
+- **The mic always routes through the shifter while recording, even at a ratio of 1**, which is
+  a bit-exact passthrough. That is what lets a child change filter half way through a clip and
+  have the voice follow. Outside recording the graph is suspended: a connected worklet runs 375
+  blocks a second whether or not anyone is listening.
+- **A missing voice never costs a recording.** If `AudioWorklet` is absent, the module fails to
+  load, or there is no mic, the bare microphone track is used and the HUD says `voice 1.42
+  (off)`. Same rule as the camera: a refused mic is not allowed to cost the video.
+
+Verified two ways, because the browser and the arithmetic answer different questions.
+`node test-pitch.js` drives the worklet straight from Node — it needs only two globals to
+exist — and measures the output frequency of a synthetic sine at each ratio, plus that a ratio
+of 1 is bit-exact. `test/voice.mjs` checks the wiring: that the encoder is handed the
+*processed* track and not the bare mic, that the ratio follows a mid-clip filter change, and
+that the graph is parked afterwards. End to end, recording Chrome's fake tone as Kitty moved
+its spectral peak from 398Hz to 546Hz.
+
 ## Full screen
 
 The Portal's browser chrome takes 156 of the panel's 800 pixels — the viewport measures

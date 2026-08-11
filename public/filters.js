@@ -60,7 +60,7 @@ function perEar(ctx, face, fn) {
 const dog = {
   // The only mesh-tier filter: the tongue keys off jawOpen, and blendshapes
   // exist only in mesh mode. Costs ~17fps tracking instead of 30.
-  id: "dog", name: "Puppy", emoji: "🐶", needsMesh: true,
+  id: "dog", name: "Puppy", emoji: "🐶", needsMesh: true, voice: 0.78,
   draw(ctx, face, t) {
     inFaceSpace(ctx, face, c => {
       const S = face.earSpan;
@@ -132,7 +132,7 @@ const dog = {
 /* ------------------------------- Cat ------------------------------- */
 
 const cat = {
-  id: "cat", name: "Kitty", emoji: "🐱", needsMesh: false,
+  id: "cat", name: "Kitty", emoji: "🐱", needsMesh: false, voice: 1.42,
   draw(ctx, face) {
     inFaceSpace(ctx, face, c => {
       const S = face.earSpan;
@@ -308,7 +308,7 @@ const crown = {
 /* --------------------------- Googly eyes --------------------------- */
 
 const googly = {
-  id: "googly", name: "Googly", emoji: "👀", needsMesh: false,
+  id: "googly", name: "Googly", emoji: "👀", needsMesh: false, voice: 1.75,
   draw(ctx, face, t) {
     // Pupils lag the head, so they swing when you move — the whole joke.
     googly._vx = (googly._vx || 0) * 0.86 + (face.cx - (googly._px ?? face.cx)) * 0.14;
@@ -348,7 +348,7 @@ const googly = {
 /* ------------------------- Top hat + mustache ------------------------- */
 
 const mustache = {
-  id: "mustache", name: "Fancy", emoji: "🎩", needsMesh: false,
+  id: "mustache", name: "Fancy", emoji: "🎩", needsMesh: false, voice: 0.8,
   draw(ctx, face) {
     inFaceSpace(ctx, face, c => {
       const S = face.earSpan;
