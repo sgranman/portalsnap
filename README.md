@@ -333,6 +333,26 @@ that is free:
    Off-device: a static filter on a still face paints **0** times per second, a moving face
    paints 25–30, and an animated filter on a still face paints 13–15.
 
+   **On-device it fired exactly never**, which is the interesting part. `paint` read 20–22/s
+   against a `render` of about 21 — every single frame counted as changed. A real face is
+   never still: blazeface regresses its keypoints afresh from each frame, so they jitter by a
+   few pixels with nobody moving, and a 0.6px threshold cannot survive that. Nothing was
+   wrong with the skip; the number it compared against was fiction, because the fake camera
+   used to test it reports a *motionless* face and no real tracker ever does.
+
+   So `ease()` gained a deadband of one pixel of the tracker's own input — `1/320`
+   normalized, about 4px across the overlay, 1% of a face's width. Below the resolution the
+   model is actually fed, a movement cannot be distinguished from noise, which makes that a
+   principled bound rather than a tuned one. It is applied to the distance from `shown` to
+   the target, not to each detection's step, so genuinely slow motion still tracks — it
+   accumulates until it clears the deadband and then moves, staircasing at 4px rather than
+   freezing. Sticker jitter on a motionless face goes away as a side effect, which is
+   arguably the more visible improvement.
+
+   Off-device with ±3px of injected tracker noise: **1–6 paints/sec**, against ~30 before.
+   The HUD gained `jit`, the median largest anchor step between detections, so the noise
+   floor is now something the device can be asked about instead of assumed.
+
 The HUD gained a `drawing` line and a `paint /s` line, and `render` prints `(cap 30)` so a
 low number reads as intent rather than a symptom. `paint` well under `render` means the skip
 is earning its keep; equal to it means every frame genuinely changed something.
@@ -462,19 +482,26 @@ What follows is tuning of the sticker lag, not the feature.
 | overlay present but never redrawn — the practical floor | 24 ms | 25 fps |
 | preview with a filter on, face moving | 29 ms | 21.7 fps |
 | preview with a filter on, face still (redraws skipped) | ~24 ms | ~25 fps |
-| while recording, composite capped at 20fps | ~52 ms | ~14 fps (estimated) |
+| while recording, composite capped at 20fps | ~52 ms | **13.5–14 fps** (measured) |
 
 Displaying the video costs 3-5ms and that is not recoverable — it is the product. Everything
 else that was worth taking has been taken.
 
-**Read the HUD next**, idle and recording: `infer` / `detect` / `paint` / `drawing`. The two
-numbers that confirm the last round are `paint` dropping to **0** when the child holds still,
-and `detect` climbing to **~14fps while recording**, from 10. If a clip looks too steppy at
-20fps, `REC_COMPOSITE_HZ` is one constant.
+**Read the HUD next**, sitting as still as possible with a filter on. Two numbers:
 
-Running `recdiag.html` again would confirm row M, which is the 20fps composite the app now
-ships — K measured 15fps and M is the interpolation that was actually deployed. Not urgent;
-the HUD answers the same question more cheaply.
+- **`jit`** — the tracker's noise floor in overlay pixels. If it reads comfortably under 4,
+  the deadband covers it. If it reads 6, 8, 12, then `EASE_DEADBAND` is set below the noise
+  and the skip will still be firing only intermittently. That is one constant, and `jit` is
+  the measurement that says what to set it to — no more guessing at it.
+- **`paint`** — should now be near 0 while still, and rise to ~20 while moving. It read
+  20–22/s regardless before the deadband.
+
+`detect` while recording is already confirmed at 13.5–14fps, up from 10, which is the 20fps
+composite cap doing its job.
+
+Running `recdiag.html` again would confirm row M, the 20fps composite the app now ships — K
+measured 15fps and M is the interpolation that was deployed. Not urgent; the HUD answers the
+same question more cheaply.
 
 **Do not** re-try these; each was measured and is dead: composite resolution (twice), a
 WebGL compositor for the composite *draw* (+1ms — there is nothing there), worker vs

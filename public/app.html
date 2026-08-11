@@ -319,6 +319,16 @@ const PREDICT_CLAMP = 0.05;      // rail against noise spikes; normal motion nev
 const PREDICT_MAX_MS = 140;      // never lead further than the worst latency seen
 const REACQUIRE_MS = 400;        // a gap this long means the face moved unseen
 
+// One pixel of the tracker's 320-wide input, in normalized units — about 4px
+// across a 1280 frame, or 1% of a face's width. Anchors are not moved by less
+// than this. See ease(), and `jit` on the HUD for what the noise floor actually
+// measures on the device.
+const EASE_DEADBAND = 1 / 320;
+
+// Per-detection anchor movement, for that HUD line. Kept as a small ring since
+// the only question asked of it is a median.
+let moveMags = [];
+
 function hint(msg, ms = 2200) {
   el("hint").textContent = msg;
   el("hint").classList.add("show");
@@ -419,6 +429,21 @@ function onResult(m) {
       if (judged) predConf += (agree / judged - predConf) * PREDICT_CONF_ALPHA;
       else predConf = 0;
     }
+
+    // How far the furthest anchor moved since the last detection. Read while
+    // sitting still, its median is the tracker's noise floor, which is the
+    // number EASE_DEADBAND has to clear — guessing at it was what made the
+    // still-face skip a no-op on the device.
+    if (target) {
+      let far = 0;
+      for (const k of KEYS) {
+        const a = target[k], b = m.anchors[k];
+        if (a && b) far = Math.max(far, Math.hypot(b.x - a.x, b.y - a.y));
+      }
+      moveMags.push(far);
+      if (moveMags.length > 90) moveMags.shift();
+    }
+
     target = m.anchors;
     lastResultAt = now;
   }
@@ -566,6 +591,13 @@ function ease(dt) {
     const aim = window.Anchors.project(target[k], vel[k], lead, PREDICT_CLAMP);
     const dx = aim.x - shown[k].x, dy = aim.y - shown[k].y;
     const dist = Math.hypot(dx, dy);
+    // Movement below the tracker's own input resolution cannot be movement: the
+    // model is fed a 320-wide frame, so anything under one of those pixels is
+    // regression noise, not a head. Chasing it made the sticker vibrate on a
+    // motionless face, and — measured on-device — meant every render frame had
+    // "changed", so the still-face skip never fired once. `paint` sat at the
+    // render rate with a child sitting perfectly still.
+    if (dist < EASE_DEADBAND) continue;
     const a = Math.min(1, (0.18 + dist * 12) * (dt / 16.7));
     shown[k].x += dx * a;
     shown[k].y += dy * a;
@@ -682,6 +714,16 @@ function snapshot(a) {
   return s;
 }
 
+// Median of the movement ring, in overlay pixels — the ring holds the *largest*
+// anchor step per detection, so this is the step size that decides whether a
+// repaint fires. Sorted on read rather than kept sorted: it is read once per HUD
+// line, and only while the HUD is up.
+function jitterPx() {
+  if (!moveMags.length) return 0;
+  const s = moveMags.slice().sort((a, b) => a - b);
+  return s[s.length >> 1] * fx.width;
+}
+
 let lastDraw = performance.now(), overlayDirty = false;
 let paintTimes = [], paintFps = 0;
 function render() {
@@ -737,6 +779,11 @@ function render() {
       // Redraws actually issued. Well under `render` means the still-face skip
       // is earning its keep; equal to it means every frame changed something.
       "\npaint   " + paintFps + " /s" +
+      // Typical size of the largest anchor's step between detections, in overlay
+      // pixels. Sitting still, that is the tracker's noise floor. The further it
+      // sits under EASE_DEADBAND (4 px) the more redraws get skipped — it is a
+      // slope, not a cliff, since each anchor is deadbanded on its own.
+      "\njit     " + jitterPx().toFixed(1) + " px" +
       "\ndrawing " + (wantDraw ? "yes" : "no") +
       "\nface    " + (fresh ? "yes" : "no") +
       "\nmic     " + (stream && stream.getAudioTracks().length ? "yes" : "no") +

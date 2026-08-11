@@ -35,13 +35,18 @@ await p.setViewport({ width: 1280, height: 644 });
 // Replaces the tracker with a controllable one. Same message contract as
 // tracker.worker.js: init -> ready, frame -> result.
 await p.evaluateOnNewDocument(() => {
-  window.__face = { mode: "still", phase: 0 };
+  // `jitterPx` reproduces the thing a fake camera cannot: a real tracker never
+  // reports the same point twice, so "still" in the app means "moving by the
+  // noise floor". A test with a perfectly motionless face passes on a threshold
+  // far too tight to ever fire on the device.
+  window.__face = { mode: "still", phase: 0, jitterPx: 0 };
   window.__anchors = () => {
     const f = window.__face;
     if (f.mode === "gone") return null;
     // A drift big enough to be visible, applied only in "move".
     const d = f.mode === "move" ? Math.sin((f.phase += 0.25)) * 0.06 : 0;
-    const at = (x, y) => ({ x: x + d, y });
+    const n = () => (f.jitterPx ? (Math.random() - 0.5) * 2 * f.jitterPx / 1280 : 0);
+    const at = (x, y) => ({ x: x + d + n(), y: y + n() });
     return {
       eyeR: at(0.45, 0.42), eyeL: at(0.55, 0.42),
       nose: at(0.50, 0.50), mouth: at(0.50, 0.58),
@@ -76,6 +81,7 @@ const pickFilter = name => p.evaluate(n => {
   c.click();
 }, name);
 const setFace = mode => p.evaluate(m => { window.__face.mode = m; }, mode);
+const setJitter = px => p.evaluate(v => { window.__face.jitterPx = v; }, px);
 
 // Fraction of sampled pixels that carry any alpha at all.
 const inked = () => p.evaluate(() => {
@@ -121,6 +127,31 @@ check("the HUD agrees it is drawing", (await hud()).drawing === "yes");
 const stillPaints = await paints(1000);
 check("a still face stops repainting", stillPaints <= 3, "paints in 1s: " + stillPaints);
 check("the drawing stays on screen while skipped", (await inked()) > 0.005);
+
+// The realistic case: a face that is "still" but whose anchors never repeat,
+// because the tracker regresses them afresh from every frame. This is what the
+// device does, and what made the skip a no-op there.
+await setJitter(3);
+await sleep(600);
+const jitterPaints = await paints(1000);
+const jitHud = (await hud()).jit;
+// A deadband against zero-mean noise is a slope, not a cliff — some steps clear
+// it. The bound is loose on purpose; what matters is that this is a fraction of
+// the ~30 the same face produced before the deadband existed.
+check("a still face under tracker noise still stops repainting", jitterPaints <= 12,
+  "paints in 1s: " + jitterPaints + ", jit " + jitHud);
+// jit is the largest of six anchors' steps between two independently-noisy
+// detections, so it reads well above the per-anchor amplitude injected here.
+check("the HUD reports a plausible noise floor", parseFloat(jitHud) > 1 && parseFloat(jitHud) < 9, jitHud);
+check("the drawing survives the noise", (await inked()) > 0.005);
+
+// Noise well past the deadband is real movement as far as the app can tell, and
+// must not be swallowed — that would be a frozen sticker, not a saving.
+await setJitter(14);
+await sleep(600);
+const loudPaints = await paints(1000);
+check("movement above the deadband is not swallowed", loudPaints >= 12, "paints in 1s: " + loudPaints);
+await setJitter(0);
 
 // Moving face: repaints resume at the capped rate.
 await setFace("move");
