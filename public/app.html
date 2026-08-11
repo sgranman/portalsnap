@@ -297,7 +297,7 @@ let forceBackend = null;
 let active = null;              // current filter, null = none
 let trackerMode = "fast";       // "fast" = blazeface, "mesh" = full landmarks
 let inFlight = false, seq = 0;
-let lastResultAt = 0, lastInferMs = 0, detFps = 0, detTimes = [];
+let lastResultAt = 0, lastInferMs = 0, lastGrabMs = 0, detFps = 0, detTimes = [];
 
 // Smoothed anchors, in normalized coords. `target` is the latest detection,
 // `shown` is what we draw — it chases the target every render frame.
@@ -365,6 +365,13 @@ function onResult(m) {
   while (detTimes.length && now - detTimes[0] > 2000) detTimes.shift();
   detFps = detTimes.length / 2;
   if (m.anchors) { target = m.anchors; lastResultAt = now; }
+
+  // Re-arm the moment a result lands. Waiting for the next poll tick threw
+  // away up to 16ms per detection — roughly a third of the cycle, and the
+  // reason detection ran at half of what inference alone allows. Deferred by
+  // a tick rather than called straight through, because on the main-thread
+  // backend onResult runs *inside* pump and would re-enter it.
+  schedulePump(0);
 }
 
 // Prefer the worker; fall back to main-thread inference rather than stranding
@@ -431,6 +438,14 @@ async function startMainThread(mode) {
 
 /* --------------------- Frame pump (one in flight) --------------------- */
 
+// Exactly one timer is ever pending. onResult re-arms early, and this keeps
+// that from leaving a second one ticking behind it.
+let pumpTimer = 0;
+function schedulePump(delay) {
+  clearTimeout(pumpTimer);
+  pumpTimer = setTimeout(pump, delay);
+}
+
 // Only ever one frame in the worker: queueing them would add latency without
 // adding detections, and every queued bitmap is memory this device lacks.
 async function pump() {
@@ -442,9 +457,11 @@ async function pump() {
     try {
       // 320-wide input measured fastest for blazeface and costs the landmarker
       // nothing, since it resizes to a fixed tensor internally anyway.
+      const t0 = performance.now();
       bmp = await createImageBitmap(video, {
         resizeWidth: 320, resizeHeight: 180, resizeQuality: "low"
       });
+      lastGrabMs = performance.now() - t0;
 
       if (backend === "worker" && worker) {
         worker.postMessage({ type: "frame", bitmap: bmp, seq: ++seq }, [bmp]);
@@ -465,7 +482,9 @@ async function pump() {
       if (bmp) { try { bmp.close(); } catch (e) {} }
     }
   }
-  setTimeout(pump, 16);
+  // Watchdog only. The live path is onResult re-arming; this just keeps the
+  // loop alive if a result never comes back, without polling hot meanwhile.
+  schedulePump(inFlight ? 250 : 16);
 }
 
 /* ---------------------- Smoothing + render loop ---------------------- */
@@ -562,7 +581,10 @@ function render() {
     el("hud").textContent =
       "mode    " + trackerMode +
       "\nbackend " + (trackerBroken ? "FAILED" : backend) +
+      "\ngrab    " + lastGrabMs.toFixed(0) + " ms" +
       "\ninfer   " + lastInferMs.toFixed(0) + " ms" +
+      // What's left after grab+infer is loop overhead — the number to chase.
+      "\ncycle   " + (detFps > 0 ? (1000 / detFps).toFixed(0) : "-") + " ms" +
       "\ndetect  " + detFps.toFixed(1) + " fps" +
       "\nrender  " + (1000 / dt).toFixed(0) + " fps" +
       "\nface    " + (fresh ? "yes" : "no") +

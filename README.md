@@ -133,36 +133,53 @@ at, so a photo of the HUD is self-describing.
 This was originally changed to chase a detection-rate problem it did not fix — see below.
 It is kept because the reasoning above stands on its own, not because it was the cure.
 
-## Open: inference is ~4x slower in the app than in the sweep
+## Chasing the detection rate on-device
 
-The first on-device HUD reading, taken mid-recording at 720p, against the sweep's
-blazeface-at-320x180 figure:
+Three readings, all blazeface at 320x180, and a warning about comparing them:
 
-| | `bench.html` sweep | app, recording |
+| | `infer` | `detect` |
 |---|---|---|
-| `infer` | 23.3 ms | **96 ms** |
-| `detect` | ~30 fps (camera-capped) | **8.5 fps** |
+| `bench.html` sweep (main thread, no app around it) | 23.3 ms | — |
+| app idle, main thread | 30–40 ms | 16.5 fps |
+| app idle, worker | 40–60 ms | 14.5 fps |
+| app recording at 720p, worker | 96 ms | 8.5 fps |
 
-Dropping the composite to 540p **did not move `detect`**, which rules out the first
-theory — that the draw and the encoder were starving the tracker.
+**`bench.html` has no Worker in it.** Every number in the sweep table was measured with the
+detector on the *main thread*, and with none of the app around it — no live 720p preview
+being composited, no overlay redraw. The app runs the detector in a classic Web Worker.
+Two readings from different execution contexts are not a baseline and a regression; they
+are two different measurements. Chasing that gap cost a wrong diagnosis and a deploy.
 
-The confound: **`bench.html` has no Worker in it.** Every number in the sweep table was
-measured with the detector created and run on the *main thread*, where the page has a
-normal WebGL context. The app runs it in a **classic Web Worker**, where MediaPipe's
-`delegate: "GPU"` needs OffscreenCanvas and can silently fall back to CPU on an old
-driver. So the 23.3ms and the 96ms differ in two variables, not one, and 96ms for
-blazeface is slower than the *mesh* model measured on GPU (64.2ms) — which is the tell.
+What the on-device swap actually showed:
 
-Two things worth noting if this turns out to be a CPU fallback in the worker: the worker
-would be a pessimisation rather than an optimisation on this device, and the main-thread
-path already exists (`startMainThread`) and is what the sweep measured. The tradeoff is
-that main-thread inference blocks for the duration of each detection.
+- **The worker costs ~10ms of inference, not 4x.** MediaPipe's `delegate: "GPU"` in a
+  worker needs OffscreenCanvas and *can* fall back to CPU on an old driver — it isn't
+  doing that here. The worker stays: 10ms is cheap next to keeping the main thread free,
+  which recording needs.
+- **Detection ran at roughly half of what inference alone allows** — 14.5fps against a
+  40ms inference that permits ~25. The pump polled on a fixed `setTimeout(pump, 16)` and
+  no-opped while a frame was in flight, so up to 16ms died between a result arriving and
+  the next frame being grabbed, with `createImageBitmap` then serialized in front of
+  inference. `onResult` now re-arms the pump immediately and the timer is only a watchdog.
+  Off-device this roughly doubled the rate, with `cycle` falling to 8ms against 7ms of
+  inference.
+- **Recording still costs real time** (96ms vs ~50ms idle), which is what 540p compositing
+  is there to reduce.
 
-**To measure it:** bring up the HUD (tap the bottom-right corner of the picture), then tap
-the **bottom-left** corner to swap the tracker between the worker and the main thread and
-compare `infer`. The tap target is inert unless the HUD is showing. Read it *idle* first —
-the original reading was taken while recording, which is what made the comparison
-ambiguous in the first place.
+The HUD splits the cycle so the next reading is unambiguous: `grab` is the
+`createImageBitmap` cost, `infer` is inference alone, and `cycle` is the whole
+result-to-result interval. Whatever `cycle` has over `grab + infer` is loop overhead.
+
+One known inefficiency, deliberately left: nothing gates detection on the camera actually
+producing a new frame. On the Portal inference is slower than the 33ms frame interval so
+it never happens, but on faster hardware the same frame gets detected more than once.
+Gating on `requestVideoFrameCallback` would fix it and risks stalling detection if the
+callback ever stops firing, which is a bad trade for a device that cannot benefit.
+
+**To take a reading:** tap the bottom-right corner of the picture for the HUD, then the
+**bottom-left** corner to swap worker/main-thread. The swap target is inert unless the HUD
+is showing. Read idle *and* recording — the first on-device reading was recording-only,
+which is what made it ambiguous.
 
 The HUD (tap the bottom-right corner) reports the chosen recorder format, whether a mic
 track exists, and the composite rate while recording.
