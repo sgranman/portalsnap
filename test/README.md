@@ -24,7 +24,7 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 
 | | what it covers |
 |---|---|
-| `filters.mjs` | the drawing path, and *fit*: where the ink lands against the landmarks, still faces stop repainting, a lost face clears it, a throwing filter doesn't corrupt the context |
+| `filters.mjs` | the drawing path, and *fit*: where the ink lands against the landmarks, still faces stop repainting, a lost face clears it, a throwing filter doesn't corrupt the context, and the two video-sampling filters repaint every frame |
 | `render.mjs` | the render loop's 30Hz cap and its idle skip |
 | `e2e.mjs` | capture → upload → in-app album → delete, and `gallery.html` |
 | `rechud.mjs` | the recording HUD lines appear, read plausibly, and clear afterwards |

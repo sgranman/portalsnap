@@ -731,8 +731,17 @@ const ANIM_MIN_DT = 1000 / 15 - 1;
 // a slow drift still repaints once it adds up to something visible.
 let painted = null, paintedId = "", lastPaintAt = 0;
 
+// The pitch the current filter is asking for, kept for the HUD: a filter that
+// derives it from the face has no single number to report otherwise.
+let shownVoice = 1;
+
 function needsPaint(now) {
   if (!painted || paintedId !== active.id) return true;
+  // A filter that takes the video samples live pixels, so its output changes
+  // even when the face does not. Skipping those frames would freeze a stale
+  // copy of the picture on screen — the one case where a still face still needs
+  // every frame drawn.
+  if (active.draw.length >= 4) return true;
   for (const k of KEYS) {
     const a = painted[k], b = shown[k];
     if (!a !== !b) return true;
@@ -795,8 +804,20 @@ function render() {
     ease(dt);
     if (needsPaint(now)) {
       wipe();
-      try { active.draw(ctx, buildFace(shown), now); }
+      const f = buildFace(shown);
+      // The video is handed to the filter as a fourth argument. Overlay and
+      // video are the same size and share the stage's mirror, so pixels sampled
+      // from one land in the right place on the other — which is what makes a
+      // zoomed head or a face pasted onto a cartoon possible without a second
+      // renderer.
+      try { active.draw(ctx, f, now, video); }
       catch (e) { console.warn("filter", active.id, e); }
+      // A filter may set the pitch from the face itself, so a head that grows
+      // can drop the voice with it. Applied only while recording — nothing is
+      // listening otherwise and the graph is suspended — but tracked either way,
+      // so the HUD can show what the next clip would sound like.
+      shownVoice = voiceOf(active, f);
+      if (recording && active.voiceFrom) setVoice(shownVoice);
       painted = snapshot(shown);
       paintedId = active.id;
       overlayDirty = true;
@@ -840,7 +861,7 @@ function render() {
       // The pitch the next clip will record at, and whether the graph exists to
       // apply it — "1.42 (off)" means the shifter never came up and the clip
       // will be in the room's own voice.
-      "\nvoice   " + voiceOf(active).toFixed(2) + (voiceNode ? "" : " (off)") +
+      "\nvoice   " + shownVoice.toFixed(2) + (voiceNode ? "" : " (off)") +
       "\nrecfmt  " + ((pickMime() || "none").replace("video/", "").split(";")[0]) +
       (recording && recCanvas
         ? "\nrec     " + recFps.toFixed(1) + " fps @" + recCanvas.width + "x" + recCanvas.height +
@@ -873,7 +894,10 @@ function chip(emoji, label, filter) {
     document.querySelectorAll(".chip").forEach(c => c.classList.remove("on"));
     b.classList.add("on");
     active = filter;
-    setVoice(voiceOf(filter));   // no-op unless a clip has already built the graph
+    // Set it here as well as during a paint: with no face in view nothing paints,
+    // and the HUD should still be able to say what the next clip would sound like.
+    shownVoice = voiceOf(filter);
+    setVoice(shownVoice);        // no-op unless a clip has already built the graph
     if (filter) selectTracker(filter);
   };
   return b;
@@ -902,7 +926,16 @@ async function selectTracker(filter) {
 // two feet from that same mic is a feedback loop, and this device has no
 // headphones. So the effect goes into the recording and the children hear
 // themselves when they watch it back, which is the funnier half anyway.
-const voiceOf = f => (f && f.voice) || 1;
+// A filter may state a fixed ratio, or derive one from the face — a head that
+// balloons when you open your mouth should sound like it.
+function voiceOf(f, face) {
+  if (!f) return 1;
+  if (f.voiceFrom && face) {
+    const r = f.voiceFrom(face);
+    return r > 0 ? Math.max(0.5, Math.min(2.5, r)) : 1;
+  }
+  return f.voice || 1;
+}
 
 // Every node in this graph is held in a variable that outlives the function that
 // built it, and that is not tidiness — it is the fix for a real bug. A

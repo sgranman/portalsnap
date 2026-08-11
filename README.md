@@ -179,6 +179,36 @@ synthetic face and checks *where the ink lands* rather than that ink exists. On 
 geometry they fail exactly as a person would describe it: **32% of the puppy below the chin**,
 ears never reaching above the eye line, ink wider than the head.
 
+### Filters that resample the camera
+
+Two of the eight do something the others cannot: they read the video rather than
+drawing over it. That needed one change to the contract — `draw(ctx, face, t, video)` — and
+one to the render loop: a filter taking the video is repainted every frame, because its output
+changes when the *picture* changes and not only when the face moves. Skipping those frames
+would freeze a stale copy of the room on screen.
+
+- **🤯 Big Head** — open your mouth and your head balloons; the voice drops as it grows, so
+  it is one gesture. An ellipse around the head, the video redrawn zoomed about the middle of
+  the face, and the boundary feathered with a `destination-out` radial gradient — otherwise the
+  zoomed background inside the clip meets the real background at a visible seam and reads as a
+  compositing bug. It only ever scales *up*: shrinking leaves a hole where the head was, and
+  filling that convincingly is a far harder problem than this one.
+- **🪂 Skydive** — your face, cut out and pasted into a cartoon's helmet as it falls through
+  drifting clouds. Built around a real head first, the character came out the size of a bus with
+  its parachute off the top of the frame; now it is a fixed share of the picture and your head
+  *steers* it instead of sizing it, which also means it works whether a child is leaning in or
+  standing back.
+
+`Big Head` needs the dense model for `jawOpen`. `Skydive` deliberately does not: it needs a
+head box and a position, and the canonical fallback proportions are exact enough once the face
+is being scaled into a cartoon helmet — rendered side by side, the two tiers are
+indistinguishable. A full-frame effect that repaints every frame would rather have the
+detection rate.
+
+Both are heavier than a sticker. Worth watching `detect` on the HUD while they are on; `paint`
+will also read higher for any mesh filter, because a repaint fires when any tracked point
+clears the deadband and the dense tier tracks 22 points where blazeface tracks 6.
+
 ### What about downloadable filters?
 
 Asked, and worth recording: there is no filter pack for a framework like this. What exists is
@@ -193,6 +223,20 @@ Consuming such a texture means drawing 1,200 textured triangles per frame, which
 non-starter in canvas 2D on a device where the overlay redraw already costs 11ms — it would
 need a WebGL overlay. That remains a real option, and the UV data is available if the hand-drawn
 filters ever stop being enough.
+
+**But most "silly" effects do not need any of that.** The ones people remember — a head that
+balloons, a face pasted onto a cartoon — are *region* transforms, not per-pixel mesh warps: clip
+an ellipse, redraw the video zoomed, scale a face into a helmet. Two or three `drawImage` calls,
+not 1,200 triangles. WebGL is only required for warping the face along all 468 landmarks or
+painting a canonical-UV texture onto it. Worth knowing before reaching for a second renderer.
+
+### Judging a filter that resamples the camera
+
+Chrome's fake camera is a rolling test pattern, which is no use for these: a zoomed head looks
+like a zoomed green rectangle. So the harness draws a synthetic face — features placed on the
+canonical landmarks, on a background with grid lines so a zoom is obvious — and feeds it in with
+`--use-file-for-fake-video-capture`. That is what caught the seam at the edge of the big-head
+clip, and the parachute leaving the frame, neither of which any assertion had complained about.
 
 ## Silly voices
 

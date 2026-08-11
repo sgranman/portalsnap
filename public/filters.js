@@ -42,6 +42,31 @@ function unlift(ctx) {
   ctx.shadowOffsetY = 0;
 }
 
+// Face space back out to pixels — the inverse of what buildFace did. Filters
+// that sample the video need it, because the video is in pixels and everything
+// else here is in inter-eye units.
+function toPixels(face, p) {
+  const c = Math.cos(face.angle), s = Math.sin(face.angle);
+  return {
+    x: face.cx + (p.x * c - p.y * s) * face.eyeDist,
+    y: face.cy + (p.x * s + p.y * c) * face.eyeDist
+  };
+}
+
+// The whole head, in pixels: centre, and half-extents along the face's own axes.
+// Falls back to proportions of the eye distance when the dense model is absent.
+function headBox(face) {
+  const topY = face.headTop ? face.headTop.y : -0.63;
+  const botY = face.chin ? face.chin.y : 1.36;
+  const centre = toPixels(face, { x: 0, y: (topY + botY) / 2 });
+  return {
+    x: centre.x,
+    y: centre.y,
+    halfW: (face.headSpan / 2) * face.eyeDist * 1.12,
+    halfH: ((botY - topY) / 2) * face.eyeDist * 1.12
+  };
+}
+
 // Where an animal ear attaches to a head.
 //
 // `face.earR/earL` are the *cheek* silhouette — checked against the canonical
@@ -452,4 +477,199 @@ const mustache = {
   }
 };
 
-export const FILTERS = [dog, cat, shades, crown, googly, mustache];
+/* ----------------------------- Big head ----------------------------- */
+
+// Open your mouth and your head balloons; close it and it comes back. The voice
+// drops as it grows, so the whole thing is one gesture.
+//
+// No mesh warp and no WebGL: this clips an ellipse around the head and redraws
+// the video zoomed about the middle of the face. Two draws a frame. It only ever
+// scales *up*, which matters — shrinking would leave a hole where the head was,
+// and filling that convincingly is a much harder problem than this one.
+const bighead = {
+  id: "bighead", name: "Big Head", emoji: "🤯", needsMesh: true,
+  // Deeper the bigger it gets. Clamped by voiceOf, and 1 with a closed mouth.
+  voiceFrom: face => 1 - Math.min(1, (face.blendshapes.jawOpen || 0) * 1.15) * 0.32,
+  draw(ctx, face, t, video) {
+    const open = Math.min(1, (face.blendshapes.jawOpen || 0) * 1.15);
+    // A mouth barely open should not wobble the head; below this it does nothing
+    // at all, which also means a closed mouth costs one comparison.
+    if (open < 0.06) return;
+
+    const grow = 1 + open * 1.15;
+    const h = headBox(face);
+    const w = ctx.canvas.width, ht = ctx.canvas.height;
+    // The clip is wider than the head it contains, so the feather below lands on
+    // zoomed background rather than eating the edge of the hair.
+    const rx = h.halfW * grow * 1.25, ry = h.halfH * grow * 1.25;
+
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.ellipse) ctx.ellipse(h.x, h.y, rx, ry, face.angle, 0, TAU);
+    else ctx.arc(h.x, h.y, rx, 0, TAU);
+    ctx.closePath();
+    ctx.clip();
+
+    // Scale the whole frame about the centre of the head. Inside the clip that
+    // reads as the head growing; the background it drags along is part of the
+    // joke rather than a defect.
+    ctx.translate(h.x, h.y);
+    ctx.scale(grow, grow);
+    ctx.translate(-h.x, -h.y);
+    ctx.drawImage(video, 0, 0, w, ht);
+    ctx.restore();
+
+    // Feather the boundary. Inside the clip the background is zoomed too, so the
+    // ellipse edge is a visible seam against the real background — it reads as a
+    // compositing bug rather than an effect. Erasing the outer band with a
+    // gradient lets the true picture come back through gradually, which costs one
+    // gradient fill and no second canvas. `destination-out` uses the gradient's
+    // alpha to subtract, so the transform makes a circular gradient elliptical.
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.translate(h.x, h.y);
+    ctx.rotate(face.angle);
+    ctx.scale(rx, ry);
+    const fade = ctx.createRadialGradient(0, 0, 0.78, 0, 0, 1);
+    fade.addColorStop(0, "rgba(0,0,0,0)");
+    fade.addColorStop(1, "rgba(0,0,0,1)");
+    ctx.fillStyle = fade;
+    ctx.fillRect(-1.1, -1.1, 2.2, 2.2);
+    ctx.restore();
+  }
+};
+
+/* ---------------------------- Skydiver ----------------------------- */
+
+// Your face, cut out and pasted onto a cartoon falling through the sky.
+//
+// The character is a fixed share of the frame rather than scaled to your head:
+// built around a real head it came out the size of a bus, with its parachute off
+// the top of the picture. So the face is *scaled into* the cartoon's helmet, and
+// moving your head steers him instead of resizing him — which is more fun and
+// works the same whether a child is leaning in or standing back.
+const skydiver = {
+  // Fast tier deliberately: it needs a head box and where the head is, both of
+  // which the six keypoints give well enough once the face is being scaled into a
+  // cartoon helmet anyway. A full-frame effect that repaints every frame wants the
+  // detection rate more than it wants precision.
+  id: "skydiver", name: "Skydive", emoji: "🪂", needsMesh: false, voice: 1.18,
+  draw(ctx, face, t, video) {
+    const w = ctx.canvas.width, h = ctx.canvas.height;
+
+    // Sky.
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, "#1f5fc4");
+    sky.addColorStop(0.55, "#79b6ef");
+    sky.addColorStop(1, "#d7ecff");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // Clouds rushing upward past him, each on its own loop so they never line up.
+    ctx.fillStyle = "rgba(255,255,255,.9)";
+    for (let i = 0; i < 7; i++) {
+      const speed = 110 + i * 46;
+      const y = h + 160 - ((t / 1000 * speed + i * 300) % (h + 320));
+      const x = (i * 397) % w;
+      const r = (22 + (i % 3) * 15) * (h / 720);
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.arc(x + r * 0.9, y + r * 0.15, r * 0.75, 0, TAU);
+      ctx.arc(x - r * 0.85, y + r * 0.2, r * 0.65, 0, TAU);
+      ctx.fill();
+    }
+
+    // Where he is: middle of the frame, nudged by how far your head has strayed
+    // from the middle of yours. Quarter gain, so a small lean is a gentle drift.
+    const R = h * 0.115;                       // cartoon head radius
+    const drift = (face.cx / w - 0.5) * w * 0.25;
+    const rise = (face.cy / h - 0.5) * h * 0.18;
+    const cx = w / 2 + drift;
+    const cy = h * 0.50 + rise;
+    const sway = Math.sin(t / 420) * R * 0.12;
+    const flap = Math.sin(t / 240) * 0.3;
+
+    // Canopy, breathing, with its lines down to his shoulders.
+    // Sized to stay inside a 16:9 frame: a bigger canopy loses its top edge.
+    const canR = R * 1.8 + Math.sin(t / 700) * R * 0.06;
+    const canY = cy - R * 2.15;
+    const shoulder = cy + R * 1.05;
+    ctx.strokeStyle = "rgba(20,25,35,.5)";
+    ctx.lineWidth = Math.max(1, h / 480);
+    for (const side of [-1, -0.4, 0.4, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + side * canR * 0.9, canY + canR * 0.1);
+      ctx.lineTo(cx + sway + side * R * 0.5, shoulder);
+      ctx.stroke();
+    }
+    for (let i = 0; i < 4; i++) {
+      ctx.fillStyle = ["#ef4b6b", "#ffd23f", "#3ecf8e", "#4aa8ff"][i];
+      ctx.beginPath();
+      ctx.moveTo(cx, canY + canR * 0.12);
+      ctx.arc(cx, canY + canR * 0.12, canR, Math.PI + (i / 4) * Math.PI, Math.PI + ((i + 1) / 4) * Math.PI);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Jumpsuit: arms and legs out, flapping.
+    ctx.strokeStyle = "#e8663f";
+    ctx.lineCap = "round";
+    ctx.lineWidth = R * 0.36;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + sway, cy + R * 1.35);
+      ctx.lineTo(cx + sway + side * R * 1.5, cy + R * (1.0 + flap * side));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx + sway, cy + R * 2.1);
+      ctx.lineTo(cx + sway + side * R * 0.9, cy + R * (3.2 - flap * side));
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#f4794f";
+    ctx.beginPath();
+    ctx.ellipse(cx + sway, cy + R * 1.75, R * 0.72, R * 1.0, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,.16)";
+    ctx.fillRect(cx + sway - R * 0.72, cy + R * 1.45, R * 1.44, R * 0.18);
+
+    // Helmet behind the face, so the cut-out sits inside something.
+    ctx.fillStyle = "#2f3546";
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * 1.12, 0, TAU);
+    ctx.fill();
+
+    // The face itself: the head box out of the camera, scaled into the helmet.
+    // Axis-aligned on purpose — the cartoon head stays upright however you tilt.
+    const hb = headBox(face);
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.ellipse) ctx.ellipse(cx, cy, R * 0.86, R * 1.0, 0, 0, TAU);
+    else ctx.arc(cx, cy, R * 0.9, 0, TAU);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(video,
+      hb.x - hb.halfW, hb.y - hb.halfH, hb.halfW * 2, hb.halfH * 2,
+      cx - R * 0.92, cy - R * 1.06, R * 1.84, R * 2.12);
+    ctx.restore();
+
+    // Goggles pushed up onto the forehead, not over the eyes. Over the eyes they
+    // hid the one thing the filter exists to show.
+    ctx.fillStyle = "rgba(30,36,52,.95)";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - R * 0.74, R * 0.86, R * 0.24, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "rgba(160,225,255,.6)";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.ellipse(cx + side * R * 0.4, cy - R * 0.74, R * 0.3, R * 0.15, 0, 0, TAU);
+      ctx.fill();
+    }
+    ctx.strokeStyle = "#2f3546";
+    ctx.lineWidth = R * 0.16;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * 1.04, Math.PI * 0.22, Math.PI * 0.78);
+    ctx.stroke();
+  }
+};
+
+export const FILTERS = [dog, cat, shades, crown, googly, mustache, bighead, skydiver];
