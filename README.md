@@ -208,12 +208,36 @@ Ruled out by measurement, in order:
    of detection, but present idle *and* recording, so not the recording penalty.
 4. **Mic DSP** — `echoCancellation` / `noiseSuppression` off changed nothing. Restored.
 
-What remains is resolution-independent, recording-only and CPU-bound. The live candidate
-is the video-frame-to-canvas path itself: making a 1280x720 camera frame available to a 2D
-canvas costs the same regardless of destination size, which is the one shape that fits
-every measurement above. If so, the lever is a WebGL compositor — the probe measured WebGL
-texture upload at 60fps against canvas2D draw at 53fps, and it keeps frames GPU-resident
-instead of round-tripping them.
+What remains is resolution-independent, recording-only and CPU-bound. Rather than narrow it
+one theory per round — four went by that way, each costing a trip to the device — there is
+now a page that runs the controlled experiment itself.
+
+### `recdiag.html` — where recording's cost actually goes
+
+Open it on the Portal, tap **Start**, walk away for about a minute. It runs the real
+tracker against five configurations that toggle the composite and the encoder
+independently, then POSTs the numbers to `/report` — same trick the capability probe uses,
+because the Portal has no devtools.
+
+| | composite draw | canvas capture | encoder | isolates |
+|---|---|---|---|---|
+| A | — | — | — | idle baseline |
+| B | yes | — | — | the `drawImage` of a 720p frame |
+| C | yes | yes | — | the canvas-to-encoder plumbing |
+| D | — | — | yes (raw camera track) | the encoder alone |
+| E | yes | yes | yes | the real case |
+
+Each phase reports median and p95 inference, detection rate, and the grab/composite/frame
+intervals, after a 2s warm-up that is discarded — the first detections after a switch still
+carry the previous config's scheduling. Recorded chunks are dropped on the floor; this
+measures cost, it doesn't keep video. The page prints its own verdict, and the raw JSON
+stays on screen if the POST fails.
+
+B slow with C and D clean means it is the video-to-canvas draw, and a WebGL compositor is
+worth building — the original probe measured WebGL texture upload at 60fps against
+canvas2D draw at 53fps, and it keeps frames GPU-resident. D slow means the encoder, which
+is not optional. Nothing dominating means the cost is the combination, and the honest
+answer is to accept ~10fps tracking while recording.
 
 ### Leading the target instead of chasing it
 

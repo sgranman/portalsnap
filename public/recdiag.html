@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PortalSnap — recording cost</title>
+<style>
+  :root { --bg:#0e0f16; --card:#191b26; --line:#2b2e3d; --ink:#fff; --dim:#a2a8bd;
+          --accent:#6d5bf5; --ok:#4ade80; --bad:#ff8fa8; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; min-height:100%; background:var(--bg); color:var(--ink);
+         font-family:"Segoe UI",-apple-system,Roboto,sans-serif; padding:18px; }
+  h1 { font-size:26px; margin:0 0 4px; letter-spacing:-.02em; }
+  p.sub { color:var(--dim); font-size:15px; margin:0 0 16px; line-height:1.5; max-width:70ch; }
+  button { font:inherit; font-size:20px; font-weight:700; color:#fff; background:var(--accent);
+           border:0; border-radius:14px; padding:16px 28px; cursor:pointer; touch-action:manipulation; }
+  button:disabled { opacity:.45; }
+  button.alt { background:#343850; }
+  #status { margin:14px 0; font-size:18px; min-height:26px; }
+  #status.bad { color:var(--bad); }
+  #status.ok { color:var(--ok); }
+  #bar { height:10px; background:#242838; border-radius:99px; overflow:hidden; margin:10px 0 18px; }
+  /* scaleX, not width: this page exists to measure milliseconds, and a
+     layout-animating progress bar would be measurement noise of its own. */
+  #fill { height:100%; width:100%; background:var(--accent);
+          transform:scaleX(0); transform-origin:left; transition:transform .3s; }
+  table { border-collapse:collapse; width:100%; font-size:15px; }
+  th,td { text-align:right; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--dim); font-weight:600; font-size:13px; text-transform:uppercase; letter-spacing:.04em; }
+  td.n { font-family:ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
+  tr.hi td { color:var(--bad); font-weight:700; }
+  #verdict { margin:18px 0; padding:14px 16px; background:var(--card); border:1px solid var(--line);
+             border-radius:12px; font-size:16px; line-height:1.55; display:none; }
+  video, canvas { display:none; }
+  pre { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px;
+        font-size:11px; overflow:auto; max-height:220px; color:var(--dim); }
+</style>
+</head>
+<body>
+<h1>Recording cost breakdown</h1>
+<p class="sub">
+  Inference slows from ~40ms to ~100ms while recording, and neither resolution, the worker,
+  the pump loop nor the mic DSP explains it. This runs the tracker against five
+  configurations that switch the composite and the encoder on and off independently, then
+  posts the numbers back to the server. Takes about a minute. Sit still-ish and keep your
+  face in view — it needs real detections to time.
+</p>
+
+<button id="go">Start</button>
+<div id="status"></div>
+<div id="bar"><div id="fill"></div></div>
+
+<table id="out" hidden>
+  <thead><tr>
+    <th>Configuration</th><th>infer p50</th><th>infer p95</th><th>detect</th>
+    <th>grab</th><th>comp</th><th>frame</th>
+  </tr></thead>
+  <tbody></tbody>
+</table>
+
+<div id="verdict"></div>
+<button id="send" class="alt" hidden>Send report again</button>
+<pre id="raw" hidden></pre>
+
+<video id="v" autoplay playsinline muted></video>
+<canvas id="fx"></canvas>
+<canvas id="rc"></canvas>
+
+<script src="./anchors.js"></script>
+<script>
+const el = id => document.getElementById(id);
+const video = el("v"), fx = el("fx"), rc = el("rc");
+
+// Warm-up is discarded: the first detections after a config change carry the
+// previous config's scheduling, and the encoder takes a moment to spin up.
+const WARM_MS = 2000, MEASURE_MS = 6000;
+
+// The composite and the encoder are the two suspects. Toggling them
+// independently is the whole point — `capture` separates the canvas capture
+// plumbing from the drawImage that feeds it, since those are different costs.
+const PHASES = [
+  { id:"A", name:"idle (tracker only)",        composite:false, capture:false, record:null },
+  { id:"B", name:"composite only",             composite:true,  capture:false, record:null },
+  { id:"C", name:"composite + canvas capture", composite:true,  capture:true,  record:null },
+  { id:"D", name:"encoder on raw camera",      composite:false, capture:false, record:"camera" },
+  { id:"E", name:"composite + capture + encoder", composite:true, capture:true, record:"canvas" }
+];
+
+let stream = null, worker = null, results = [], reportBody = null;
+let inFlight = false, pumpTimer = 0, collecting = false;
+let sample = null;
+
+function status(msg, cls) { el("status").textContent = msg; el("status").className = cls || ""; }
+function fresh() {
+  return { infer:[], grab:[], comp:[], frame:[], dets:0, faces:0, startedAt:0, errors:[] };
+}
+const median = a => pick(a, .5), p95 = a => pick(a, .95);
+function pick(a, q) {
+  if (!a.length) return null;
+  const s = a.slice().sort((x, y) => x - y);
+  return s[Math.min(s.length - 1, Math.floor(s.length * q))];
+}
+
+/* ------------------------------- tracker ------------------------------- */
+
+function startWorker() {
+  return new Promise((resolve, reject) => {
+    const w = new Worker("./tracker.worker.js");
+    const t = setTimeout(() => { w.terminate(); reject(new Error("tracker init timed out")); }, 25000);
+    w.onmessage = e => {
+      const m = e.data;
+      if (m.type === "ready") { clearTimeout(t); worker = w; resolve(); return; }
+      if (m.type === "error") {
+        if (m.fatal) { clearTimeout(t); w.terminate(); reject(new Error(m.message)); }
+        else if (sample) sample.errors.push(m.message);
+        return;
+      }
+      if (m.type === "result") onResult(m);
+    };
+    w.onerror = ev => { clearTimeout(t); w.terminate(); reject(new Error(ev.message || "worker failed")); };
+    w.postMessage({ type: "init", mode: "fast" });
+  });
+}
+
+function onResult(m) {
+  inFlight = false;
+  if (collecting && sample) {
+    sample.infer.push(m.inferMs);
+    sample.dets++;
+    if (m.anchors) sample.faces++;
+  }
+  schedulePump(0);
+}
+
+// Same shape as the app's loop, so the numbers transfer: one frame in flight,
+// re-armed the instant a result lands, timer only as a watchdog.
+function schedulePump(d) { clearTimeout(pumpTimer); pumpTimer = setTimeout(pump, d); }
+
+async function pump() {
+  if (video.readyState >= 2 && !inFlight && worker) {
+    inFlight = true;
+    let bmp = null;
+    try {
+      const t0 = performance.now();
+      bmp = await createImageBitmap(video, { resizeWidth:320, resizeHeight:180, resizeQuality:"low" });
+      if (collecting && sample) sample.grab.push(performance.now() - t0);
+      worker.postMessage({ type:"frame", bitmap:bmp, seq:0 }, [bmp]);
+      bmp = null;
+    } catch (e) {
+      inFlight = false;
+      if (sample) sample.errors.push("grab: " + ((e && e.message) || e));
+    } finally {
+      if (bmp) { try { bmp.close(); } catch (e) {} }
+    }
+  }
+  schedulePump(inFlight ? 250 : 16);
+}
+
+/* ------------------------------ composite ------------------------------ */
+
+let rctx = null, compositing = false, capTrack = null, lastFrameAt = 0;
+
+function beginComposite(withCapture) {
+  rc.width = video.videoWidth || 1280;
+  rc.height = video.videoHeight || 720;
+  rctx = rc.getContext("2d", { alpha:false });
+  rctx.translate(rc.width, 0);
+  rctx.scale(-1, 1);              // mirrored once, as the app does
+
+  capTrack = null;
+  if (withCapture) {
+    let cs = rc.captureStream(0);
+    capTrack = cs.getVideoTracks()[0];
+    if (!capTrack || typeof capTrack.requestFrame !== "function") {
+      cs = rc.captureStream(30);
+      capTrack = cs.getVideoTracks()[0];
+    }
+  }
+
+  compositing = true;
+  lastFrameAt = 0;
+  const step = () => {
+    if (!compositing) return;
+    const t0 = performance.now();
+    if (lastFrameAt && collecting && sample) sample.frame.push(t0 - lastFrameAt);
+    lastFrameAt = t0;
+    rctx.drawImage(video, 0, 0, rc.width, rc.height);
+    rctx.drawImage(fx, 0, 0, rc.width, rc.height);
+    if (capTrack && capTrack.requestFrame) { try { capTrack.requestFrame(); } catch (e) {} }
+    if (collecting && sample) sample.comp.push(performance.now() - t0);
+    next();
+  };
+  const next = () => {
+    if (!compositing) return;
+    if (typeof video.requestVideoFrameCallback === "function") video.requestVideoFrameCallback(step);
+    else setTimeout(step, 33);
+  };
+  next();
+  return capTrack;
+}
+
+function endComposite() {
+  compositing = false;
+  if (capTrack) { try { capTrack.stop(); } catch (e) {} capTrack = null; }
+  rctx = null;
+}
+
+/* ------------------------------- encoder ------------------------------- */
+
+function pickMime() {
+  const want = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4",
+                "video/webm;codecs=vp8,opus","video/webm"];
+  for (const t of want) { try { if (MediaRecorder.isTypeSupported(t)) return t; } catch (e) {} }
+  return null;
+}
+
+function beginRecord(track) {
+  const mime = pickMime();
+  if (!mime) throw new Error("no recorder format");
+  const src = new MediaStream([track].concat(stream.getAudioTracks()));
+  const r = new MediaRecorder(src, {
+    mimeType: mime, videoBitsPerSecond: 2500000, audioBitsPerSecond: 96000
+  });
+  // Chunks are dropped on the floor; this measures cost, it doesn't keep video.
+  r.ondataavailable = () => {};
+  r.onerror = e => { if (sample) sample.errors.push("recorder: " + ((e.error && e.error.name) || "error")); };
+  r.start(1000);
+  return { rec: r, mime };
+}
+
+/* -------------------------------- runner ------------------------------- */
+
+async function runPhase(ph, i) {
+  status("(" + (i + 1) + "/" + PHASES.length + ") " + ph.name + " — warming up…");
+  sample = fresh();
+  collecting = false;
+
+  let capture = null, rec = null, mime = null;
+  try {
+    if (ph.composite) capture = beginComposite(ph.capture);
+    if (ph.record) {
+      const track = ph.record === "canvas" ? capture : stream.getVideoTracks()[0];
+      if (!track) throw new Error("no track to record");
+      const started = beginRecord(track);
+      rec = started.rec; mime = started.mime;
+    }
+
+    await wait(WARM_MS);
+    sample.infer = []; sample.grab = []; sample.comp = []; sample.frame = [];
+    sample.dets = 0; sample.faces = 0;
+    collecting = true;
+    sample.startedAt = performance.now();
+    status("(" + (i + 1) + "/" + PHASES.length + ") " + ph.name + " — measuring…");
+    await wait(MEASURE_MS);
+    collecting = false;
+  } catch (err) {
+    sample.errors.push("phase: " + ((err && err.message) || err));
+    collecting = false;
+  } finally {
+    if (rec) { try { rec.stop(); } catch (e) {} }
+    if (ph.composite) endComposite();
+  }
+
+  const secs = MEASURE_MS / 1000;
+  const row = {
+    id: ph.id, name: ph.name, composite: ph.composite, capture: ph.capture, record: ph.record,
+    mime: mime || null,
+    inferP50: round(median(sample.infer)), inferP95: round(p95(sample.infer)),
+    grabP50: round(median(sample.grab)),
+    compP50: round(median(sample.comp)), frameP50: round(median(sample.frame)),
+    detectFps: round(sample.dets / secs, 1),
+    faceRate: sample.dets ? Math.round(100 * sample.faces / sample.dets) + "%" : "n/a",
+    samples: sample.infer.length,
+    errors: sample.errors.slice(0, 4)
+  };
+  results.push(row);
+  addRow(row);
+  el("fill").style.transform = "scaleX(" + ((i + 1) / PHASES.length).toFixed(3) + ")";
+
+  // Let the pipeline settle so one phase's teardown doesn't taint the next.
+  await wait(1200);
+}
+
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const round = (v, d) => (v == null ? null : Math.round(v * (d ? 10 : 1)) / (d ? 10 : 1));
+
+function addRow(r) {
+  el("out").hidden = false;
+  const tr = document.createElement("tr");
+  const cells = [r.id + "  " + r.name, r.inferP50, r.inferP95, r.detectFps, r.grabP50, r.compP50, r.frameP50];
+  cells.forEach((c, i) => {
+    const td = document.createElement("td");
+    if (i) td.className = "n";
+    td.textContent = c == null ? "—" : c;
+    tr.appendChild(td);
+  });
+  el("out").querySelector("tbody").appendChild(tr);
+}
+
+function verdict() {
+  const by = {};
+  for (const r of results) by[r.id] = r;
+  const base = by.A && by.A.inferP50;
+  if (!base) return "No idle baseline — inference never reported. Check the errors below.";
+
+  const d = id => (by[id] && by[id].inferP50 != null ? by[id].inferP50 - base : null);
+  const draw = d("B"), cap = d("C"), enc = d("D"), full = d("E");
+  const fmt = v => (v == null ? "n/a" : (v >= 0 ? "+" : "") + v + "ms");
+  const worst = [["the composite draw", draw], ["canvas capture", cap], ["the encoder", enc]]
+    .filter(x => x[1] != null).sort((a, b) => b[1] - a[1])[0];
+
+  let s = "Idle inference is " + base + "ms. Against that: composite draw " + fmt(draw) +
+          ", + canvas capture " + fmt(cap) + ", encoder alone " + fmt(enc) +
+          ", everything together " + fmt(full) + ". ";
+  if (!worst || worst[1] < base * 0.25) {
+    s += "Nothing dominates — no single stage accounts for the slowdown, so it is the " +
+         "combination and there is no one thing to fix.";
+  } else {
+    s += "Dominant cost: " + worst[0] + ".";
+    if (worst[0] === "the composite draw") s += " A WebGL compositor is the lever worth building.";
+    if (worst[0] === "canvas capture") s += " The canvas-to-encoder plumbing is the problem, not the drawing.";
+    if (worst[0] === "the encoder") s += " Little to do about it — encoding is not optional.";
+  }
+  return s;
+}
+
+async function send() {
+  reportBody = JSON.stringify({
+    test: "recording-cost",
+    env: {
+      userAgent: navigator.userAgent,
+      cores: navigator.hardwareConcurrency || null,
+      deviceMemory: navigator.deviceMemory || null,
+      screen: screen.width + "x" + screen.height,
+      crossOriginIsolated: !!window.crossOriginIsolated
+    },
+    camera: (function () {
+      const t = stream && stream.getVideoTracks()[0];
+      const s = t && t.getSettings ? t.getSettings() : {};
+      return { width: s.width, height: s.height, frameRate: s.frameRate };
+    })(),
+    config: { warmMs: WARM_MS, measureMs: MEASURE_MS },
+    rows: results,
+    verdict: verdict(),
+    generatedAt: new Date().toISOString()
+  }, null, 1);
+
+  el("raw").hidden = false;
+  el("raw").textContent = reportBody;
+  try {
+    const res = await fetch("/report", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: reportBody
+    });
+    const out = await res.json();
+    if (!res.ok || !out.ok) throw new Error(out.error || ("HTTP " + res.status));
+    status("Sent — saved as " + out.file, "ok");
+  } catch (err) {
+    status("Couldn't send it: " + ((err && err.message) || err) + " — the JSON is below.", "bad");
+  }
+  el("send").hidden = false;
+}
+
+el("send").onclick = send;
+
+el("go").onclick = async () => {
+  el("go").disabled = true;
+  results = [];
+  el("out").querySelector("tbody").textContent = "";
+  el("verdict").style.display = "none";
+  el("fill").style.transform = "scaleX(0)";
+
+  try {
+    status("Asking for the camera and mic…");
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width:{ideal:1280}, height:{ideal:720}, facingMode:"user" },
+      audio: { echoCancellation:true, noiseSuppression:true }
+    });
+    video.srcObject = stream;
+    await video.play();
+    fx.width = video.videoWidth || 1280;
+    fx.height = video.videoHeight || 720;
+
+    // Something representative on the overlay: the per-frame composite cost is
+    // the drawImage of this canvas, which doesn't care what is drawn in it, but
+    // an empty one could let the browser skip work a real filter wouldn't.
+    const c = fx.getContext("2d");
+    c.clearRect(0, 0, fx.width, fx.height);
+    c.fillStyle = "rgba(255,80,140,.85)";
+    c.beginPath();
+    c.arc(fx.width * .5, fx.height * .3, fx.height * .18, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = "rgba(90,200,255,.7)";
+    c.fillRect(fx.width * .2, fx.height * .55, fx.width * .6, fx.height * .12);
+
+    status("Loading the face model (this takes a few seconds)…");
+    await startWorker();
+    pump();
+
+    for (let i = 0; i < PHASES.length; i++) await runPhase(PHASES[i], i);
+
+    el("verdict").textContent = verdict();
+    el("verdict").style.display = "block";
+    status("Done — sending the report…");
+    await send();
+  } catch (err) {
+    status("Failed: " + ((err && err.message) || err), "bad");
+  } finally {
+    clearTimeout(pumpTimer);
+    endComposite();
+    if (worker) { worker.terminate(); worker = null; }
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    el("go").disabled = false;
+    el("go").textContent = "Run it again";
+  }
+};
+</script>
+</body>
+</html>
