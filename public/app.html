@@ -315,7 +315,11 @@ let trackerBroken = null;
 // worker and fall back, "main" = force main-thread inference.
 let forceBackend = null;
 let active = null;              // current filter, null = none
-let trackerMode = "fast";       // "fast" = blazeface, "mesh" = full landmarks
+let trackerMode = "fast";       // "fast" = blazeface, "mesh" = landmarks, "segment" = person mask
+// The person mask, for filters that replace the background. Held as the raw
+// bytes the worker sent plus a small canvas built from them, because the canvas
+// is what the compositing actually uses and rebuilding it per frame is the cost.
+let segMask = null, segCanvas = null, segCtx = null, segShare = 0;
 let inFlight = false, seq = 0;
 let lastResultAt = 0, lastInferMs = 0, lastGrabMs = 0, detFps = 0, detTimes = [];
 
@@ -416,6 +420,14 @@ function onResult(m) {
   detTimes.push(now);
   while (detTimes.length && now - detTimes[0] > 2000) detTimes.shift();
   detFps = detTimes.length / 2;
+
+  if (m.mask) {
+    takeMask(m.mask, m.mw, m.mh);
+    lastResultAt = now;
+    schedulePump(0);
+    return;
+  }
+
   if (m.anchors) {
     // Velocity from consecutive detections. A long gap means the face was
     // lost and whatever it was doing then says nothing about now.
@@ -481,6 +493,8 @@ function onResult(m) {
 // which is worse but still usable.
 async function startTracker(mode) {
   target = shown = null;
+  segMask = null;
+  segShare = 0;
   vel = {};
   predConf = 0;
   inFlight = false;
@@ -560,10 +574,15 @@ async function pump() {
     let bmp = null;
     try {
       // 320-wide input measured fastest for blazeface and costs the landmarker
-      // nothing, since it resizes to a fixed tensor internally anyway.
+      // nothing, since it resizes to a fixed tensor internally anyway. The
+      // segmenter's mask comes back at whatever size it is fed, and that mask has
+      // to be read back to the CPU every frame — so it gets a smaller frame, and
+      // the softness of scaling 256 wide up to the display feathers the cut-out
+      // edge for free.
       const t0 = performance.now();
+      const gw = trackerMode === "segment" ? 256 : 320;
       bmp = await createImageBitmap(video, {
-        resizeWidth: 320, resizeHeight: 180, resizeQuality: "low"
+        resizeWidth: gw, resizeHeight: Math.round(gw * 9 / 16), resizeQuality: "low"
       });
       lastGrabMs = performance.now() - t0;
 
@@ -589,6 +608,39 @@ async function pump() {
   // Watchdog only. The live path is onResult re-arming; this just keeps the
   // loop alive if a result never comes back, without polling hot meanwhile.
   schedulePump(inFlight ? 250 : 16);
+}
+
+// Build the alpha mask the compositing uses: transparent where the background
+// is, opaque where the person is.
+//
+// Which category means "person" is decided from the mask's own corners rather
+// than assumed. The model's convention has changed between releases, and a
+// filter that silently cuts out the *background* instead of the person would
+// look like a rendering bug rather than a wrong constant. The corners of a
+// webcam frame are background essentially always.
+function takeMask(bytes, mw, mh) {
+  if (!mw || !mh) return;
+  if (!segCanvas || segCanvas.width !== mw || segCanvas.height !== mh) {
+    segCanvas = document.createElement("canvas");
+    segCanvas.width = mw; segCanvas.height = mh;
+    segCtx = segCanvas.getContext("2d");
+  }
+  const corners = [0, mw - 1, (mh - 1) * mw, mh * mw - 1].map(i => bytes[i]);
+  const bg = corners.sort((a, b) =>
+    corners.filter(v => v === a).length - corners.filter(v => v === b).length).pop();
+
+  const img = segCtx.createImageData(mw, mh);
+  const d = img.data;
+  let person = 0;
+  for (let i = 0, j = 3; i < bytes.length; i++, j += 4) {
+    if (bytes[i] !== bg) { d[j] = 255; person++; }
+  }
+  segCtx.putImageData(img, 0, 0);
+  segMask = segCanvas;
+  // Reported on the HUD. A person at normal framing is a fraction of the frame;
+  // 0% or 99% means the model is not doing what it is meant to, and that is
+  // worth being able to see on the device rather than guess at.
+  segShare = person / (mw * mh);
 }
 
 /* ---------------------- Smoothing + render loop ---------------------- */
@@ -741,7 +793,7 @@ function needsPaint(now) {
   // even when the face does not. Skipping those frames would freeze a stale
   // copy of the picture on screen — the one case where a still face still needs
   // every frame drawn.
-  if (active.draw.length >= 4) return true;
+  if (active.draw.length >= 4 || active.needsSegment) return true;
   for (const k of KEYS) {
     const a = painted[k], b = shown[k];
     if (!a !== !b) return true;
@@ -797,14 +849,17 @@ function render() {
   const fresh = now - lastResultAt < 800;   // hide the overlay if tracking drops
   // Gated on `target`, not `shown`: `shown` is seeded by the first ease() call,
   // so requiring it here meant a filter picked from a cold start could never
-  // begin drawing at all.
-  const wantDraw = !!(active && target && fresh && !hidden);
+  // begin drawing at all. A segmenting filter has no anchors at all and waits on
+  // a mask instead.
+  const segTier = !!(active && active.needsSegment);
+  const wantDraw = !!(active && fresh && !hidden && (segTier ? segMask : target));
 
   if (wantDraw) {
-    ease(dt);
+    if (!segTier) ease(dt);
     if (needsPaint(now)) {
       wipe();
-      const f = buildFace(shown);
+      // What the tracker knows: a face, or where the person is.
+      const f = segTier ? { mask: segMask, share: segShare, blendshapes: {} } : buildFace(shown);
       // The video is handed to the filter as a fourth argument. Overlay and
       // video are the same size and share the stage's mirror, so pixels sampled
       // from one land in the right place on the other — which is what makes a
@@ -818,7 +873,7 @@ function render() {
       // so the HUD can show what the next clip would sound like.
       shownVoice = voiceOf(active, f);
       if (recording && active.voiceFrom) setVoice(shownVoice);
-      painted = snapshot(shown);
+      painted = segTier ? { blendshapes: {} } : snapshot(shown);
       paintedId = active.id;
       overlayDirty = true;
       lastPaintAt = now;
@@ -862,6 +917,12 @@ function render() {
       // apply it — "1.42 (off)" means the shifter never came up and the clip
       // will be in the room's own voice.
       "\nvoice   " + shownVoice.toFixed(2) + (voiceNode ? "" : " (off)") +
+      // Share of the frame the model calls "person". A child at normal framing
+      // is a fraction of it; 0% or ~99% means the segmenter is not working, and
+      // that should be visible rather than inferred from a bad-looking picture.
+      (trackerMode === "segment"
+        ? "\nseg     " + (segShare * 100).toFixed(0) + "% person"
+        : "") +
       "\nrecfmt  " + ((pickMime() || "none").replace("video/", "").split(";")[0]) +
       (recording && recCanvas
         ? "\nrec     " + recFps.toFixed(1) + " fps @" + recCanvas.width + "x" + recCanvas.height +
@@ -903,11 +964,15 @@ function chip(emoji, label, filter) {
   return b;
 }
 
-// Only pay for the 3.7MB mesh model when a filter actually needs it.
+// Only pay for the 3.7MB mesh model when a filter actually needs it, and swap
+// to the segmenter for filters that want the person rather than the face.
+const tierOf = f => (f && f.needsSegment ? "segment" : f && f.needsMesh ? "mesh" : "fast");
+
 async function selectTracker(filter) {
-  const want = filter.needsMesh ? "mesh" : "fast";
+  const want = tierOf(filter);
   if (want === trackerMode || trackerBroken) return;
-  hint(want === "mesh" ? "Fetching the puppy…" : "Getting ready…", 2500);
+  hint(want === "mesh" ? "Fetching the puppy…"
+       : want === "segment" ? "Finding you…" : "Getting ready…", 2500);
   try {
     await startTracker(want);
   } catch (err) {

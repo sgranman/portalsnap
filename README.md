@@ -209,6 +209,52 @@ Both are heavier than a sticker. Worth watching `detect` on the HUD while they a
 will also read higher for any mesh filter, because a repaint fires when any tracked point
 clears the deadband and the dense tier tracks 22 points where blazeface tracks 6.
 
+## Somewhere else entirely
+
+**🏖️ Beach, 🏰 Palace, 🌘 Moon** put the person in front of a different place. That needs to
+know where the *person* is, not where their face is, so it is a third tracker tier rather than
+another filter: `ImageSegmenter` with MediaPipe's selfie model (250KB, Apache 2.0), which
+**replaces** the face model instead of running beside it. A background swap has no use for
+landmarks, and this device cannot afford two models at once.
+
+The compositing is three operations, no per-pixel work:
+
+```
+draw the video frame            everything
+destination-in  the mask        leaves only the person
+destination-over the scene      fills in behind them
+```
+
+Four things that were not obvious:
+
+- **`segmentForVideo` returns before the GPU has finished**, exactly like the `drawImage` that
+  misled the recording work. Timed alone it reads 0.6ms; timed with the `getAsUint8Array` that
+  forces completion, **6.9ms** at 256x144 on a laptop. The second number is the real one, and
+  it is the reason the mask is read back at 256 wide rather than the 1280 the model will
+  happily hand you.
+- **The scene is painted on its own canvas first.** Painted straight onto the overlay under
+  `destination-over`, it comes out reversed — each new shape lands *behind* the last, so the sky
+  covered the sea, the sand and the palm tree. One reused offscreen canvas costs a `drawImage`
+  and keeps the scenes readable back-to-front.
+- **Which mask category means "person" is read from the mask's own corners**, not assumed. The
+  convention has changed between model releases, and cutting out the background instead of the
+  person would look like a rendering bug rather than a wrong constant. The corners of a webcam
+  frame are background essentially always.
+- **The edge is feathered by blurring the mask as it scales up.** A category mask is hard 0/1,
+  and a hard edge on a cut-out person reads as a sticker.
+
+The scenes are vector art, like the skydiver's sky: no photographs to vendor, no licences to
+track, a few kilobytes instead of a few hundred, and they match the app's look.
+
+**What could not be tested here.** The model is trained on photographs and reports nonsense on
+a drawn face, so nothing on this machine can tell you whether the cut-out is any good —
+`test/segment.mjs` checks the plumbing with the real model (the tier loads, swaps, produces
+masks, composites, swaps back, and a photo taken on the moon is not a photo of the room) and
+the fit harness checks the compositing against a synthetic mask. Judging the segmentation needs
+a real person, so the HUD reports **`seg`**, the share of the frame the model calls "person". A
+child at normal framing should be a fraction of it. If that reads 0% or 99% on the device, the
+model is not working and everything else about the picture is beside the point.
+
 ### What about downloadable filters?
 
 Asked, and worth recording: there is no filter pack for a framework like this. What exists is

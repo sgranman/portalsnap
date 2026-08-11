@@ -135,7 +135,7 @@ const hud = () => p.evaluate(() => {
 
 await p.click("#hudTap");
 await sleep(600);
-check("the strip lists every filter", (await chips()).length === 9, JSON.stringify(await chips()));
+check("the strip lists every filter", (await chips()).length === 12, JSON.stringify(await chips()));
 check("a face is being tracked", (await hud()).face === "yes", JSON.stringify(await hud()));
 
 // The regression: with a filter picked and a face in view, something must
@@ -156,16 +156,16 @@ check("the drawing stays on screen while skipped", (await inked()) > 0.005);
 // The realistic case: a face that is "still" but whose anchors never repeat,
 // because the tracker regresses them afresh from every frame. This is what the
 // device does, and what made the skip a no-op there.
-await setJitter(3);
+// Calibrated against the device rather than picked: sitting still on the Portal,
+// `jit` reads near zero, so ±1px per point is already pessimistic. An earlier
+// version injected ±3px, which is real movement by any measure — the skip
+// correctly declined to skip, and the bound got loosened twice to accommodate a
+// test that was wrong rather than a feature that was.
+await setJitter(1);
 await sleep(600);
 const jitterPaints = await paints(1000);
 const jitHud = (await hud()).jit;
-// A deadband against zero-mean noise is a slope, not a cliff — some steps clear
-// it, and a repaint fires if ANY tracked point does. The dense tier follows 22
-// points where blazeface follows 6, so it clears the deadband oftener and this
-// bound is correspondingly loose. What matters is that it stays a fraction of the
-// ~30 the same face produced before the deadband existed.
-check("a still face under tracker noise still stops repainting", jitterPaints <= 20,
+check("a still face under tracker noise still stops repainting", jitterPaints <= 12,
   "paints in 1s: " + jitterPaints + ", jit " + jitHud);
 // jit is the largest of six anchors' steps between two independently-noisy
 // detections, so it reads well above the per-anchor amplitude injected here.

@@ -31,6 +31,7 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 | `fullscreen.mjs` | the full screen button toggles both ways and doesn't cover the camera controls |
 | `voice.mjs` | the encoder gets the pitch-shifted track, the ratio follows the filter, the graph parks when idle |
 | `voice-gc.mjs` | clips still contain sound after a forced garbage collection — see below |
+| `segment.mjs` | the segmentation tier with the **real** model: loads, swaps in and out, produces masks, composites, and a moon photo isn't a photo of the room |
 | `recdiag.mjs` | `recdiag.html`'s thirteen phases really configure what they claim to |
 
 **The fake camera has no face in it.** That is why `filters.mjs` stubs the tracker worker

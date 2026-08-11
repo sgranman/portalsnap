@@ -672,4 +672,199 @@ const skydiver = {
   }
 };
 
-export const FILTERS = [dog, cat, shades, crown, googly, mustache, bighead, skydiver];
+/* --------------------------- Backgrounds --------------------------- */
+
+// You, somewhere else. The person comes from the segmentation mask; the place is
+// vector art, like the skydiver's sky — no photographs to vendor, no licences to
+// track, and a few kilobytes instead of a few hundred.
+//
+// The order is: video, mask it down to the person, then the scene behind them.
+//
+//   1. draw the whole video frame
+//   2. `destination-in` the mask, which leaves only the person
+//   3. `destination-over` the scene, which fills in everywhere they are not
+//
+// The scene is painted on its own canvas first, in the natural back-to-front
+// order. Painting it straight onto the overlay under `destination-over` would
+// reverse it — each new shape lands *behind* the last, so the sky covered the
+// sea, the sand and the palm tree. One reused offscreen canvas costs a drawImage
+// and keeps the scenes readable.
+let sceneCanvas = null, sceneCtx = null;
+
+function inScene(ctx, subject, video, paint) {
+  const w = ctx.canvas.width, h = ctx.canvas.height;
+  if (!subject || !subject.mask) return;
+
+  if (!sceneCanvas || sceneCanvas.width !== w || sceneCanvas.height !== h) {
+    sceneCanvas = document.createElement("canvas");
+    sceneCanvas.width = w; sceneCanvas.height = h;
+    sceneCtx = sceneCanvas.getContext("2d", { alpha: false });
+  }
+  paint(sceneCtx, w, h);
+
+  ctx.drawImage(video, 0, 0, w, h);
+  ctx.globalCompositeOperation = "destination-in";
+  // Blurred as it is scaled up: a category mask has hard 0/1 edges, and a hard
+  // edge on a cut-out person reads as a sticker. This is the whole of the
+  // feathering, and it costs one filtered draw.
+  ctx.filter = "blur(" + Math.max(1, Math.round(w / 260)) + "px)";
+  ctx.drawImage(subject.mask, 0, 0, w, h);
+  ctx.filter = "none";
+  ctx.globalCompositeOperation = "destination-over";
+  ctx.drawImage(sceneCanvas, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+}
+
+// A sun or a moon, with a soft halo.
+function disc(ctx, x, y, r, inner, outer) {
+  const g = ctx.createRadialGradient(x, y, r * 0.2, x, y, r * 2.4);
+  g.addColorStop(0, outer);
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y, r * 2.4, 0, TAU); ctx.fill();
+  ctx.fillStyle = inner;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+}
+
+const beach = {
+  id: "beach", name: "Beach", emoji: "🏖️", needsSegment: true,
+  draw(ctx, subject, t, video) {
+    inScene(ctx, subject, video, (c, w, h) => {
+      const sky = c.createLinearGradient(0, 0, 0, h);
+      sky.addColorStop(0, "#2f8fd8");
+      sky.addColorStop(0.6, "#9fd8f0");
+      sky.addColorStop(1, "#ffe6b8");
+      c.fillStyle = sky; c.fillRect(0, 0, w, h);
+      disc(c, w * 0.78, h * 0.22, h * 0.07, "#fff6d0", "rgba(255,236,170,.55)");
+
+      // Sea, then three rolling lines of surf.
+      c.fillStyle = "#1f8ba8"; c.fillRect(0, h * 0.52, w, h * 0.16);
+      c.fillStyle = "rgba(255,255,255,.75)";
+      for (let i = 0; i < 3; i++) {
+        const y = h * (0.55 + i * 0.035) + Math.sin(t / (900 + i * 260)) * h * 0.006;
+        c.beginPath();
+        c.moveTo(0, y);
+        for (let x = 0; x <= w; x += w / 12) {
+          c.quadraticCurveTo(x + w / 24, y + Math.sin(x / 90 + t / 700 + i) * h * 0.012, x + w / 12, y);
+        }
+        c.lineTo(w, y + h * 0.01); c.lineTo(0, y + h * 0.01); c.closePath(); c.fill();
+      }
+
+      // Sand.
+      const sand = c.createLinearGradient(0, h * 0.66, 0, h);
+      sand.addColorStop(0, "#f4dca6"); sand.addColorStop(1, "#e2bd7c");
+      c.fillStyle = sand; c.fillRect(0, h * 0.66, w, h * 0.34);
+
+      // A palm on the left, fronds drooping.
+      const px = w * 0.13, py = h * 0.7;
+      c.strokeStyle = "#8a5a30"; c.lineWidth = h * 0.022; c.lineCap = "round";
+      c.beginPath(); c.moveTo(px, py); c.quadraticCurveTo(px - h * 0.03, py - h * 0.22, px + h * 0.02, py - h * 0.42); c.stroke();
+      c.fillStyle = "#2f9e5c";
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI / 2 + (i - 2.5) * 0.42 + Math.sin(t / 1400 + i) * 0.05;
+        c.save();
+        c.translate(px + h * 0.02, py - h * 0.42);
+        c.rotate(a);
+        c.beginPath();
+        c.moveTo(0, 0);
+        c.quadraticCurveTo(h * 0.11, -h * 0.05, h * 0.2, h * 0.01);
+        c.quadraticCurveTo(h * 0.11, h * 0.03, 0, 0);
+        c.fill();
+        c.restore();
+      }
+    });
+  }
+};
+
+const palace = {
+  id: "palace", name: "Palace", emoji: "🏰", needsSegment: true,
+  draw(ctx, subject, t, video) {
+    inScene(ctx, subject, video, (c, w, h) => {
+      const sky = c.createLinearGradient(0, 0, 0, h);
+      sky.addColorStop(0, "#40306e");
+      sky.addColorStop(0.5, "#9b6fa8");
+      sky.addColorStop(1, "#f0b48a");
+      c.fillStyle = sky; c.fillRect(0, 0, w, h);
+
+      // Towers, back row darker so it reads as depth.
+      const tower = (x, wd, top, body, roof) => {
+        c.fillStyle = body;
+        c.fillRect(x - wd / 2, top, wd, h - top);
+        c.fillStyle = roof;
+        c.beginPath();
+        c.moveTo(x - wd * 0.78, top);
+        c.lineTo(x, top - wd * 1.15);
+        c.lineTo(x + wd * 0.78, top);
+        c.closePath(); c.fill();
+        // Flag, fluttering.
+        c.strokeStyle = "#f7e9c8"; c.lineWidth = Math.max(1, h * 0.004);
+        c.beginPath(); c.moveTo(x, top - wd * 1.15); c.lineTo(x, top - wd * 1.5); c.stroke();
+        c.fillStyle = "#e0455f";
+        c.beginPath();
+        c.moveTo(x, top - wd * 1.5);
+        c.quadraticCurveTo(x + wd * 0.4, top - wd * (1.42 + Math.sin(t / 400) * 0.06), x + wd * 0.62, top - wd * 1.36);
+        c.lineTo(x, top - wd * 1.3);
+        c.closePath(); c.fill();
+        // Windows.
+        c.fillStyle = "rgba(255,214,120,.9)";
+        for (let i = 0; i < 3; i++) {
+          c.fillRect(x - wd * 0.14, top + wd * (0.5 + i * 0.62), wd * 0.28, wd * 0.34);
+        }
+      };
+      tower(w * 0.24, h * 0.12, h * 0.36, "#6d5b8e", "#4d3f6b");
+      tower(w * 0.78, h * 0.13, h * 0.30, "#6d5b8e", "#4d3f6b");
+      tower(w * 0.5, h * 0.18, h * 0.30, "#8878a8", "#5e4d84");
+
+      // Curtain wall along the bottom, with battlements.
+      c.fillStyle = "#7a6a99";
+      c.fillRect(0, h * 0.7, w, h * 0.3);
+      c.fillStyle = "#6d5b8e";
+      for (let x = 0; x < w; x += h * 0.09) c.fillRect(x, h * 0.66, h * 0.05, h * 0.05);
+    });
+  }
+};
+
+const moon = {
+  id: "moon", name: "Moon", emoji: "🌘", needsSegment: true, voice: 1.3,
+  draw(ctx, subject, t, video) {
+    inScene(ctx, subject, video, (c, w, h) => {
+      c.fillStyle = "#05060f"; c.fillRect(0, 0, w, h);
+
+      // Stars, twinkling on their own phases. Positioned by a fixed hash so they
+      // do not swim about between frames.
+      for (let i = 0; i < 90; i++) {
+        const x = ((i * 9301 + 49297) % 233280) / 233280 * w;
+        const y = ((i * 4021 + 12345) % 190093) / 190093 * h * 0.72;
+        const tw = 0.55 + 0.45 * Math.sin(t / 900 + i);
+        c.fillStyle = "rgba(255,255,255," + (0.35 + tw * 0.5).toFixed(2) + ")";
+        c.fillRect(x, y, Math.max(1, h * 0.003), Math.max(1, h * 0.003));
+      }
+
+      // Earth, hanging over the horizon.
+      const ex = w * 0.19, ey = h * 0.24, er = h * 0.11;
+      disc(c, ex, ey, er, "#2f6fd0", "rgba(80,150,255,.35)");
+      c.save();
+      c.beginPath(); c.arc(ex, ey, er, 0, TAU); c.clip();
+      c.fillStyle = "#3f9e63";
+      c.beginPath(); c.ellipse(ex - er * 0.3, ey - er * 0.2, er * 0.42, er * 0.3, 0.4, 0, TAU); c.fill();
+      c.beginPath(); c.ellipse(ex + er * 0.35, ey + er * 0.35, er * 0.35, er * 0.22, -0.3, 0, TAU); c.fill();
+      c.fillStyle = "rgba(0,0,0,.45)";
+      c.beginPath(); c.arc(ex + er * 0.75, ey, er, 0, TAU); c.fill();
+      c.restore();
+
+      // Grey ground, with craters.
+      c.fillStyle = "#9a9aa6";
+      c.beginPath();
+      c.moveTo(0, h * 0.82);
+      c.quadraticCurveTo(w * 0.3, h * 0.72, w * 0.62, h * 0.8);
+      c.quadraticCurveTo(w * 0.85, h * 0.86, w, h * 0.78);
+      c.lineTo(w, h); c.lineTo(0, h); c.closePath(); c.fill();
+      c.fillStyle = "rgba(0,0,0,.14)";
+      for (const [cx, cy, r] of [[0.2, 0.9, 0.05], [0.46, 0.94, 0.032], [0.72, 0.88, 0.042], [0.9, 0.95, 0.028]]) {
+        c.beginPath(); c.ellipse(w * cx, h * cy, h * r, h * r * 0.42, 0, 0, TAU); c.fill();
+      }
+    });
+  }
+};
+
+export const FILTERS = [dog, cat, shades, crown, googly, mustache, bighead, skydiver, beach, palace, moon];

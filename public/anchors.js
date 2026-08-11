@@ -84,6 +84,19 @@
   async function createDetector(V, mode) {
     const fileset = await V.FilesetResolver.forVisionTasks("./vendor/mediapipe/wasm");
 
+    // A third tier, for filters that need to know where the *person* is rather
+    // than where their face is. It replaces the face model rather than running
+    // beside it: a background swap has no use for landmarks, and this device
+    // cannot afford two models at once.
+    if (mode === "segment") {
+      return V.ImageSegmenter.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: "./models/selfie_segmenter_landscape.tflite", delegate: "GPU" },
+        runningMode: "VIDEO",
+        outputCategoryMask: true,
+        outputConfidenceMasks: false
+      });
+    }
+
     if (mode === "mesh") {
       return V.FaceLandmarker.createFromOptions(fileset, {
         baseOptions: { modelAssetPath: "./models/face_landmarker.task", delegate: "GPU" },
