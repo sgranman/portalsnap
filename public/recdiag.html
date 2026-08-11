@@ -69,11 +69,11 @@
   <h1>Preview and recording cost</h1>
   <p class="sub">
     Rows A–H walk the preview up one layer at a time and then add recording, which is how
-    we learned that redrawing the overlay costs more than recording does. I–L test what to
+    we learned that redrawing the overlay costs more than recording does. I–M test what to
     do about it: whether capping the redraw rate and shrinking the canvas are the same
     saving twice, how the cost falls as the rate drops, and whether recording can composite
-    less often or display the composite it already makes instead of the video. About two
-    and a half minutes. Keep your face in view; it needs real detections to time.
+    less often or display the composite it already makes instead of the video. About three
+    minutes. Keep your face in view; it needs real detections to time.
   </p>
   <button id="go">Start</button>
   <table id="out" hidden>
@@ -131,7 +131,13 @@ const PHASES = [
   // hidden the composite rate collapses, which shows up as a missing comp count
   // rather than as a win.
   { id:"L", name:"as H, but the preview IS the composite", show:true, overlay:"live",
-            composite:true, capture:true, record:"canvas", showComposite:true }
+            composite:true, capture:true, record:"canvas", showComposite:true },
+
+  // M: K proved the cap works (15fps bought 16ms) but a 15fps clip is a real
+  // cost to the thing being recorded. 20 is what the app now ships, so this is
+  // the row that says what that choice actually bought.
+  { id:"M", name:"as H, composite capped to 20fps", show:true, mirror:true, overlay:"live",
+            composite:true, capture:true, record:"canvas", compHz:20 }
 ];
 
 let stream = null, worker = null, results = [], reportBody = null;
@@ -467,7 +473,7 @@ function verdict() {
   out += "\n";
   const rec = id => (by[id] || null);
   const H = rec("H");
-  for (const id of ["K", "L"]) {
+  for (const id of ["K", "M", "L"]) {
     const r = rec(id);
     if (!r || !H) continue;
     // A recording variation that composited far fewer frames than H did not get

@@ -14,7 +14,7 @@ p.on("pageerror", e => { console.log("  [pageerror] " + e.message); fail++; });
 await p.setViewport({ width: 1280, height: 644 });
 await p.goto("http://127.0.0.1:" + PORT + "/recdiag.html", { waitUntil: "domcontentloaded" });
 await p.click("#go");
-console.log("  running twelve phases (~2.5 min)…");
+console.log("  running thirteen phases (~3 min)…");
 
 const seen = [];
 const watch = setInterval(async () => {
@@ -23,7 +23,7 @@ const watch = setInterval(async () => {
       const st = document.getElementById("stage"), fx = document.getElementById("fx");
       const rc = document.getElementById("rc"), v = document.getElementById("v");
       const txt = document.getElementById("status").textContent || "";
-      const m = /measuring/.test(txt) ? /\) ([A-L]) /.exec(txt) : null;
+      const m = /measuring/.test(txt) ? /\) ([A-M]) /.exec(txt) : null;
       return { id: m && m[1], on: st.classList.contains("on"), mir: st.classList.contains("mir"),
                fxOff: fx.classList.contains("off"), fxw: fx.width,
                rcOff: rc.classList.contains("off"), vOff: v.classList.contains("off"),
@@ -41,7 +41,7 @@ check("report reached the server", /^Sent/.test(st), st);
 
 const data = await p.evaluate(() => JSON.parse(document.getElementById("raw").textContent));
 const row = id => data.rows.find(r => r.id === id) || {};
-check("all twelve phases reported", data.rows.length === 12, "rows=" + data.rows.length);
+check("all thirteen phases reported", data.rows.length === 13, "rows=" + data.rows.length);
 check("every phase produced samples", data.rows.every(r => r.samples > 0),
   JSON.stringify(data.rows.map(r => r.id + ":" + r.samples)));
 check("no phase errors", data.rows.every(r => !r.errors.length),
@@ -63,12 +63,14 @@ check("phase L is not double-mirrored", at("L").length && at("L").every(s => !s.
 check("the video is visible again in every other phase",
   seen.filter(s => s.id !== "L").every(s => !s.vOff));
 check("UI is hidden while measuring", seen.length && seen.every(s => s.uiHidden));
-check("only H, K and L composite", data.rows.filter(r => r.composite).map(r => r.id).join("") === "HKL",
+check("only H, K, L and M composite", data.rows.filter(r => r.composite).map(r => r.id).join("") === "HKLM",
   data.rows.filter(r => r.composite).map(r => r.id).join(""));
-check("every recording phase negotiated a codec", ["H","K","L"].every(id => !!row(id).mime), row("H").mime);
+check("every recording phase negotiated a codec", ["H","K","L","M"].every(id => !!row(id).mime), row("H").mime);
 check("a capped composite really composites less", row("K").compN > 0 && row("K").compN < row("H").compN * 0.8,
   "H=" + row("H").compN + " K=" + row("K").compN);
 check("L reports how many frames it composited", typeof row("L").compN === "number", "L compN=" + row("L").compN);
+check("M caps the composite at the rate the app ships", row("M").compHz === 20 && row("M").compN > row("K").compN,
+  "K=" + row("K").compN + " M=" + row("M").compN);
 check("verdict names a dominant cost", /Dominant preview cost/.test(data.verdict || ""));
 check("verdict reads the rate curve", /Redraw rate/.test(data.verdict || ""));
 check("verdict judges the recording variations", /^K \(/m.test(data.verdict || ""));

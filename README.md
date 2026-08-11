@@ -235,10 +235,10 @@ measures cost, it doesn't keep video. The page prints its own verdict, and the r
 stays on screen if the POST fails.
 
 That was the first version. What it found sent the investigation somewhere else, so the page
-was rewritten around the preview instead: it now runs **twelve** phases and takes about two
-and a half minutes — A–H decomposing the preview layer by layer as below, and I–L testing the
-candidate fixes, described at the end of this file. The table above is kept because the
-numbers under it are still the reason recording is not where the cost is.
+was rewritten around the preview instead: it now runs **thirteen** phases in about three
+minutes — A–H decomposing the preview layer by layer, and I–M testing the candidate fixes.
+The table above is kept because the numbers under it are still the reason recording is not
+where the cost is.
 
 ### What it found
 
@@ -337,6 +337,65 @@ The HUD gained a `drawing` line and a `paint /s` line, and `render` prints `(cap
 low number reads as intent rather than a symptom. `paint` well under `render` means the skip
 is earning its keep; equal to it means every frame genuinely changed something.
 
+### Which fix to take: rows I to M
+
+Four candidates, measured the same way. The winner was not the one that had been ranked
+first, and the one ranked first is dead:
+
+| | config | `infer` p50 | `detect` | vs |
+|---|---|---|---|---|
+| D | overlay present, never redrawn — the floor | 24 ms | 25.2 fps | |
+| E | redrawn every rAF | 36 ms | 18.5 fps | |
+| F | capped to 30fps — as shipped | 29 ms | 21.7 fps | −7 vs E |
+| G | half res, uncapped | 32 ms | 19.3 fps | −4 vs E |
+| I | **capped to 30fps *and* half res** | 26 ms | 25.8 fps | **−10 vs E** |
+| J | **capped to 15fps, full res** | 24 ms | 26.7 fps | **−12 vs E** |
+| H | recording, uncapped composite | 63 ms | 12.0 fps | |
+| K | **recording, composite capped to 15fps** | 47 ms | 16.0 fps | **−16 vs H** |
+| L | recording, preview *is* the composite | 78 ms | 10.5 fps | +15 vs H — worse |
+
+- **The cap and the resolution are two different savings, and they add up** (I saves 10ms
+  where the two measured 11ms apart). So the first run's "half resolution saved nothing" was
+  simply wrong, twice over.
+- **The redraw cost is not linear in the rate.** 15fps costs *nothing at all* — J and D are
+  the same 24ms — while 15→30fps costs 5ms and 30→60fps another 7ms. Whatever the mechanism,
+  redraws below about 15Hz are free on this device, which is what makes the still-face skip
+  worth having rather than merely tidy.
+- **Displaying the composite instead of the video and overlay is dead.** It was the top-ranked
+  idea in this file yesterday, on the reasoning that it trades two live layers for one. It
+  composited 133 frames against H's 146, so it ran — it is just 15ms *worse*. One live canvas
+  the size of the screen costs more than a video element plus an overlay, and the theory that
+  a composited layer is cheap "until you write to it" does not survive being the only layer.
+- **Capping the recording composite is the largest single win in the whole exercise.** Half
+  the captured frames, and inference goes 63 → 47ms with detection 12 → 16fps.
+
+One caveat that matters for reading these: **the recording rows drift between runs** — H
+measured 76ms, 76ms and 63ms on three separate runs of the same page, where the preview rows
+reproduce within 1-2ms. Encoder and thermal state presumably. So a recording row is only
+comparable to *the H in its own run*, which is how the verdict computes it.
+
+### What was taken from that
+
+**The recording composite is capped at 20fps** (`REC_COMPOSITE_HZ`), not the 15 that was
+measured. K's trade is worth taking — in a face filter, a sticker that tracks properly is
+more of the point than the frame rate is — but 15fps is visibly steppy in a clip of a child
+moving, and the camera only delivers about 26fps under recording load anyway (`frame` measured
+39ms), so 20 gives up much less than it sounds. Verified off-device: the mp4 comes out at
+20.07fps with sound, and the on-device saving should land near half of K's 16ms. Raise the
+constant to 30 to remove the cap.
+
+**The redraw stays capped at 30Hz, not 15.** J is 5ms cheaper and the temptation is obvious,
+but the arithmetic goes the other way: dropping to 15Hz costs 33ms of extra quantization in
+where the sticker is drawn, and buys back only about 9ms of detection latency
+(1/21.7 → 1/26.7 of a second). Smoothness is what that 5ms is paying for, and the still-face
+skip already collects it whenever nobody is moving.
+
+**Half resolution is left on the table, deliberately.** It is a real 3-4ms and it is additive,
+but it is the one lever here with a cost I cannot measure — softer sticker edges on a 1280
+display. Worth trying as a judgement call, not as a performance fix: it needs `fx` sized from
+a scale factor and the photo and clip composite paths checked at the new size, since both
+draw `fx` into a full-resolution canvas.
+
 ### The overlay froze: two bugs behind one symptom
 
 The morning after the 30Hz cap shipped, filters stopped drawing on the device entirely. Two
@@ -399,41 +458,34 @@ What follows is tuning of the sticker lag, not the feature.
 
 | | `infer` | `detect` |
 |---|---|---|
-| floor — tracker alone, nothing displayed | 21 ms | 30 fps (camera cap) |
-| with the preview, as it now ships | ~32 ms | ~20 fps |
-| while recording | ~76 ms | ~10 fps |
+| floor — tracker alone, nothing displayed | 22 ms | 30 fps (camera cap) |
+| overlay present but never redrawn — the practical floor | 24 ms | 25 fps |
+| preview with a filter on, face moving | 29 ms | 21.7 fps |
+| preview with a filter on, face still (redraws skipped) | ~24 ms | ~25 fps |
+| while recording, composite capped at 20fps | ~52 ms | ~14 fps (estimated) |
 
-The preview's 3–5ms for displaying the video cannot be recovered. The overlay redraw is
-capped and now skipped on a still face; while recording, `captureStream` is the +14ms that
-remains untouched.
+Displaying the video costs 3-5ms and that is not recoverable — it is the product. Everything
+else that was worth taking has been taken.
 
-**Next: run `recdiag.html` and read rows I to L.** The four phases below the decomposition
-each answer one open question, and none of them can be answered off-device — a Mac runs the
-whole thing at 7ms and every delta disappears into noise.
+**Read the HUD next**, idle and recording: `infer` / `detect` / `paint` / `drawing`. The two
+numbers that confirm the last round are `paint` dropping to **0** when the child holds still,
+and `detect` climbing to **~14fps while recording**, from 10. If a clip looks too steppy at
+20fps, `REC_COMPOSITE_HZ` is one constant.
 
-1. **I — cap and half res together.** 30Hz saves 5ms and half resolution saves 3ms
-   separately. If they add up, halving the overlay canvas is free money on top of what is
-   already deployed. If they overlap, they were always the same saving measured two ways.
-2. **J — the redraw rate curve.** 60 / 30 / 15 / never, with D as the floor. This also prices
-   the still-face skip that just shipped, because the skip *is* a lower rate: whatever 15Hz
-   is worth against 30Hz is roughly what a child sitting still now saves.
-3. **K — composite at 15fps while recording.** `captureStream` costs +14ms per captured
-   frame, and half of 30fps still exceeds the detection rate. The price is a 15fps clip.
-4. **L — display the composite instead of the video and overlay.** While recording, the
-   composite canvas already holds exactly what the preview shows, so this trades two live
-   layers for one. The risk is that a hidden `<video>` stops producing frames and the
-   composite silently stalls; the row reports `compN`, and the verdict calls it out rather
-   than reporting the stall as a win. (Off-device, `requestVideoFrameCallback` kept firing on
-   a `display:none` video — but desktop Chrome is not this device.)
-
-Read the HUD too, idle and recording: `infer` / `detect` / `paint` / `drawing`. Expect
-roughly 30ms and 21fps idle with a filter on, and `paint` dropping to 0 when the child holds
-still. That last number is the one that says the newest change works.
+Running `recdiag.html` again would confirm row M, which is the 20fps composite the app now
+ships — K measured 15fps and M is the interpolation that was actually deployed. Not urgent;
+the HUD answers the same question more cheaply.
 
 **Do not** re-try these; each was measured and is dead: composite resolution (twice), a
 WebGL compositor for the composite *draw* (+1ms — there is nothing there), worker vs
-main-thread inference (~10ms, worker stays), mic DSP, and low light as the explanation for
-the camera's frame rate.
+main-thread inference (~10ms, worker stays), mic DSP, low light as the explanation for the
+camera's frame rate, and **displaying the composite canvas in place of the video and overlay
+while recording** (row L: 15ms *worse* than what it replaced).
+
+What is genuinely left is small and mostly judgement rather than measurement: the half
+resolution overlay described above (3-4ms, at a cost in sticker crispness), and the fact that
+`fx` is a 1280x720 canvas displayed in a box about 1145x644 on this device — so it is already
+rendering more pixels than the Portal ever shows.
 
 **Method note, learned expensively.** Four theories were deployed and disproved one per
 round, each costing a trip to the device, because they were argued rather than measured. The

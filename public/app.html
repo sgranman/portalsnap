@@ -807,6 +807,17 @@ const REC_WIDTH = 1280;
 const REC_VIDEO_BPS = 2500000;
 const REC_AUDIO_BPS = 96000;
 
+// Recording's cost is `captureStream`/`requestFrame`, at +14ms per captured
+// frame — measured, and the largest single number in the whole budget. Capping
+// the composite below the camera's rate is the only thing that touches it:
+// on-device, 15fps gave 47ms inference and 16fps detection against 63ms and
+// 12fps uncapped. That trade is worth taking in a face filter, where a sticker
+// that tracks properly is more of the point than the frame rate is. 20 rather
+// than 15 because the camera only delivers ~26fps while recording anyway
+// (`frame` measured 39ms), so this is nearer to what was already happening than
+// the number suggests. Raise it to 30 to disable the cap.
+const REC_COMPOSITE_HZ = 20;
+
 let pending = null;        // { kind, blob, url, ext } awaiting Keep or discard
 let recorder = null, recTrack = null, recCanvas = null, recCtx = null;
 let recChunks = [], recMime = "", recording = false;
@@ -906,7 +917,10 @@ function startRec() {
   recTrack = cs.getVideoTracks()[0];
   const manual = recTrack && typeof recTrack.requestFrame === "function";
   if (!manual) {
-    cs = recCanvas.captureStream(30);
+    // Auto-capture samples the canvas on its own clock, so it has to be given
+    // the same ceiling — otherwise it would encode the frames the composite
+    // loop deliberately skipped, paying the cost the cap exists to avoid.
+    cs = recCanvas.captureStream(REC_COMPOSITE_HZ);
     recTrack = cs.getVideoTracks()[0];
   }
 
@@ -954,21 +968,28 @@ function startRec() {
   pumpRecFrames(manual);
 }
 
-// Driven by the camera's own frame callback where available: one composite per
-// delivered frame, no duplicated work when the camera stalls below 30fps.
+// Driven by the camera's own frame callback where available, so no work is
+// duplicated when the camera stalls below 30fps — and rate-limited on top of
+// that, because each captured frame is the +14ms.
 function pumpRecFrames(manual) {
   const ema = (prev, v) => (prev ? prev * 0.8 + v * 0.2 : v);
+  const minCompDt = 1000 / REC_COMPOSITE_HZ - 1;
+  let lastCompAt = 0;
   const step = () => {
     if (!recording || !recCanvas) return;
     const t0 = performance.now();
+    // The camera's delivery interval is recorded for every frame, composited or
+    // not: it is the clock the cap is applied against.
     if (lastFrameAt) frameMs = ema(frameMs, t0 - lastFrameAt);
     lastFrameAt = t0;
 
-    compose(recCanvas, recCtx);
-    if (manual) { try { recTrack.requestFrame(); } catch (e) {} }
-
-    compMs = ema(compMs, performance.now() - t0);
-    recFrames++;
+    if (t0 - lastCompAt >= minCompDt) {
+      lastCompAt = t0;
+      compose(recCanvas, recCtx);
+      if (manual) { try { recTrack.requestFrame(); } catch (e) {} }
+      compMs = ema(compMs, performance.now() - t0);
+      recFrames++;
+    }
     schedule();
   };
   const schedule = () => {
