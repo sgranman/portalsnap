@@ -188,10 +188,11 @@ Splitting the recording loop settled it:
 | `comp` | — | a couple of ms |
 | `frame` | — | ~50 ms |
 
-`frame` at ~50ms says the camera only hands over ~20fps while recording — probably the
-*room* rather than the load, since cameras lengthen exposure in low light by dropping
-frame rate. That, plus `grab` not moving, is why halving the composite resolution twice
-changed nothing, and why it was reverted.
+`frame` at ~50ms says the camera only hands over ~20fps while recording. This was first
+guessed to be the *room* — cameras lengthen exposure in low light by dropping frame rate —
+and that was wrong: `recdiag.html` measures a steady 33ms on the same device in the same
+room, in every phase including recording. The camera delivers 30fps. The app was starving
+its own video pipeline.
 
 **`comp` is a weaker signal than it looks.** `drawImage` returns once the commands are
 queued; the upload, conversion and readback happen afterwards. So `comp ≈ 2ms` shows only
@@ -233,11 +234,30 @@ carry the previous config's scheduling. Recorded chunks are dropped on the floor
 measures cost, it doesn't keep video. The page prints its own verdict, and the raw JSON
 stays on screen if the POST fails.
 
-B slow with C and D clean means it is the video-to-canvas draw, and a WebGL compositor is
-worth building — the original probe measured WebGL texture upload at 60fps against
-canvas2D draw at 53fps, and it keeps frames GPU-resident. D slow means the encoder, which
-is not optional. Nothing dominating means the cost is the combination, and the honest
-answer is to accept ~10fps tracking while recording.
+### What it found
+
+Measured on the Portal, blazeface at 320x180, worker backend:
+
+| | config | `infer` p50 | p95 | `detect` | `frame` |
+|---|---|---|---|---|---|
+| A | idle, tracker only | **22 ms** | 30 | **30 fps** | — |
+| B | composite draw | 23 ms | 31 | 29 fps | 33 ms |
+| C | + canvas capture | 36 ms | 56 | 20.8 fps | 32 ms |
+| D | encoder alone, raw camera track | 26 ms | 41 | 23.5 fps | — |
+| E | everything | 47 ms | 72 | 15.8 fps | 33 ms |
+
+**Recording's cost is the canvas capture, not the drawing.** Against the idle baseline: the
+`drawImage` pair costs **+1ms**, the encoder **+4ms**, and `captureStream` plus
+`requestFrame` **+14ms**. A WebGL compositor was about to be built on the theory that the
+draw was expensive; it would have optimised the one stage that was already free.
+
+**And the preview costs more than recording does.** Row A is 22ms and 30fps, against 35-45ms
+and 17fps for the same tracker inside the app. The only material difference is that this
+page keeps its `<video>` at `display:none`. Displaying a 1280x720 camera feed, with a
+full-size transparent overlay canvas above it inside a mirrored container, redrawn every
+rAF, roughly doubles inference cost and halves the detection rate — in ordinary use, not
+just while recording. That is the largest single cost in the app and it was never suspected,
+because every earlier measurement was taken *through* it.
 
 ### Leading the target instead of chasing it
 

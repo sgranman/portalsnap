@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>PortalSnap — recording cost</title>
+<title>PortalSnap — preview and recording cost</title>
 <style>
   :root { --bg:#0e0f16; --card:#191b26; --line:#2b2e3d; --ink:#fff; --dim:#a2a8bd;
           --accent:#6d5bf5; --ok:#4ade80; --bad:#ff8fa8; }
@@ -16,91 +16,106 @@
            border:0; border-radius:14px; padding:16px 28px; cursor:pointer; touch-action:manipulation; }
   button:disabled { opacity:.45; }
   button.alt { background:#343850; }
-  #status { margin:14px 0; font-size:18px; min-height:26px; }
+  #ui.running { display:none; }
+
+  /* The status pill is the only thing drawn over the stage while measuring —
+     everything else is hidden, so the compositor sees what the app's compositor
+     sees and not a page of results as well. */
+  #status { position:fixed; z-index:5; left:12px; top:12px;
+            background:rgba(0,0,0,.72); border-radius:99px; padding:10px 18px;
+            font-size:16px; font-weight:600; max-width:calc(100% - 24px); }
   #status.bad { color:var(--bad); }
   #status.ok { color:var(--ok); }
-  #bar { height:10px; background:#242838; border-radius:99px; overflow:hidden; margin:10px 0 18px; }
-  /* scaleX, not width: this page exists to measure milliseconds, and a
-     layout-animating progress bar would be measurement noise of its own. */
-  #fill { height:100%; width:100%; background:var(--accent);
-          transform:scaleX(0); transform-origin:left; transition:transform .3s; }
-  table { border-collapse:collapse; width:100%; font-size:15px; }
-  th,td { text-align:right; padding:8px 10px; border-bottom:1px solid var(--line); }
+  #status:empty { display:none; }
+
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th,td { text-align:right; padding:7px 8px; border-bottom:1px solid var(--line); }
   th:first-child, td:first-child { text-align:left; }
-  th { color:var(--dim); font-weight:600; font-size:13px; text-transform:uppercase; letter-spacing:.04em; }
+  th { color:var(--dim); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
   td.n { font-family:ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
-  tr.hi td { color:var(--bad); font-weight:700; }
   #verdict { margin:18px 0; padding:14px 16px; background:var(--card); border:1px solid var(--line);
-             border-radius:12px; font-size:16px; line-height:1.55; display:none; }
-  video, canvas { display:none; }
+             border-radius:12px; font-size:16px; line-height:1.6; display:none; white-space:pre-wrap; }
   pre { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px;
         font-size:11px; overflow:auto; max-height:220px; color:var(--dim); }
+
+  /* A faithful copy of app.html's stage: same flex centring, same mirrored
+     16/9 container, same two absolutely-positioned full-size layers. If this
+     differs from the app the measurement is worthless. */
+  #stage { position:fixed; inset:0; z-index:1; background:#000; display:none;
+           align-items:center; justify-content:center; overflow:hidden; }
+  #stage.on { display:flex; }
+  #stage > .mirror { position:relative; height:100%; aspect-ratio:16/9; }
+  #stage.mir > .mirror { transform:scaleX(-1); }
+  #stage > .mirror > video, #stage > .mirror > canvas {
+    position:absolute; inset:0; width:100%; height:100%; display:block; object-fit:cover; }
+  #fx.off { display:none; }
+  #rc { display:none; }
 </style>
 </head>
 <body>
-<h1>Recording cost breakdown</h1>
-<p class="sub">
-  Inference slows from ~40ms to ~100ms while recording, and neither resolution, the worker,
-  the pump loop nor the mic DSP explains it. This runs the tracker against five
-  configurations that switch the composite and the encoder on and off independently, then
-  posts the numbers back to the server. Takes about a minute. Sit still-ish and keep your
-  face in view — it needs real detections to time.
-</p>
 
-<button id="go">Start</button>
-<div id="status"></div>
-<div id="bar"><div id="fill"></div></div>
-
-<table id="out" hidden>
-  <thead><tr>
-    <th>Configuration</th><th>infer p50</th><th>infer p95</th><th>detect</th>
-    <th>grab</th><th>comp</th><th>frame</th>
-  </tr></thead>
-  <tbody></tbody>
-</table>
-
-<div id="verdict"></div>
-<button id="send" class="alt" hidden>Send report again</button>
-<pre id="raw" hidden></pre>
-
-<video id="v" autoplay playsinline muted></video>
-<canvas id="fx"></canvas>
+<div id="stage">
+  <div class="mirror">
+    <video id="v" autoplay playsinline muted></video>
+    <canvas id="fx"></canvas>
+  </div>
+</div>
 <canvas id="rc"></canvas>
+<div id="status"></div>
+
+<div id="ui">
+  <h1>Preview and recording cost</h1>
+  <p class="sub">
+    The last run found something unexpected: with the camera preview hidden, inference is
+    22ms and detection runs at the camera's full 30fps — against 40ms and 17fps inside the
+    app. So displaying the preview may cost more than recording does. This walks the
+    preview up one layer at a time, then adds recording on top. About a minute and a half.
+    Keep your face in view; it needs real detections to time.
+  </p>
+  <button id="go">Start</button>
+  <table id="out" hidden>
+    <thead><tr>
+      <th>Configuration</th><th>infer p50</th><th>p95</th><th>detect</th>
+      <th>grab</th><th>comp</th><th>frame</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <div id="verdict"></div>
+  <button id="send" class="alt" hidden>Send report again</button>
+  <pre id="raw" hidden></pre>
+</div>
 
 <script src="./anchors.js"></script>
 <script>
 const el = id => document.getElementById(id);
-const video = el("v"), fx = el("fx"), rc = el("rc");
+const video = el("v"), fx = el("fx"), rc = el("rc"), stage = el("stage");
 
-// Warm-up is discarded: the first detections after a config change carry the
-// previous config's scheduling, and the encoder takes a moment to spin up.
-const WARM_MS = 2000, MEASURE_MS = 6000;
+const WARM_MS = 2000, MEASURE_MS = 6000, SETTLE_MS = 1200;
 
-// The composite and the encoder are the two suspects. Toggling them
-// independently is the whole point — `capture` separates the canvas capture
-// plumbing from the drawImage that feeds it, since those are different costs.
+// One variable at a time, from a blank page up to the app as it actually ships,
+// then recording on top of that. Every delta is attributable to exactly one
+// change from the row above it.
 const PHASES = [
-  { id:"A", name:"idle (tracker only)",        composite:false, capture:false, record:null },
-  { id:"B", name:"composite only",             composite:true,  capture:false, record:null },
-  { id:"C", name:"composite + canvas capture", composite:true,  capture:true,  record:null },
-  { id:"D", name:"encoder on raw camera",      composite:false, capture:false, record:"camera" },
-  { id:"E", name:"composite + capture + encoder", composite:true, capture:true, record:"canvas" }
+  { id:"A", name:"tracker only, nothing shown",   show:false },
+  { id:"B", name:"+ video shown, unmirrored",     show:true },
+  { id:"C", name:"+ mirrored (the app's CSS)",    show:true, mirror:true },
+  { id:"D", name:"+ overlay layer, not redrawn",  show:true, mirror:true, overlay:"static" },
+  { id:"E", name:"+ overlay redrawn every frame", show:true, mirror:true, overlay:"live" },
+  { id:"F", name:"as E, redraw capped to 30fps",  show:true, mirror:true, overlay:"live", hz:30 },
+  { id:"G", name:"as E, overlay at half res",     show:true, mirror:true, overlay:"live", ovScale:0.5 },
+  { id:"H", name:"as E + recording (real case)",  show:true, mirror:true, overlay:"live",
+            composite:true, capture:true, record:"canvas" }
 ];
 
 let stream = null, worker = null, results = [], reportBody = null;
-let inFlight = false, pumpTimer = 0, collecting = false;
-let sample = null;
+let inFlight = false, pumpTimer = 0, collecting = false, sample = null;
 
 function status(msg, cls) { el("status").textContent = msg; el("status").className = cls || ""; }
-function fresh() {
-  return { infer:[], grab:[], comp:[], frame:[], dets:0, faces:0, startedAt:0, errors:[] };
-}
-const median = a => pick(a, .5), p95 = a => pick(a, .95);
-function pick(a, q) {
-  if (!a.length) return null;
-  const s = a.slice().sort((x, y) => x - y);
-  return s[Math.min(s.length - 1, Math.floor(s.length * q))];
-}
+const fresh = () => ({ infer:[], grab:[], comp:[], frame:[], dets:0, faces:0, errors:[] });
+const pick = (a, q) => { if (!a.length) return null;
+  const s = a.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * q))]; };
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const round = (v, d) => (v == null ? null : Math.round(v * (d ? 10 : 1)) / (d ? 10 : 1));
 
 /* ------------------------------- tracker ------------------------------- */
 
@@ -133,8 +148,7 @@ function onResult(m) {
   schedulePump(0);
 }
 
-// Same shape as the app's loop, so the numbers transfer: one frame in flight,
-// re-armed the instant a result lands, timer only as a watchdog.
+// Identical in shape to app.html's loop, so the numbers transfer.
 function schedulePump(d) { clearTimeout(pumpTimer); pumpTimer = setTimeout(pump, d); }
 
 async function pump() {
@@ -157,6 +171,59 @@ async function pump() {
   schedulePump(inFlight ? 250 : 16);
 }
 
+/* ------------------------------- overlay ------------------------------- */
+
+let ovRunning = false, ovRaf = 0, ovLast = 0;
+
+// Stand-in for a real filter: cleared and redrawn with time-varying vector art,
+// so the per-frame cost resembles filters.js rather than a no-op.
+function drawOverlay(t) {
+  const c = fx.getContext("2d"), w = fx.width, h = fx.height;
+  c.clearRect(0, 0, w, h);
+  const bob = Math.sin(t / 400) * h * 0.02;
+  c.fillStyle = "rgba(20,20,26,.9)";
+  c.beginPath();
+  c.ellipse(w * .5, h * .26 + bob, w * .12, h * .09, 0, 0, Math.PI * 2);
+  c.fill();
+  c.fillRect(w * .34, h * .30 + bob, w * .32, h * .04);
+  c.strokeStyle = "rgba(255,255,255,.9)";
+  c.lineWidth = Math.max(2, h * .006);
+  for (const dx of [-0.09, 0.09]) {
+    c.beginPath();
+    c.arc(w * (.5 + dx), h * .46 + bob, h * .07, 0, Math.PI * 2);
+    c.stroke();
+  }
+  c.fillStyle = "rgba(255,90,140,.85)";
+  c.beginPath();
+  c.arc(w * .5, h * .56 + bob, h * .035, 0, Math.PI * 2);
+  c.fill();
+}
+
+function beginOverlay(mode, scale, hz) {
+  fx.width = Math.round((video.videoWidth || 1280) * (scale || 1));
+  fx.height = Math.round((video.videoHeight || 720) * (scale || 1));
+  fx.classList.remove("off");
+  drawOverlay(performance.now());
+  if (mode !== "live") return;
+
+  const minDt = hz ? 1000 / hz - 1 : 0;   // -1ms so a 30fps cap isn't missed by a hair
+  ovRunning = true;
+  ovLast = 0;
+  const tick = () => {
+    if (!ovRunning) return;
+    const now = performance.now();
+    if (now - ovLast >= minDt) { ovLast = now; drawOverlay(now); }
+    ovRaf = requestAnimationFrame(tick);
+  };
+  ovRaf = requestAnimationFrame(tick);
+}
+
+function endOverlay() {
+  ovRunning = false;
+  cancelAnimationFrame(ovRaf);
+  fx.classList.add("off");
+}
+
 /* ------------------------------ composite ------------------------------ */
 
 let rctx = null, compositing = false, capTrack = null, lastFrameAt = 0;
@@ -166,7 +233,7 @@ function beginComposite(withCapture) {
   rc.height = video.videoHeight || 720;
   rctx = rc.getContext("2d", { alpha:false });
   rctx.translate(rc.width, 0);
-  rctx.scale(-1, 1);              // mirrored once, as the app does
+  rctx.scale(-1, 1);
 
   capTrack = null;
   if (withCapture) {
@@ -218,12 +285,10 @@ function pickMime() {
 function beginRecord(track) {
   const mime = pickMime();
   if (!mime) throw new Error("no recorder format");
-  const src = new MediaStream([track].concat(stream.getAudioTracks()));
-  const r = new MediaRecorder(src, {
+  const r = new MediaRecorder(new MediaStream([track].concat(stream.getAudioTracks())), {
     mimeType: mime, videoBitsPerSecond: 2500000, audioBitsPerSecond: 96000
   });
-  // Chunks are dropped on the floor; this measures cost, it doesn't keep video.
-  r.ondataavailable = () => {};
+  r.ondataavailable = () => {};   // cost measurement; the video is discarded
   r.onerror = e => { if (sample) sample.errors.push("recorder: " + ((e.error && e.error.name) || "error")); };
   r.start(1000);
   return { rec: r, mime };
@@ -232,12 +297,17 @@ function beginRecord(track) {
 /* -------------------------------- runner ------------------------------- */
 
 async function runPhase(ph, i) {
-  status("(" + (i + 1) + "/" + PHASES.length + ") " + ph.name + " — warming up…");
+  const label = "(" + (i + 1) + "/" + PHASES.length + ") " + ph.id + " " + ph.name;
+  status(label + " — warming up…");
   sample = fresh();
   collecting = false;
 
   let capture = null, rec = null, mime = null;
   try {
+    stage.classList.toggle("on", !!ph.show);
+    stage.classList.toggle("mir", !!ph.mirror);
+    if (ph.overlay) beginOverlay(ph.overlay, ph.ovScale, ph.hz);
+    else fx.classList.add("off");
     if (ph.composite) capture = beginComposite(ph.capture);
     if (ph.record) {
       const track = ph.record === "canvas" ? capture : stream.getVideoTracks()[0];
@@ -247,92 +317,95 @@ async function runPhase(ph, i) {
     }
 
     await wait(WARM_MS);
-    sample.infer = []; sample.grab = []; sample.comp = []; sample.frame = [];
-    sample.dets = 0; sample.faces = 0;
+    sample = fresh();               // discard warm-up entirely
     collecting = true;
-    sample.startedAt = performance.now();
-    status("(" + (i + 1) + "/" + PHASES.length + ") " + ph.name + " — measuring…");
+    status(label + " — measuring…");
     await wait(MEASURE_MS);
     collecting = false;
+    status(label + " — settling…");
   } catch (err) {
     sample.errors.push("phase: " + ((err && err.message) || err));
     collecting = false;
   } finally {
     if (rec) { try { rec.stop(); } catch (e) {} }
     if (ph.composite) endComposite();
+    endOverlay();
   }
 
-  const secs = MEASURE_MS / 1000;
   const row = {
-    id: ph.id, name: ph.name, composite: ph.composite, capture: ph.capture, record: ph.record,
-    mime: mime || null,
-    inferP50: round(median(sample.infer)), inferP95: round(p95(sample.infer)),
-    grabP50: round(median(sample.grab)),
-    compP50: round(median(sample.comp)), frameP50: round(median(sample.frame)),
-    detectFps: round(sample.dets / secs, 1),
+    id: ph.id, name: ph.name,
+    show: !!ph.show, mirror: !!ph.mirror, overlay: ph.overlay || null,
+    ovScale: ph.ovScale || 1, hz: ph.hz || null,
+    composite: !!ph.composite, capture: !!ph.capture, record: ph.record || null, mime: mime || null,
+    inferP50: round(pick(sample.infer, .5)), inferP95: round(pick(sample.infer, .95)),
+    grabP50: round(pick(sample.grab, .5)),
+    compP50: round(pick(sample.comp, .5)), frameP50: round(pick(sample.frame, .5)),
+    detectFps: round(sample.dets / (MEASURE_MS / 1000), 1),
     faceRate: sample.dets ? Math.round(100 * sample.faces / sample.dets) + "%" : "n/a",
     samples: sample.infer.length,
     errors: sample.errors.slice(0, 4)
   };
   results.push(row);
   addRow(row);
-  el("fill").style.transform = "scaleX(" + ((i + 1) / PHASES.length).toFixed(3) + ")";
-
-  // Let the pipeline settle so one phase's teardown doesn't taint the next.
-  await wait(1200);
+  await wait(SETTLE_MS);
 }
-
-const wait = ms => new Promise(r => setTimeout(r, ms));
-const round = (v, d) => (v == null ? null : Math.round(v * (d ? 10 : 1)) / (d ? 10 : 1));
 
 function addRow(r) {
   el("out").hidden = false;
   const tr = document.createElement("tr");
-  const cells = [r.id + "  " + r.name, r.inferP50, r.inferP95, r.detectFps, r.grabP50, r.compP50, r.frameP50];
-  cells.forEach((c, i) => {
-    const td = document.createElement("td");
-    if (i) td.className = "n";
-    td.textContent = c == null ? "—" : c;
-    tr.appendChild(td);
-  });
+  [r.id + "  " + r.name, r.inferP50, r.inferP95, r.detectFps, r.grabP50, r.compP50, r.frameP50]
+    .forEach((c, i) => {
+      const td = document.createElement("td");
+      if (i) td.className = "n";
+      td.textContent = c == null ? "—" : c;
+      tr.appendChild(td);
+    });
   el("out").querySelector("tbody").appendChild(tr);
 }
 
 function verdict() {
   const by = {};
   for (const r of results) by[r.id] = r;
-  const base = by.A && by.A.inferP50;
-  if (!base) return "No idle baseline — inference never reported. Check the errors below.";
+  const v = id => (by[id] ? by[id].inferP50 : null);
+  const base = v("A");
+  if (base == null) return "No baseline — inference never reported. See the errors below.";
 
-  const d = id => (by[id] && by[id].inferP50 != null ? by[id].inferP50 - base : null);
-  const draw = d("B"), cap = d("C"), enc = d("D"), full = d("E");
-  const fmt = v => (v == null ? "n/a" : (v >= 0 ? "+" : "") + v + "ms");
-  const worst = [["the composite draw", draw], ["canvas capture", cap], ["the encoder", enc]]
-    .filter(x => x[1] != null).sort((a, b) => b[1] - a[1])[0];
+  const step = (from, to) => (v(from) != null && v(to) != null ? v(to) - v(from) : null);
+  const fmt = n => (n == null ? "n/a" : (n >= 0 ? "+" : "") + n + "ms");
 
-  let s = "Idle inference is " + base + "ms. Against that: composite draw " + fmt(draw) +
-          ", + canvas capture " + fmt(cap) + ", encoder alone " + fmt(enc) +
-          ", everything together " + fmt(full) + ". ";
-  if (!worst || worst[1] < base * 0.25) {
-    s += "Nothing dominates — no single stage accounts for the slowdown, so it is the " +
-         "combination and there is no one thing to fix.";
-  } else {
-    s += "Dominant cost: " + worst[0] + ".";
-    if (worst[0] === "the composite draw") s += " A WebGL compositor is the lever worth building.";
-    if (worst[0] === "canvas capture") s += " The canvas-to-encoder plumbing is the problem, not the drawing.";
-    if (worst[0] === "the encoder") s += " Little to do about it — encoding is not optional.";
+  const steps = [
+    ["showing the video", step("A", "B")],
+    ["the mirror transform", step("B", "C")],
+    ["the overlay layer", step("C", "D")],
+    ["redrawing the overlay", step("D", "E")]
+  ];
+  const worst = steps.filter(s => s[1] != null).sort((a, b) => b[1] - a[1])[0];
+
+  let out = "Baseline (nothing shown): " + base + "ms.\n";
+  for (const [name, d] of steps) out += "  " + name + ": " + fmt(d) + "\n";
+  out += "Preview total: " + fmt(v("E") != null ? v("E") - base : null) +
+         "   with recording on top: " + fmt(v("H") != null ? v("H") - base : null) + "\n\n";
+
+  if (v("F") != null && v("E") != null) {
+    const g = v("E") - v("F");
+    out += "Capping the redraw to 30fps: " + (g > 0 ? "saves " + g + "ms" : "no help") + ".\n";
   }
-  return s;
+  if (v("G") != null && v("E") != null) {
+    const g = v("E") - v("G");
+    out += "Halving the overlay resolution: " + (g > 0 ? "saves " + g + "ms" : "no help") + ".\n";
+  }
+  if (worst) out += "\nDominant preview cost: " + worst[0] + " (" + fmt(worst[1]) + ").";
+  return out;
 }
 
 async function send() {
   reportBody = JSON.stringify({
-    test: "recording-cost",
+    test: "preview-and-recording-cost",
     env: {
-      userAgent: navigator.userAgent,
-      cores: navigator.hardwareConcurrency || null,
+      userAgent: navigator.userAgent, cores: navigator.hardwareConcurrency || null,
       deviceMemory: navigator.deviceMemory || null,
       screen: screen.width + "x" + screen.height,
+      viewport: innerWidth + "x" + innerHeight,
       crossOriginIsolated: !!window.crossOriginIsolated
     },
     camera: (function () {
@@ -340,23 +413,21 @@ async function send() {
       const s = t && t.getSettings ? t.getSettings() : {};
       return { width: s.width, height: s.height, frameRate: s.frameRate };
     })(),
-    config: { warmMs: WARM_MS, measureMs: MEASURE_MS },
-    rows: results,
-    verdict: verdict(),
-    generatedAt: new Date().toISOString()
+    config: { warmMs: WARM_MS, measureMs: MEASURE_MS, settleMs: SETTLE_MS },
+    rows: results, verdict: verdict(), generatedAt: new Date().toISOString()
   }, null, 1);
 
   el("raw").hidden = false;
   el("raw").textContent = reportBody;
   try {
     const res = await fetch("/report", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: reportBody
+      method:"POST", headers:{ "Content-Type":"application/json" }, body: reportBody
     });
     const out = await res.json();
     if (!res.ok || !out.ok) throw new Error(out.error || ("HTTP " + res.status));
     status("Sent — saved as " + out.file, "ok");
   } catch (err) {
-    status("Couldn't send it: " + ((err && err.message) || err) + " — the JSON is below.", "bad");
+    status("Couldn't send it: " + ((err && err.message) || err) + " — the JSON is on the page.", "bad");
   }
   el("send").hidden = false;
 }
@@ -368,7 +439,7 @@ el("go").onclick = async () => {
   results = [];
   el("out").querySelector("tbody").textContent = "";
   el("verdict").style.display = "none";
-  el("fill").style.transform = "scaleX(0)";
+  el("ui").classList.add("running");
 
   try {
     status("Asking for the camera and mic…");
@@ -380,34 +451,29 @@ el("go").onclick = async () => {
     await video.play();
     fx.width = video.videoWidth || 1280;
     fx.height = video.videoHeight || 720;
+    fx.classList.add("off");
 
-    // Something representative on the overlay: the per-frame composite cost is
-    // the drawImage of this canvas, which doesn't care what is drawn in it, but
-    // an empty one could let the browser skip work a real filter wouldn't.
-    const c = fx.getContext("2d");
-    c.clearRect(0, 0, fx.width, fx.height);
-    c.fillStyle = "rgba(255,80,140,.85)";
-    c.beginPath();
-    c.arc(fx.width * .5, fx.height * .3, fx.height * .18, 0, Math.PI * 2);
-    c.fill();
-    c.fillStyle = "rgba(90,200,255,.7)";
-    c.fillRect(fx.width * .2, fx.height * .55, fx.width * .6, fx.height * .12);
-
-    status("Loading the face model (this takes a few seconds)…");
+    status("Loading the face model (a few seconds)…");
     await startWorker();
     pump();
 
     for (let i = 0; i < PHASES.length; i++) await runPhase(PHASES[i], i);
 
+    stage.classList.remove("on", "mir");
+    el("ui").classList.remove("running");
     el("verdict").textContent = verdict();
     el("verdict").style.display = "block";
-    status("Done — sending the report…");
+    status("Done — sending…");
     await send();
   } catch (err) {
+    el("ui").classList.remove("running");
     status("Failed: " + ((err && err.message) || err), "bad");
   } finally {
     clearTimeout(pumpTimer);
     endComposite();
+    endOverlay();
+    stage.classList.remove("on", "mir");
+    el("ui").classList.remove("running");
     if (worker) { worker.terminate(); worker = null; }
     if (stream) stream.getTracks().forEach(t => t.stop());
     el("go").disabled = false;
