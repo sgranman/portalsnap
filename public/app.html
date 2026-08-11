@@ -120,6 +120,18 @@
     font-size: 34px; color: #fff; cursor: pointer; touch-action: manipulation;
     display: flex; align-items: center; justify-content: center;
   }
+
+  /* Deliberately quieter and smaller than the three camera buttons: full screen
+     is something you set once, not part of playing with the filters. */
+  .small {
+    flex: 0 0 auto; width: 64px; height: 64px; border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, .45); background: var(--line);
+    color: #fff; cursor: pointer; touch-action: manipulation;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .small svg { width: 26px; height: 26px; display: block; }
+  /* An SVG rather than a glyph: this device has no webfont to fall back on and
+     the corner-bracket characters are not in its emoji set. */
   .big:active { transform: scale(.92); }
   .big:disabled { opacity: .35; }
   #record { background: #2b3350; }
@@ -274,6 +286,14 @@
 
   <div id="bar">
     <div id="strip"></div>
+    <!-- Hidden outright if the browser can't do it, rather than left as a dead
+         control — see the fullscreen block at the end of the script. -->
+    <button id="fs" class="small" aria-label="Full screen" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path id="fsIcon" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>
+      </svg>
+    </button>
     <button id="album" class="big" aria-label="See saved photos">🖼️</button>
     <button id="record" class="big" aria-label="Record a video">🎥</button>
     <button id="shutter" class="big" aria-label="Take photo">📸</button>
@@ -1323,6 +1343,53 @@ el("backendTap").onclick = async () => {
     hint("That backend wouldn't start", 2500);
   }
 };
+
+/* ---------------------------- Full screen ---------------------------- */
+
+// The Portal's browser chrome eats 156 of the screen's 800 pixels — the viewport
+// measures 1280x644 against a 1280x800 panel — so full screen is worth roughly a
+// quarter more picture. The whole document goes full screen rather than the
+// stage alone, because the filter strip and the shutter have to stay reachable;
+// full screen with no way to take a photo would be a worse app.
+const ENTER_ICON = "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5";
+const EXIT_ICON = "M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5";
+
+// Prefixed spellings kept because this is a vendor browser shell on Chrome 138,
+// and the cost of being wrong about that is a button that does nothing.
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+const fsAllowed = () =>
+  !!(document.fullscreenEnabled || document.webkitFullscreenEnabled ||
+     document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+
+function syncFsButton() {
+  const on = !!fsElement();
+  el("fsIcon").setAttribute("d", on ? EXIT_ICON : ENTER_ICON);
+  el("fs").setAttribute("aria-label", on ? "Leave full screen" : "Full screen");
+}
+
+async function toggleFullscreen() {
+  const root = document.documentElement;
+  try {
+    if (fsElement()) {
+      await (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+      await (root.requestFullscreen || root.webkitRequestFullscreen).call(root);
+    }
+  } catch (err) {
+    // Refused rather than unsupported: some shells only allow it from certain
+    // gestures, or block it outright while a camera is live.
+    hint("Full screen isn't allowed here", 2500);
+  }
+  syncFsButton();
+}
+
+if (fsAllowed()) {
+  el("fs").hidden = false;
+  el("fs").onclick = toggleFullscreen;
+  // Covers Escape and the shell's own back gesture, not just our button.
+  document.addEventListener("fullscreenchange", syncFsButton);
+  document.addEventListener("webkitfullscreenchange", syncFsButton);
+}
 
 buildStrip();
 boot();

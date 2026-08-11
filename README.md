@@ -129,6 +129,27 @@ because the measurement said it was never the variable — see below. `REC_WIDTH
 can't encode odd ones); it costs nothing to keep and makes the ceiling adjustable if the
 camera ever delivers more than it does today.
 
+## Full screen
+
+The Portal's browser chrome takes 156 of the panel's 800 pixels — the viewport measures
+1280x644 against a 1280x800 screen — so this is worth about a quarter more picture. Measured
+off-device at the Portal's two sizes, the picture goes from 930x523 to **1207x679**, 68% more
+area.
+
+- **The whole document goes full screen, not the stage.** Full screen with no reachable
+  shutter would be a worse app, so the filter strip and the three camera buttons stay put and
+  the picture takes the space the browser chrome gave up.
+- **The button hides itself if the browser won't do it.** `fullscreenEnabled` is checked
+  before it is shown, so there is no dead control to poke at; a *refusal* at click time is
+  different from being unsupported, and that path hints instead.
+- **The icon is an inline SVG, not a glyph.** There is no webfont here by policy and the
+  corner-bracket characters aren't in this device's emoji set, so the one control without an
+  obvious emoji draws its own.
+- It listens for `fullscreenchange` rather than only tracking its own clicks, so leaving by
+  Escape or by the shell's own gesture still flips the icon back. Prefixed spellings are kept
+  throughout: this is a vendor shell, and the cost of guessing wrong is a button that
+  silently does nothing.
+
 ## Chasing the detection rate on-device
 
 Three readings, all blazeface at 320x180, and a warning about comparing them:

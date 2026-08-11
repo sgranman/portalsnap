@@ -25,6 +25,7 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 | `render.mjs` | the render loop's 30Hz cap and its idle skip |
 | `e2e.mjs` | capture → upload → in-app album → delete, and `gallery.html` |
 | `rechud.mjs` | the recording HUD lines appear, read plausibly, and clear afterwards |
+| `fullscreen.mjs` | the full screen button toggles both ways and doesn't cover the camera controls |
 | `recdiag.mjs` | `recdiag.html`'s twelve phases really configure what they claim to |
 
 **The fake camera has no face in it.** That is why `filters.mjs` stubs the tracker worker
