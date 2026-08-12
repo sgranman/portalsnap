@@ -27,6 +27,7 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 | `filters.mjs` | the drawing path, and *fit*: where the ink lands against the landmarks, still faces stop repainting, a lost face clears it, a throwing filter doesn't corrupt the context, and the two video-sampling filters repaint every frame |
 | `render.mjs` | the render loop's 30Hz cap and its idle skip |
 | `e2e.mjs` | capture → upload → in-app album → delete, clip previews, and `gallery.html` |
+| `mirror.mjs` | the preview stays mirrored, captures do not, and the overlay stays in register — against a self-made asymmetric camera |
 | `album.mjs` | album layout at a size that actually overflows: no overlapping tiles, two columns on a phone |
 | `rechud.mjs` | the recording HUD lines appear, read plausibly, and clear afterwards |
 | `fullscreen.mjs` | the full screen button toggles both ways and doesn't cover the camera controls |

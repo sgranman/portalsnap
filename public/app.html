@@ -1134,8 +1134,11 @@ el("shutter").onclick = () => {
   const out = document.createElement("canvas");
   out.width = w; out.height = h;
   const octx = out.getContext("2d", { alpha: false });
-  octx.translate(w, 0);
-  octx.scale(-1, 1);
+  // Not mirrored. The preview is — a selfie view is how you expect to see
+  // yourself — but a saved capture should look the way everyone else saw it,
+  // which is also what every phone does. Nothing else needs flipping with it:
+  // the overlay is drawn in the camera's own coordinates, so video and stickers
+  // stay in register whichever way round the composite goes.
   compose(out, octx);
 
   el("flash").classList.remove("fire");
@@ -1191,8 +1194,8 @@ async function startRec() {
   recCanvas.width = Math.round(fx.width * scale / 2) * 2;
   recCanvas.height = Math.round(fx.height * scale / 2) * 2;
   recCtx = recCanvas.getContext("2d", { alpha: false });
-  recCtx.translate(recCanvas.width, 0);
-  recCtx.scale(-1, 1);            // mirrored once; every later draw inherits it
+  // Unmirrored, like stills: the clip should look the way the room looked, not
+  // the way the screen did. See the note in the shutter handler.
 
   // frameRate 0 means "only the frames I ask for", so we encode exactly one
   // frame per camera frame instead of resampling to a fixed clock. If this

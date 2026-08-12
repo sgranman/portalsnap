@@ -135,6 +135,21 @@ reports a 70px overlap on a 135px tile.
 
 `media/` is gitignored and sits inside the bind mount, so it survives redeploys.
 
+### The preview is mirrored; captures are not
+
+A selfie view is how you expect to see yourself, so the stage stays flipped. A saved photo or
+clip should look the way the room actually looked — which is what every phone does — so the
+composite is not flipped. Both were mirrored until someone watched a clip back.
+
+Nothing else has to flip with it: the overlay is drawn in the camera's own coordinates, and
+video and overlay go into the same untransformed context, so they cannot come apart.
+
+Checking it needed a camera with a left and a right. Chrome's fake device is near enough
+symmetrical to hide a flip entirely, so `test/mirror.mjs` writes its own y4m — a text header and
+three raw I420 planes, twenty lines and no ffmpeg — with a bright left half, then measures the
+saved photo, a frame decoded back out of the recorded clip, and a mark painted on the overlay.
+It fails on the old code with all three coming back reversed.
+
 ## Video with sound
 
 The 🎥 button records the composited view with mic audio, capped at 30 seconds.
@@ -145,7 +160,7 @@ The 🎥 button records the composited view with mic audio, capped at 30 seconds
   video-only if the first attempt fails. The track is never routed to an output, so there
   is no feedback loop.
 - **Recording is the one time we do composite per frame.** Video and overlay are drawn
-  into an offscreen canvas that is mirrored once at setup, and `captureStream(0)` plus
+  into an offscreen canvas, and `captureStream(0)` plus
   `requestFrame()` means we encode exactly one frame per *camera* frame instead of
   resampling against a fixed clock — no duplicated work when the camera dips below 30fps.
   The loop is driven by `requestVideoFrameCallback`.
