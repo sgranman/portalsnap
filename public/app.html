@@ -1453,44 +1453,78 @@ function shareFile(item) {
   } catch (e) { return null; }
 }
 
+// Whether this browser's share API is real, which is not the same question as
+// whether it exists.
+//
+// Measured on the Portal: `canShare` returns true for text, links, photos and
+// clips, and `share()` then rejects with AbortError in 16-129ms every time. No
+// sheet ever appears. AbortError is also what a genuine cancellation looks like,
+// so the two are told apart by the clock — nobody dismisses a dialog in a tenth
+// of a second, and no dialog was drawn.
+const SHARE_DEAD = "portalsnap.shareDead";
+const SHARE_REFUSAL_MS = 400;
+let shareDead = false;
+try { shareDead = localStorage.getItem(SHARE_DEAD) === "1"; } catch (e) {}
+
+function markShareDead() {
+  shareDead = true;
+  try { localStorage.setItem(SHARE_DEAD, "1"); } catch (e) {}
+  el("share").hidden = true;
+}
+
 function canShare(item) {
+  if (shareDead) return false;
   const f = shareFile(item);
   try { return !!(f && navigator.canShare && navigator.canShare({ files: [f] })); }
   catch (e) { return false; }
 }
 
+// Returns "sent", "cancelled", or "refused" — the last meaning the shell took
+// the call and threw it away.
+async function attemptShare(payload) {
+  const t0 = performance.now();
+  try {
+    await navigator.share(payload);
+    return "sent";
+  } catch (err) {
+    const quick = performance.now() - t0 < SHARE_REFUSAL_MS;
+    if (err && err.name === "AbortError" && !quick) return "cancelled";
+    console.warn("share refused:", err && err.name, err && err.message,
+                 Math.round(performance.now() - t0) + "ms");
+    return "refused";
+  }
+}
+
 el("share").onclick = async () => {
   if (!pending) return;
 
-  // Files first, since that is the only route that could reach the device's own
-  // album. `canShare` said yes or this button would not be here, so a failure
-  // here means the shell accepted the call and could not carry it out.
+  // Files first: it is the only route that could ever reach the device's own
+  // photo album.
   const f = shareFile(pending);
   if (f) {
-    try {
-      await navigator.share({ files: [f], title: "PortalSnap" });
-      return;
-    } catch (err) {
-      if (err && err.name === "AbortError") return;      // they changed their mind
-      console.warn("share files failed:", err && err.name, err && err.message);
-    }
+    const r = await attemptShare({ files: [f], title: "PortalSnap" });
+    if (r === "sent" || r === "cancelled") return;
   }
 
-  // Then a link to the saved copy. Everything here is already served over
-  // HTTPS, so a shell that refuses files may still hand a URL to another app.
-  // Only possible once it is saved: before that there is nothing to link to.
+  // Then a link to the saved copy — a shell that will not carry a file might
+  // still hand a URL to another app. Nothing to link to until it is saved.
   if (pending.savedUrl) {
+    const r = await attemptShare({ url: pending.savedUrl, title: "PortalSnap" });
+    if (r === "sent" || r === "cancelled") return;
+
+    // Failing that, the clipboard: pasting a link somewhere is still a way out.
     try {
-      await navigator.share({ url: pending.savedUrl, title: "PortalSnap" });
-      return;
-    } catch (err) {
-      if (err && err.name === "AbortError") return;
-      // The name is the useful half — "NotAllowedError" and "AbortError" mean
-      // very different things, and a silent "Couldn't send it" hid both.
-      return say("Couldn't send it: " + (err && err.name ? err.name : "unknown"), "bad");
-    }
+      await navigator.clipboard.writeText(pending.savedUrl);
+      return say("Link copied — paste it anywhere", "good");
+    } catch (e) { /* one more door that isn't there */ }
   }
-  say("Tap Keep it first, then Send", "bad");
+
+  // Every route refused. Stop offering a button that cannot work, and point at
+  // the one thing on this device that does.
+  markShareDead();
+  say(pending.savedUrl
+      ? "This browser can't send — open gallery.html on a phone"
+      : "Tap Keep it first, then open gallery.html on a phone", "bad");
 };
 
 /* ------------------------------- Album ------------------------------- */

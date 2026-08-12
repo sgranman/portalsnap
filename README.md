@@ -142,25 +142,40 @@ is not obvious from the code and it is the reason a shared *link* would work at 
 that is not wanted: Cloudflare Access in front of the hostname, a shared secret in the path, or
 binding the container to the LAN instead of the tunnel.
 
-### The Send button
+### The Portal cannot share, and says it can
 
-`navigator.share({files})` is the only route that could ever reach the Portal's own album, so
-the button appears when `canShare` says yes and hides when it doesn't. On the Portal `canShare`
-says yes and `share()` then fails, which is worth being precise about rather than guessing at:
+`sharetest.html` settled this on the device, since none of it is documented. Every route out of
+the page was tried:
 
-- The failure used to be swallowed into "Couldn't send it". It now reports the error *name* —
-  `NotAllowedError` and `AbortError` mean very different things — and falls back to sharing a
-  **link** to the saved copy, since a shell that will not carry a file may still hand a URL to
-  another app. That fallback needs the capture saved first, because until then there is nothing
-  to link to.
-- `sharetest.html` answers the rest on the device, since none of it is documented: it reports
-  what `canShare` claims for text, links, photos and a real recorded clip, then actually
-  attempts each one, plus `fb-messenger://`, an Android `intent://` aimed at
-  `com.facebook.orca`, and messenger.com. URL schemes give no error when nothing handles them,
-  so it watches for the page losing visibility instead — leaving the page is the only evidence
-  another app opened. And every `share()` is raced against a clock, because a call that is
-  simply ignored never settles at all, which is itself a likely explanation for a button that
-  appears to do nothing.
+| route | result |
+|---|---|
+| `share({text})` / `{url}` / `{files: jpg}` / `{files: mp4}` | `AbortError: Share failed` after **16–129ms** |
+| `fb-messenger://share?link=…` | nothing: no error, no app switch |
+| `intent://…package=com.facebook.orca` | nothing |
+| `https://www.messenger.com/` | opened, as a logged-out website |
+
+`canShare` returned **true** for all four payload types before each of those failures. So the
+Web Share API here is a stub: present, advertised, and wired to nothing. The timings are what
+prove it — 16ms is not somebody dismissing a dialog, and no dialog was drawn. Neither Messenger
+URL scheme is registered with the browser either, so there is no route from this page to that
+app, with or without a file.
+
+That makes the honest behaviour: try, and then stop pretending.
+
+- **Files, then a link, then the clipboard.** Files are the only route that could ever reach the
+  device's own album; a shell that will not carry a file might still hand over a URL; and a
+  copied link can be pasted somewhere. The link routes need the capture saved first, because
+  until then there is nothing to link to.
+- **A refusal is told from a cancellation by the clock.** Both arrive as `AbortError`, so the
+  only thing separating "the shell threw this away" from "the child changed their mind" is that
+  the first came back in 16–129ms. Under 400ms is a refusal.
+- **Once everything has refused, the button retires itself** (remembered in `localStorage`) and
+  says where the photo actually is: `gallery.html`, on a phone. A button that cannot work should
+  not keep offering.
+
+`test/share.mjs` stubs both halves of the API to reproduce all four cases — instant refusal,
+slow cancellation, working clipboard, working share — because the difference between them is
+timing, and timing is exactly what a real browser will not reproduce on demand.
 
 ### The preview is mirrored; captures are not
 
