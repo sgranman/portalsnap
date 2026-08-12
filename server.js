@@ -81,9 +81,14 @@ const server = http.createServer((req, res) => {
   const rel = decodeURIComponent(url.pathname);
   const inMedia = rel.startsWith("/media/");
   const root = inMedia ? MEDIA : PUBLIC;
+  // The root is the app. It used to be the capability probe, which was right
+  // for the first week and confusing ever since — the Portal's home screen link
+  // should open the camera, not a diagnostics page. The probe is still there at
+  // /probe.html, and /index.html lands on the app so an old bookmark still works.
+  const HOME = "/app.html";
   let file = inMedia
     ? path.join(MEDIA, path.basename(rel))
-    : path.join(PUBLIC, rel === "/" ? "index.html" : rel);
+    : path.join(PUBLIC, rel === "/" || rel === "/index.html" ? HOME : rel);
   if (!file.startsWith(root + path.sep) && file !== root) {
     return send(res, 403, "text/plain", "Forbidden");
   }
@@ -92,7 +97,7 @@ const server = http.createServer((req, res) => {
   }
 
   fs.stat(file, (err, st) => {
-    if (!err && st.isDirectory()) { file = path.join(file, "index.html"); st = null; }
+    if (!err && st.isDirectory()) { file = path.join(PUBLIC, HOME); st = null; }
 
     // Vendored runtime and models are content-stable and ~12MB combined —
     // without a long cache the Portal re-downloads them on every launch.

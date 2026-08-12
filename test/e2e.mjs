@@ -48,6 +48,27 @@ page.on("console", m => {
 page.on("pageerror", e => { log("    [pageerror] " + e.message); failures++; });
 page.on("response", r => { if (r.status() >= 400) log("    [404] " + r.url()); });
 
+/* ---------------- routing ---------------- */
+// The root serves the app. It served the capability probe until the app was
+// worth opening directly, and an old /index.html bookmark should not break.
+{
+  const titleOf = async u => {
+    const r = await fetch(BASE + u);
+    const m = /<title>([^<]*)<\/title>/.exec(await r.text());
+    return { status: r.status, title: m ? m[1] : null };
+  };
+  const root = await titleOf("/");
+  check("the root serves the app", root.status === 200 && /^PortalSnap$/.test(root.title || ""), JSON.stringify(root));
+  const idx = await titleOf("/index.html");
+  check("an old /index.html bookmark lands on the app too", idx.title === root.title, JSON.stringify(idx));
+  const probe = await titleOf("/probe.html");
+  check("the probe is still reachable", probe.status === 200 && /Probe/i.test(probe.title || ""), JSON.stringify(probe));
+  const missing = await fetch(BASE + "/definitely-not-here.html");
+  check("a missing page is still a 404", missing.status === 404, "status " + missing.status);
+  const escape = await fetch(BASE + "/..%2fserver.js", { redirect: "manual" });
+  check("path traversal is still refused", escape.status === 403 || escape.status === 404, "status " + escape.status);
+}
+
 log("\n--- app.html ---");
 await page.goto(BASE + "/app.html", { waitUntil: "domcontentloaded" });
 

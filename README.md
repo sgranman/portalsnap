@@ -805,6 +805,20 @@ Three unknowns decide the entire architecture, and only the device can answer th
 3. **Can it sustain ~24fps?** Face tracking plus compositing on a low-power Portal SoC is
    the real risk. The probe measures canvas and WebGL throughput on live camera frames.
 
+## Pages
+
+| URL | |
+|---|---|
+| `/` | the app — this is what the Portal's home-screen link should point at |
+| `/gallery.html` | the album, for a phone or laptop where saving actually works |
+| `/probe.html` | the original capability probe |
+| `/recdiag.html` | the thirteen-phase performance harness |
+| `/bench.html`, `/track.html` | the tracker sweeps that chose the models |
+
+The root used to serve the probe, which was right for the first week and confusing ever
+after — tapping a bookmark should open the camera, not a diagnostics page. `/index.html`
+lands on the app too, so an older bookmark still works.
+
 ## Running the probe
 
 Camera and mic access require a **secure context**. `http://192.168.x.x:8080` will be
@@ -818,7 +832,8 @@ node server.js                    # terminal 1 — serves ./public on :8080
 cloudflared tunnel --url http://localhost:8080   # terminal 2 — prints an https://….trycloudflare.com URL
 ```
 
-Open that HTTPS URL in the Portal's browser and tap **Camera + Mic**.
+Open that HTTPS URL in the Portal's browser. The root is the app; add `/probe.html` for the
+capability probe, then tap **Camera + Mic**.
 
 ### Deployed: the home server
 
