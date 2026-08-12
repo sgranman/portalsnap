@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PortalSnap — can this device share?</title>
+<style>
+  :root { --bg:#0e0f16; --card:#191b26; --line:#2b2e3d; --ink:#fff; --dim:#a2a8bd;
+          --accent:#6d5bf5; --ok:#4ade80; --bad:#ff8fa8; --warn:#ffd166; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; background:var(--bg); color:var(--ink); padding:18px 16px 40px;
+         font-family:"Segoe UI",-apple-system,Roboto,sans-serif; }
+  /* Read at arm's length on a Portal: one big title, one body size, and section
+     labels that are clearly labels rather than another size of text. */
+  h1 { font-size:32px; margin:0 0 4px; letter-spacing:-.02em; }
+  p.sub { color:var(--dim); font-size:17px; line-height:1.55; margin:0 0 16px; max-width:70ch; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
+       margin:26px 0 8px; }
+  table { border-collapse:collapse; width:100%; font-size:17px; }
+  td { padding:7px 8px; border-bottom:1px solid var(--line); }
+  td:last-child { text-align:right; font-family:ui-monospace,Menlo,monospace; }
+  .yes { color:var(--ok); } .no { color:var(--bad); } .maybe { color:var(--warn); }
+  button { font:inherit; font-size:17px; font-weight:700; color:#fff; background:var(--accent);
+           border:0; border-radius:12px; padding:14px 18px; margin:0 8px 8px 0;
+           cursor:pointer; touch-action:manipulation; }
+  button.alt { background:#343850; }
+  button:disabled { opacity:.45; }
+  #log { background:var(--card); border:1px solid var(--line); border-radius:12px;
+         padding:12px 14px; font-size:13px; line-height:1.6; margin-top:14px;
+         white-space:pre-wrap; min-height:40px; }
+  #status { font-size:17px; font-weight:600; margin-top:12px; }
+  #status.ok { color:var(--ok); } #status.bad { color:var(--bad); }
+</style>
+</head>
+<body>
+
+<h1>Can this device share?</h1>
+<p class="sub">
+  The <b>Send</b> button in the app calls the browser's share API, and on this device it fails
+  after saying it would work. Nothing about the Portal's browser is documented, so this tries
+  every route out of the page one at a time and records exactly what each one does.
+  Tap the buttons in order — some will open another app, so come back here afterwards — then
+  tap <b>Send report</b> at the bottom.
+</p>
+
+<h2>What it says it can do</h2>
+<table id="caps"><tbody></tbody></table>
+
+<h2>What it actually does</h2>
+<div>
+  <button data-route="text">Share text</button>
+  <button data-route="url">Share a link</button>
+  <button data-route="jpg">Share a photo</button>
+  <button data-route="mp4">Share a clip</button>
+</div>
+<div>
+  <button class="alt" data-route="fb-messenger">fb-messenger://</button>
+  <button class="alt" data-route="intent">intent:// Messenger</button>
+  <button class="alt" data-route="messenger-web">messenger.com</button>
+</div>
+
+<div id="log">Nothing tried yet.</div>
+<div id="status"></div>
+<button id="send" class="alt">Send report</button>
+
+<script>
+const el = id => document.getElementById(id);
+const results = [];
+let clip = null;   // a real recorded clip, made once on demand
+
+function row(label, value, cls) {
+  const tr = document.createElement("tr");
+  const a = document.createElement("td");
+  a.textContent = label;
+  const b = document.createElement("td");
+  b.textContent = value;
+  if (cls) b.className = cls;
+  tr.appendChild(a); tr.appendChild(b);
+  el("caps").querySelector("tbody").appendChild(tr);
+}
+
+function note(msg) {
+  if (el("log").textContent === "Nothing tried yet.") el("log").textContent = "";
+  el("log").textContent += msg + "\n";
+}
+
+// A one-pixel-ish JPEG and, if the recorder works, a one-second clip — real
+// files, because `canShare` answers differently for different types.
+function makeJpg() {
+  return new Promise(res => {
+    const c = document.createElement("canvas");
+    c.width = 320; c.height = 180;
+    const x = c.getContext("2d");
+    x.fillStyle = "#6d5bf5"; x.fillRect(0, 0, 320, 180);
+    x.fillStyle = "#fff"; x.font = "bold 28px sans-serif";
+    x.fillText("PortalSnap", 60, 100);
+    c.toBlob(b => res(b ? new File([b], "portalsnap.jpg", { type: "image/jpeg" }) : null),
+             "image/jpeg", 0.9);
+  });
+}
+
+function makeClip() {
+  return new Promise(res => {
+    if (clip) return res(clip);
+    try {
+      const c = document.createElement("canvas");
+      c.width = 320; c.height = 180;
+      const x = c.getContext("2d");
+      const stream = c.captureStream(15);
+      const types = ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm"];
+      const mime = types.find(t => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } });
+      if (!mime) return res(null);
+      const rec = new MediaRecorder(stream, { mimeType: mime });
+      const parts = [];
+      rec.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+      rec.onstop = () => {
+        const blob = new Blob(parts, { type: mime });
+        const ext = mime.indexOf("mp4") >= 0 ? "mp4" : "webm";
+        clip = new File([blob], "portalsnap." + ext, { type: mime.split(";")[0] });
+        res(clip);
+      };
+      rec.start();
+      let n = 0;
+      const tick = setInterval(() => {
+        x.fillStyle = n++ % 2 ? "#6d5bf5" : "#ff5c8a";
+        x.fillRect(0, 0, 320, 180);
+      }, 100);
+      setTimeout(() => { clearInterval(tick); try { rec.stop(); } catch (e) { res(null); } }, 1000);
+    } catch (e) { res(null); }
+  });
+}
+
+const can = payload => {
+  try { return navigator.canShare ? !!navigator.canShare(payload) : "no canShare"; }
+  catch (e) { return "threw: " + (e && e.name); }
+};
+
+const LINK = location.origin + "/app.html";
+
+async function describe() {
+  const jpg = await makeJpg();
+  const caps = {
+    userAgent: navigator.userAgent,
+    secureContext: !!window.isSecureContext,
+    share: typeof navigator.share,
+    canShare: typeof navigator.canShare,
+    text: can({ text: "hello" }),
+    url: can({ url: LINK }),
+    jpgFile: jpg ? can({ files: [jpg] }) : "no file",
+    mp4File: "tap Share a clip"
+  };
+  for (const k of Object.keys(caps)) {
+    const v = caps[k];
+    row(k, String(v).slice(0, 60),
+        v === true || v === "function" ? "yes" : v === false || v === "undefined" ? "no" : "maybe");
+  }
+  return caps;
+}
+const capsPromise = describe();
+
+// Leaving the page is the only sign a URL scheme was honoured: a scheme nothing
+// handles simply does nothing, with no error to catch.
+function watchForAppSwitch(ms) {
+  return new Promise(res => {
+    let left = false;
+    const onHide = () => { if (document.visibilityState === "hidden") left = true; };
+    document.addEventListener("visibilitychange", onHide);
+    setTimeout(() => {
+      document.removeEventListener("visibilitychange", onHide);
+      res(left);
+    }, ms);
+  });
+}
+
+// A share() that is simply ignored never settles — no resolve, no reject, no
+// error to report. That is indistinguishable from "still deciding" unless it is
+// raced against a clock, and it is one of the likelier explanations for a Send
+// button that does nothing at all.
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => {
+      const e = new Error("no answer after " + (ms / 1000) + "s");
+      e.name = "NoResponse";
+      rej(e);
+    }, ms))
+  ]);
+}
+
+async function tryRoute(route) {
+  const started = performance.now();
+  const out = { route: route, ok: false, error: null, leftPage: false };
+  note(route + " → trying…");
+  try {
+    if (route === "text") {
+      await withTimeout(navigator.share({ text: "PortalSnap says hello", title: "PortalSnap" }), 25000);
+      out.ok = true;
+    } else if (route === "url") {
+      await withTimeout(navigator.share({ url: LINK, title: "PortalSnap" }), 25000);
+      out.ok = true;
+    } else if (route === "jpg") {
+      const f = await makeJpg();
+      if (!f) throw new Error("could not build a jpeg");
+      out.canShare = can({ files: [f] });
+      await withTimeout(navigator.share({ files: [f], title: "PortalSnap" }), 25000);
+      out.ok = true;
+    } else if (route === "mp4") {
+      const f = await makeClip();
+      if (!f) throw new Error("recorder unavailable");
+      out.type = f.type;
+      out.canShare = can({ files: [f] });
+      await withTimeout(navigator.share({ files: [f], title: "PortalSnap" }), 25000);
+      out.ok = true;
+    } else {
+      // URL schemes: fire it, then watch for the page going away.
+      const target =
+        route === "fb-messenger" ? "fb-messenger://share?link=" + encodeURIComponent(LINK) :
+        route === "intent" ? "intent://send#Intent;package=com.facebook.orca;S.android.intent.extra.TEXT=" +
+                             encodeURIComponent(LINK) + ";end" :
+        "https://www.messenger.com/";
+      const watching = watchForAppSwitch(3000);
+      if (route === "messenger-web") window.open(target, "_blank");
+      else location.href = target;
+      out.leftPage = await watching;
+      out.ok = out.leftPage;
+    }
+  } catch (err) {
+    out.error = (err && err.name ? err.name : "Error") + ": " + ((err && err.message) || err);
+  }
+  out.ms = Math.round(performance.now() - started);
+  results.push(out);
+  note(route + " → " + (out.ok ? "worked" : "no") +
+       (out.error ? "  (" + out.error + ")" : "") +
+       (out.canShare !== undefined ? "  canShare=" + out.canShare : "") +
+       (out.leftPage ? "  [left the page]" : ""));
+  return out;
+}
+
+for (const b of document.querySelectorAll("button[data-route]")) {
+  b.onclick = () => tryRoute(b.getAttribute("data-route"));
+}
+
+el("send").onclick = async () => {
+  const caps = await capsPromise;
+  const body = JSON.stringify({
+    test: "share-routes",
+    env: {
+      userAgent: navigator.userAgent,
+      secureContext: !!window.isSecureContext,
+      origin: location.origin
+    },
+    caps: caps,
+    results: results,
+    generatedAt: new Date().toISOString()
+  }, null, 1);
+  try {
+    const r = await fetch("/report", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: body
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
+    el("status").textContent = "Sent — saved as " + j.file;
+    el("status").className = "ok";
+  } catch (err) {
+    el("status").textContent = "Couldn't send: " + ((err && err.message) || err);
+    el("status").className = "bad";
+    note(body);
+  }
+};
+</script>
+</body>
+</html>

@@ -1431,6 +1431,10 @@ el("keep").onclick = async () => {
       } catch (err) { console.warn("poster upload failed:", (err && err.message) || err); }
     }
 
+    // Kept for the Send button: a shell that will not carry a file may still
+    // pass a link, and until it is saved there is no link to pass.
+    if (out.url) pending.savedUrl = location.origin + out.url;
+
     el("keep").textContent = "Saved ✓";
     say("It's in Photos now", "good");
   } catch (err) {
@@ -1457,10 +1461,36 @@ function canShare(item) {
 
 el("share").onclick = async () => {
   if (!pending) return;
+
+  // Files first, since that is the only route that could reach the device's own
+  // album. `canShare` said yes or this button would not be here, so a failure
+  // here means the shell accepted the call and could not carry it out.
   const f = shareFile(pending);
-  if (!f) return;
-  try { await navigator.share({ files: [f], title: "PortalSnap" }); }
-  catch (err) { if (err && err.name !== "AbortError") say("Couldn't send it", "bad"); }
+  if (f) {
+    try {
+      await navigator.share({ files: [f], title: "PortalSnap" });
+      return;
+    } catch (err) {
+      if (err && err.name === "AbortError") return;      // they changed their mind
+      console.warn("share files failed:", err && err.name, err && err.message);
+    }
+  }
+
+  // Then a link to the saved copy. Everything here is already served over
+  // HTTPS, so a shell that refuses files may still hand a URL to another app.
+  // Only possible once it is saved: before that there is nothing to link to.
+  if (pending.savedUrl) {
+    try {
+      await navigator.share({ url: pending.savedUrl, title: "PortalSnap" });
+      return;
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+      // The name is the useful half — "NotAllowedError" and "AbortError" mean
+      // very different things, and a silent "Couldn't send it" hid both.
+      return say("Couldn't send it: " + (err && err.name ? err.name : "unknown"), "bad");
+    }
+  }
+  say("Tap Keep it first, then Send", "bad");
 };
 
 /* ------------------------------- Album ------------------------------- */

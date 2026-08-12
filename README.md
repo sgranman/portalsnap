@@ -135,6 +135,33 @@ reports a 70px overlap on a 135px tile.
 
 `media/` is gitignored and sits inside the bind mount, so it survives redeploys.
 
+**Everything here is public.** The tunnel serves `portalsnap.example.net` to the open internet
+with no authentication: anyone with the hostname can open `/gallery.html` and download every
+photo and clip. That is fine for a toy on a home server and worth stating out loud, because it
+is not obvious from the code and it is the reason a shared *link* would work at all. Options, if
+that is not wanted: Cloudflare Access in front of the hostname, a shared secret in the path, or
+binding the container to the LAN instead of the tunnel.
+
+### The Send button
+
+`navigator.share({files})` is the only route that could ever reach the Portal's own album, so
+the button appears when `canShare` says yes and hides when it doesn't. On the Portal `canShare`
+says yes and `share()` then fails, which is worth being precise about rather than guessing at:
+
+- The failure used to be swallowed into "Couldn't send it". It now reports the error *name* —
+  `NotAllowedError` and `AbortError` mean very different things — and falls back to sharing a
+  **link** to the saved copy, since a shell that will not carry a file may still hand a URL to
+  another app. That fallback needs the capture saved first, because until then there is nothing
+  to link to.
+- `sharetest.html` answers the rest on the device, since none of it is documented: it reports
+  what `canShare` claims for text, links, photos and a real recorded clip, then actually
+  attempts each one, plus `fb-messenger://`, an Android `intent://` aimed at
+  `com.facebook.orca`, and messenger.com. URL schemes give no error when nothing handles them,
+  so it watches for the page losing visibility instead — leaving the page is the only evidence
+  another app opened. And every `share()` is raced against a clock, because a call that is
+  simply ignored never settles at all, which is itself a likely explanation for a button that
+  appears to do nothing.
+
 ### The preview is mirrored; captures are not
 
 A selfie view is how you expect to see yourself, so the stage stays flipped. A saved photo or
@@ -827,6 +854,7 @@ Three unknowns decide the entire architecture, and only the device can answer th
 | `/` | the app — this is what the Portal's home-screen link should point at |
 | `/gallery.html` | the album, for a phone or laptop where saving actually works |
 | `/probe.html` | the original capability probe |
+| `/sharetest.html` | what this device can and cannot share, and where |
 | `/recdiag.html` | the thirteen-phase performance harness |
 | `/bench.html`, `/track.html` | the tracker sweeps that chose the models |
 
