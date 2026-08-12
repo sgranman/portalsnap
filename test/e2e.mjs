@@ -134,6 +134,24 @@ const vidSaved = await page.evaluate(() => ({
   msg: document.getElementById("saveMsg").textContent
 }));
 check("clip uploads to the server", vidSaved.btn === "Saved ✓", JSON.stringify(vidSaved));
+
+// The preview frame is grabbed from the composited canvas as the recording
+// stops and uploaded with the clip, so the album never has to decode video to
+// show a thumbnail.
+const listed = await page.evaluate(async () => (await (await fetch("/media/list")).json()).items);
+const clip = listed.find(i => i.kind === "video");
+check("the clip was saved with a preview frame", !!(clip && clip.poster), JSON.stringify(clip));
+if (clip && clip.poster) {
+  const posterOk = await page.evaluate(async u => {
+    const r = await fetch(u);
+    return { status: r.status, type: r.headers.get("content-type"), size: (await r.blob()).size };
+  }, clip.poster);
+  check("the preview is a real jpeg", posterOk.status === 200 && /jpeg/.test(posterOk.type) && posterOk.size > 1000,
+    JSON.stringify(posterOk));
+}
+check("previews are not listed as album entries of their own",
+  listed.filter(i => /^vid-.*\.jpg$/.test(i.name)).length === 0,
+  JSON.stringify(listed.map(i => i.name)));
 await page.click("#again");
 
 /* ---------------- album ---------------- */
@@ -141,10 +159,16 @@ await page.click("#album");
 await page.waitForFunction(() => document.querySelectorAll("#grid .tile").length >= 2, { timeout: 15000 }).catch(() => {});
 const album = await page.evaluate(() => ({
   tiles: document.querySelectorAll("#grid .tile").length,
-  videos: document.querySelectorAll("#grid .tile.vid").length,
+  // A clip with a preview frame is an image tile wearing a play badge; only one
+  // without a preview falls back to the bare `.vid` marker.
+  videos: document.querySelectorAll("#grid .tile .play").length,
+  bare: document.querySelectorAll("#grid .tile.vid").length,
+  thumbs: document.querySelectorAll("#grid .tile img").length,
   help: document.getElementById("ghelp").textContent.slice(0, 60)
 }));
 check("in-app album lists both captures", album.tiles === 2 && album.videos === 1, JSON.stringify(album));
+check("the clip shows a preview rather than a placeholder",
+  album.bare === 0 && album.thumbs === 2, JSON.stringify(album));
 
 // Tracking must be idle while an overlay covers the stage.
 const idle = await page.evaluate(() => new Promise(res => {
@@ -165,6 +189,18 @@ await page.click("#vdel");
 await page.waitForFunction(() => document.querySelectorAll("#grid .tile").length === 1, { timeout: 10000 }).catch(() => {});
 const afterDel = await page.evaluate(() => document.querySelectorAll("#grid .tile").length);
 check("delete removes it from the album", afterDel === 1, "tiles=" + afterDel);
+
+// A deleted clip must take its preview with it, or the album quietly fills up
+// with orphans nobody can see or remove. The tile deleted just above was the
+// clip, so its preview should have gone with it.
+//
+// Asked from Node rather than from the page: media is served `immutable`, so the
+// browser answers 200 out of its own cache long after the file is gone. That is
+// correct caching and a useless test.
+if (clip && clip.poster) {
+  const orphan = await fetch(BASE + clip.poster, { cache: "no-store" });
+  check("deleting a clip removes its preview too", orphan.status === 404, "poster fetch " + orphan.status);
+}
 
 /* ---------------- gallery.html ---------------- */
 log("\n--- gallery.html ---");

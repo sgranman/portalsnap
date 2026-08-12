@@ -182,7 +182,10 @@
   }
   #grid {
     flex: 1; min-height: 0; width: 100%; overflow-y: auto;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    /* min(46%, …) so a narrow phone still gets two columns: a fixed 210px
+       minimum cannot fit two across 390px and collapses to one full-width tile
+       per row, which reads as one long stack rather than a gallery. */
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(min(46%, 200px), 1fr));
     gap: 12px; align-content: start;
   }
   #grid .tile {
@@ -195,6 +198,12 @@
   #grid .tile.vid {
     display: flex; align-items: center; justify-content: center;
     font-size: 46px; background: #241f4d;
+  }
+  /* Sits over the preview frame so a clip still reads as a clip. */
+  #grid .tile .play {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 40px; color: #fff; text-shadow: 0 2px 10px rgba(0,0,0,.7);
+    background: rgba(0,0,0,.18); pointer-events: none;
   }
   #grid .tile .when {
     position: absolute; left: 0; right: 0; bottom: 0;
@@ -1307,6 +1316,15 @@ function finishRec() {
   // Only now is it safe to drop the canvas track — stopping it earlier can
   // truncate the tail of the clip.
   if (recTrack) { try { recTrack.stop(); } catch (e) {} recTrack = null; }
+
+  // The last composited frame becomes the clip's preview. Taken here because
+  // this is the one moment it exists for free: recovering it later means
+  // downloading the clip and decoding a frame, which is exactly what a gallery
+  // full of video tiles should not have to do.
+  let poster = null;
+  if (recCanvas) {
+    try { poster = recCanvas.toDataURL("image/jpeg", 0.72); } catch (e) {}
+  }
   recCanvas = recCtx = null;
 
   // Park the audio graph until the next clip. A connected worklet keeps running
@@ -1320,7 +1338,7 @@ function finishRec() {
   recorder = null;
   if (!blob.size) return hint("That clip came out empty");
 
-  showReview({ kind: "video", blob, ext: recMime.indexOf("mp4") >= 0 ? "mp4" : "webm" });
+  showReview({ kind: "video", blob, poster, ext: recMime.indexOf("mp4") >= 0 ? "mp4" : "webm" });
 }
 
 el("record").onclick = () => (recording ? stopRec() : startRec());
@@ -1386,6 +1404,18 @@ el("keep").onclick = async () => {
     });
     const out = await res.json().catch(() => ({}));
     if (!res.ok || !out.ok) throw new Error(out.error || ("server said " + res.status));
+
+    // The preview is a nicety, not part of the save: a clip that is safely
+    // stored must not be reported as failed because its thumbnail wasn't.
+    if (pending.poster && out.name) {
+      try {
+        const jpg = await (await fetch(pending.poster)).blob();
+        await fetch("/media?ext=jpg&for=" + encodeURIComponent(out.name), {
+          method: "POST", headers: { "Content-Type": "image/jpeg" }, body: jpg
+        });
+      } catch (err) { console.warn("poster upload failed:", (err && err.message) || err); }
+    }
+
     el("keep").textContent = "Saved ✓";
     say("It's in Photos now", "good");
   } catch (err) {
@@ -1471,15 +1501,25 @@ function drawGrid(items) {
   }
   for (const it of items) {
     const tile = document.createElement("div");
-    tile.className = "tile" + (it.kind === "video" ? " vid" : "");
-    if (it.kind === "video") {
+    // A clip with a preview is an image tile with a play badge over it; only one
+    // without falls back to the bare marker. No <video> either way — a grid of
+    // decoders would flatten this device.
+    const preview = it.kind === "video" ? it.poster : it.url;
+    tile.className = "tile" + (it.kind === "video" && !preview ? " vid" : "");
+    if (!preview) {
       tile.textContent = "▶";
     } else {
       const img = document.createElement("img");
       img.loading = "lazy";
       img.alt = "";
-      img.src = it.url;
+      img.src = preview;
       tile.appendChild(img);
+      if (it.kind === "video") {
+        const play = document.createElement("div");
+        play.className = "play";
+        play.textContent = "▶";
+        tile.appendChild(play);
+      }
     }
     const cap = document.createElement("div");
     cap.className = "when";

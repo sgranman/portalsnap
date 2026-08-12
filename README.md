@@ -87,6 +87,19 @@ snaps live on the home server rather than the device:
 | `GET /media/<name>` | Serves the file, streamed, with `Range` support so clips are scrubbable. Only server-minted names resolve. |
 | `DELETE /media/<name>` | Removes it. |
 
+A clip is stored with a **preview frame** beside it, under the clip's own name with a `.jpg`
+extension — `vid-…-a1b2.mp4` is previewed by `vid-…-a1b2.jpg`. Deriving the name means there is
+no second namespace to keep in step, and the `vid-` prefix already tells a preview apart from a
+photo, which is always `pic-`. `POST /media?ext=jpg&for=<clip>` stores one, `GET /media/list`
+attaches it to its clip as `poster` rather than listing it as an entry of its own, and deleting
+a clip deletes it too.
+
+The frame is grabbed from the composited canvas at the moment recording stops, which is the one
+moment it exists for free — recovering it later means downloading the clip and decoding a frame,
+which is exactly what a gallery full of video tiles should not have to do. Uploading it is
+deliberately not part of the save: a clip that is safely stored is never reported as failed
+because its thumbnail wasn't.
+
 Two front ends read that API:
 
 - **In-app album** (the 🖼️ button) — for looking at snaps on the Portal itself. Tracking
@@ -94,7 +107,15 @@ Two front ends read that API:
   and inference would just compete with the video decoder.
 - **`gallery.html`** — open it on a phone or laptop, where saving *does* work. **Save**
   goes through the share sheet when the browser has one (on iOS that's "Save Image" /
-  "Save Video", straight into the camera roll) and falls back to a plain download.
+  "Save Video", straight into the camera roll) and falls back to a plain download. It also
+  **backfills previews** for clips recorded before the app started saving them: it decodes one
+  frame, one clip at a time, and posts it back — so the capable device does the work and the
+  Portal's own album gets the thumbnails without ever decoding video itself.
+
+Both grids size their columns with `minmax(min(46%, 210px), 1fr)`. A fixed 210px minimum cannot
+fit two columns across a 390px phone, so it collapsed to one full-width tile per row — which
+reads as one long stack rather than a gallery. Neither of them had a *layout* problem on the
+desktop it was written on.
 
 `media/` is gitignored and sits inside the bind mount, so it survives redeploys.
 

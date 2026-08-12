@@ -43,6 +43,13 @@ const UPLOAD_EXT = { jpg: "pic", png: "pic", webm: "vid", mp4: "vid" };
 // is not ours and is not served or deleted.
 const MEDIA_NAME = /^(pic|vid)-[0-9TZ-]+-[a-z0-9]{4}\.(jpg|png|webm|mp4)$/;
 
+// A clip's preview frame is stored beside it under the clip's own name with a
+// .jpg extension — `vid-…-a1b2.mp4` is previewed by `vid-…-a1b2.jpg`. Deriving
+// it means there is no second namespace to keep in step, and the `vid-` prefix
+// already distinguishes a preview from a photo, which is always `pic-`.
+const posterFor = name => name.replace(/\.(webm|mp4)$/, ".jpg");
+const isPoster = name => /^vid-/.test(name) && name.endsWith(".jpg");
+
 // A 30s clip at the app's 2.5Mbps cap is ~10MB. This is a runaway guard, and
 // it sits under the 100MB body limit on a Cloudflare quick tunnel.
 const MAX_UPLOAD = 64 * 1024 * 1024;
@@ -166,11 +173,21 @@ function receiveMedia(req, res, url) {
     return send(res, 400, "application/json", JSON.stringify({ error: "unsupported type" }));
   }
 
+  // `?for=<clip>` stores this upload as that clip's preview frame rather than as
+  // an album entry of its own. The name is derived from the clip, never taken
+  // from the client, so a poster cannot land anywhere unexpected.
+  const forClip = url.searchParams.get("for");
+  if (forClip !== null) {
+    if (ext !== "jpg" || !MEDIA_NAME.test(forClip) || !/^vid-/.test(forClip)) {
+      return send(res, 400, "application/json", JSON.stringify({ error: "bad poster target" }));
+    }
+  }
+
   // Cheap next to an upload, and it keeps a wiped or freshly remounted volume
   // from silently turning every save into an error.
   try { fs.mkdirSync(MEDIA, { recursive: true }); } catch (e) {}
 
-  const name = mintName(ext);
+  const name = forClip ? posterFor(forClip) : mintName(ext);
   const dest = path.join(MEDIA, name);
   // Write to .part and rename: a listing must never show a half-uploaded file.
   const tmp = dest + ".part";
@@ -212,17 +229,23 @@ function listMedia(res) {
   fs.readdir(MEDIA, (err, names) => {
     // A missing album is an empty album, not a server error.
     if (err) return send(res, 200, "application/json", JSON.stringify({ items: [] }));
+    const kept = names.filter(n => MEDIA_NAME.test(n));
+    const posters = new Set(kept.filter(isPoster));
     const items = [];
-    for (const n of names.filter(n => MEDIA_NAME.test(n))) {
+    for (const n of kept) {
+      if (posters.has(n)) continue;          // a preview is part of its clip, not an entry
       try {
         const st = fs.statSync(path.join(MEDIA, n));
-        items.push({
+        const video = n.startsWith("vid-");
+        const item = {
           name: n,
           url: "/media/" + n,
-          kind: n.startsWith("vid-") ? "video" : "photo",
+          kind: video ? "video" : "photo",
           size: st.size,
           at: st.mtime.toISOString()
-        });
+        };
+        if (video && posters.has(posterFor(n))) item.poster = "/media/" + posterFor(n);
+        items.push(item);
       } catch (e) { /* deleted between readdir and stat */ }
     }
     items.sort((a, b) => (a.at < b.at ? 1 : -1));   // newest first
@@ -237,6 +260,9 @@ function deleteMedia(res, url) {
   }
   fs.unlink(path.join(MEDIA, name), err => {
     if (err) return send(res, 404, "application/json", JSON.stringify({ error: "not found" }));
+    // The preview goes with the clip, or the album accumulates orphans nobody
+    // can see or remove.
+    if (/^vid-/.test(name)) fs.unlink(path.join(MEDIA, posterFor(name)), () => {});
     console.log("deleted media/" + name);
     send(res, 200, "application/json", JSON.stringify({ ok: true }));
   });
