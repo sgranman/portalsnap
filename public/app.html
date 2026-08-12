@@ -989,13 +989,16 @@ const tierOf = f => (f && f.needsSegment ? "segment" : f && f.needsMesh ? "mesh"
 async function selectTracker(filter) {
   const want = tierOf(filter);
   if (want === trackerMode || trackerBroken) return;
-  hint(want === "mesh" ? "Fetching the puppy…"
-       : want === "segment" ? "Finding you…" : "Getting ready…", 2500);
+  // Named after the filter that was actually tapped. This said "Fetching the
+  // puppy…" for every mesh-tier filter, which was true when the puppy was the
+  // only one and has been wrong for Kitty, Royal and Big Head ever since.
+  hint(want === "segment" ? "Off to the " + filter.name + "…"
+                          : "Getting " + filter.name + " ready…", 2500);
   try {
     await startTracker(want);
   } catch (err) {
     trackerBroken = "" + ((err && err.message) || err);
-    hint("That filter is having a nap", 2500);
+    hint(filter.name + " is having a nap", 2500);
   }
 }
 

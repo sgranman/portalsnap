@@ -106,8 +106,8 @@ function perEar(ctx, face, fn, pull) {
 /* ------------------------------- Dog ------------------------------- */
 
 const dog = {
-  // The only mesh-tier filter: the tongue keys off jawOpen, and blendshapes
-  // exist only in mesh mode. Costs ~17fps tracking instead of 30.
+  // Mesh tier: the tongue keys off jawOpen, and blendshapes exist only there.
+  // Kitty, Royal and Big Head are on it too now.
   id: "dog", name: "Puppy", emoji: "🐶", needsMesh: true, voice: 0.78,
   draw(ctx, face, t) {
     inFaceSpace(ctx, face, c => {

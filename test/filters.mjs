@@ -380,6 +380,32 @@ const scenePaints = await paints(1000);
 check("skydive: animates at the render rate", scenePaints >= 24, "paints in 1s: " + scenePaints);
 await setJaw(0.45);
 
+// ---- Loading labels ----
+//
+// The hint shown while a model loads names the filter that was tapped. It used
+// to say "Fetching the puppy…" for every mesh-tier filter, which was true when
+// the puppy was the only one on that tier and wrong for the three that followed.
+// It only appears when the tier actually changes, so each case swaps tiers first.
+const hintNow = () => p.evaluate(() => document.getElementById("hint").textContent);
+for (const [name, expected] of [
+  ["Puppy", "Getting Puppy ready…"],
+  ["Kitty", "Getting Kitty ready…"],
+  ["Royal", "Getting Royal ready…"],
+  ["Big Head", "Getting Big Head ready…"],
+  ["Beach", "Off to the Beach…"],
+  ["Moon", "Off to the Moon…"]
+]) {
+  await pickFilter("Cool");            // back to the fast tier, so the next pick swaps
+  await sleep(250);
+  await pickFilter(name);
+  await sleep(120);
+  const got = await hintNow();
+  check("loading " + name + " says so", got === expected, JSON.stringify(got));
+  await sleep(400);
+}
+await pickFilter("None");
+await sleep(300);
+
 // Every filter has to draw without throwing — including the mesh-tier one,
 // which swaps trackers on selection.
 for (const name of ["Puppy", "Kitty", "Cool", "Royal", "Googly", "Fancy", "Big Head", "Skydive"]) {
