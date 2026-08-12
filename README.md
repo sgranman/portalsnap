@@ -112,10 +112,26 @@ Two front ends read that API:
   frame, one clip at a time, and posts it back — so the capable device does the work and the
   Portal's own album gets the thumbnails without ever decoding video itself.
 
-Both grids size their columns with `minmax(min(46%, 210px), 1fr)`. A fixed 210px minimum cannot
-fit two columns across a 390px phone, so it collapsed to one full-width tile per row — which
-reads as one long stack rather than a gallery. Neither of them had a *layout* problem on the
-desktop it was written on.
+### Two ways an album can look like a stack
+
+Both were reported as "the images are stacked on top of each other", and they were unrelated.
+
+**On a phone, the grid collapsed to one column.** `minmax(210px, 1fr)` cannot fit two columns
+across 390px, so every tile went full width. It is `minmax(min(46%, 210px), 1fr)` now: two
+columns on a phone, the same five on a desktop.
+
+**In the app, the tiles overlapped each other** — cascading down each column like a fanned deck
+— and only once the album was long enough to scroll. A tile's height comes from its
+`aspect-ratio`, which depends on the column width, which depends on whether a scrollbar is
+present; when the container genuinely overflows, Chrome breaks that circularity by leaving the
+ratio out of the row's intrinsic size. Rows then collapsed to the caption's line box: **14px
+under a 135px tile**. `grid-auto-rows: max-content` tells the rows to measure their contents and
+restores the 134.5px they should always have had.
+
+Eight snaps looked perfect and ninety-six were unusable, which is why it survived a screenshot
+review — so `test/album.mjs` seeds forty, checks the container really overflows before
+asserting anything, and then requires that no tile overlaps the one below it. Without the fix it
+reports a 70px overlap on a 135px tile.
 
 `media/` is gitignored and sits inside the bind mount, so it survives redeploys.
 

@@ -33,6 +33,10 @@
        minimum cannot fit two across 390px and collapses to one full-width tile
        per row, which reads as one long stack rather than a gallery. */
     display: grid; grid-template-columns: repeat(auto-fill, minmax(min(46%, 210px), 1fr)); gap: 12px;
+    /* Not strictly needed here — this page scrolls as a whole rather than in a
+       fixed-height box — but the same aspect-ratio rows are one `overflow` away
+       from collapsing, and the in-app album proved how that looks. */
+    grid-auto-rows: max-content;
   }
   .tile {
     position: relative; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden;

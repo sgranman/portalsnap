@@ -187,6 +187,15 @@
        per row, which reads as one long stack rather than a gallery. */
     display: grid; grid-template-columns: repeat(auto-fill, minmax(min(46%, 200px), 1fr));
     gap: 12px; align-content: start;
+    /* Rows must be told to measure their contents. A tile's height comes from
+       its aspect-ratio, which depends on the column width, which depends on
+       whether a scrollbar is present — and once this container actually
+       overflows, Chrome breaks that circularity by leaving the ratio out of the
+       row's intrinsic size. Rows then collapsed to the caption's line box, 14px
+       against a 135px tile, and every tile overlapped the ones below it.
+       Invisible until the album was long enough to scroll: eight snaps looked
+       perfect, ninety-six stacked like a fanned deck of cards. */
+    grid-auto-rows: max-content;
   }
   #grid .tile {
     position: relative; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden;
