@@ -10,6 +10,7 @@ importScripts("./vendor/mediapipe/vision_bundle.js", "./anchors.js");
 
 let detector = null;
 let mode = "fast";   // "fast" = blazeface keypoints, "mesh" = full landmarks
+let maxFaces = 1;    // how many people this tier will follow at once
 let clock = 0;       // VIDEO mode requires strictly increasing timestamps
 
 self.onmessage = async (e) => {
@@ -19,9 +20,10 @@ self.onmessage = async (e) => {
     try {
       const t0 = performance.now();
       if (detector) { detector.close(); detector = null; }
-      detector = await self.Anchors.createDetector(self.Vision, msg.mode || "fast");
       mode = msg.mode || "fast";
-      self.postMessage({ type: "ready", mode, loadMs: Math.round(performance.now() - t0) });
+      maxFaces = msg.maxFaces || self.Anchors.FACE_CAP[mode] || 1;
+      detector = await self.Anchors.createDetector(self.Vision, mode, maxFaces);
+      self.postMessage({ type: "ready", mode, maxFaces, loadMs: Math.round(performance.now() - t0) });
     } catch (err) {
       self.postMessage({ type: "error", fatal: true, message: String((err && err.message) || err) });
     }
@@ -58,15 +60,15 @@ self.onmessage = async (e) => {
       return;
     }
 
-    let anchors = null;
+    let faces = [];
     try {
       const res = detector.detectForVideo(msg.bitmap, (clock += 34));
-      anchors = self.Anchors.toAnchors(res, mode);
+      faces = self.Anchors.toFaces(res, mode, maxFaces);
     } catch (err) {
       self.postMessage({ type: "error", fatal: false, message: String((err && err.message) || err) });
     } finally {
       msg.bitmap.close();   // free immediately; 2GB of RAM leaves no slack
     }
-    self.postMessage({ type: "result", anchors, inferMs: performance.now() - t0, seq: msg.seq });
+    self.postMessage({ type: "result", faces, inferMs: performance.now() - t0, seq: msg.seq });
   }
 };

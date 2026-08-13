@@ -25,6 +25,7 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 | | what it covers |
 |---|---|
 | `filters.mjs` | the drawing path, and *fit*: where the ink lands against the landmarks, still faces stop repainting, a lost face clears it, a throwing filter doesn't corrupt the context, and the two video-sampling filters repaint every frame |
+| `multiface.mjs` | two children at once: a sticker on each head and nothing in the gap, track identity surviving faces that move toward each other, the per-tier cap keeping the *nearest* faces, and one sky with two skydivers in it |
 | `render.mjs` | the render loop's 30Hz cap and its idle skip |
 | `e2e.mjs` | capture → upload → in-app album → delete, clip previews, and `gallery.html` |
 | `share.mjs` | the Send button against a browser that lies: refusal vs cancellation, link and clipboard fallbacks, and retiring itself |
@@ -35,7 +36,7 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 | `voice.mjs` | the encoder gets the pitch-shifted track, the ratio follows the filter, the graph parks when idle |
 | `voice-gc.mjs` | clips still contain sound after a forced garbage collection — see below |
 | `segment.mjs` | the segmentation tier with the **real** model: loads, swaps in and out, produces masks, composites, and a moon photo isn't a photo of the room |
-| `recdiag.mjs` | `recdiag.html`'s thirteen phases really configure what they claim to |
+| `recdiag.mjs` | `recdiag.html`'s fifteen phases really configure what they claim to |
 
 **The fake camera has no face in it.** That is why `filters.mjs` stubs the tracker worker
 instead — same three messages as `tracker.worker.js`, returning synthetic anchors the test
@@ -50,9 +51,15 @@ An earlier version of this stub used made-up coordinates for a perfectly motionl
 that single unrealistic detail hid two shipped bugs — no jitter to defeat the still-face
 threshold, no anatomy to catch ears on the cheeks.
 
-`recdiag.mjs` takes about three minutes and asserts on *structure*, not timings — it checks
+The stub lives in `facestub.mjs` so `filters.mjs` and `multiface.mjs` drive the same one and
+there is a single contract to keep in step with the worker. It takes `window.__extra` —
+`[{dx, dy, scale}]` — to put more people beside the first, and caps the list at the `maxFaces`
+the app asked for at init, exactly as `toFaces()` does on the device, so a test of the cap
+tests the tracker's rule rather than the app's backstop.
+
+`recdiag.mjs` takes about four minutes and asserts on *structure*, not timings — it checks
 that phase L really hides the video and shows the composite, that phase I really halves the
-canvas, and so on. The timings it prints are meaningless on a Mac, where every phase lands
+canvas, that N and O really run the mesh with one face and then two, and so on. The timings it prints are meaningless on a Mac, where every phase lands
 at 7ms; only the Portal can answer those.
 
 `voice-gc.mjs` forces a collection through CDP between clips and then decodes each saved file

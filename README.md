@@ -60,6 +60,9 @@ filters that need expressions or warps. A lower-resolution *capture* (640x480) s
   display rate with `shown` easing toward `target`. Alpha rises with distance — snappy on
   fast head movement, still on slow — the cheap half of a one-euro filter. The overlay
   hides if no face is seen for 800ms.
+- **Everyone in frame gets a filter**, up to three on the fast tier and two on the mesh.
+  Each is an independent track with its own smoothing, prediction and identity — see
+  [Two children at once](#two-children-at-once).
 - **The video is never drawn to canvas during preview.** It stays a `<video>` element the
   compositor handles, so we pay zero per-frame upload; only the transparent overlay is
   drawn. Compositing happens once, at capture — or once per camera frame while recording.
@@ -302,6 +305,68 @@ detection rate.
 Both are heavier than a sticker. Worth watching `detect` on the HUD while they are on; `paint`
 will also read higher for any mesh filter, because a repaint fires when any tracked point
 clears the deadband and the dense tier tracks 22 points where blazeface tracks 6.
+
+## Two children at once
+
+The app followed one face. Blazeface had been finding all of them the whole time —
+`toAnchors()` read `detections[0]` and discarded the rest — so the second child was being
+detected and thrown away, at no saving.
+
+**What it costs, per tier.** The fast tier gets multiple faces for nothing: they come out of
+the single pass it was already making, and only the drawing is repeated. The mesh tier runs a
+landmark pass per face on a budget that is already ~57ms for one, so it is capped lower. The
+segmenter never had this problem — its mask covers whoever is in the picture.
+
+| tier | faces | what a second face costs |
+|---|---|---|
+| fast (blazeface) | **3** | one more set of stickers to draw |
+| mesh (landmarker) | **2** | a second landmark pass, and only while a second face is in frame |
+| segment | n/a | nothing — the mask is of people, not faces |
+
+`FACE_CAP` in `anchors.js` is the single source of those numbers; the worker, the landmarker's
+`numFaces` and the app's track limit all read it. The HUD line `faces  2 / 3` reports how many
+are being followed against what the running tier will carry, which is the number to read
+against `infer` when a second child sits down — this is a per-face cost that no measurement
+taken alone can show.
+
+**Which face is whose.** The tracker answers *where the faces are* and never *whose face this
+is*: it returns a fresh unordered list every detection. Everything that only means something
+per person — the smoothed `shown` anchors, the velocity estimate, its confidence, and a
+filter's own state — has to be attached to a person, and the app is what decides who that is.
+Get it wrong and the crown hops between two heads.
+
+Each detection is matched to the nearest existing track, nearest pair first, gated at 1.5x that
+face's own inter-eye distance — about a head width. Greedy is not a concession at this size:
+three faces is nine numbers, and the only arrangement it mis-assigns is two faces that have
+each moved closer to the other's last position than to their own, which is two children
+swapping seats inside one detection interval. A track survives 500ms without a match, so a
+missed detection does not blink a sticker off, but a child who leaves takes their filter with
+them well before the 800ms the whole overlay waits on.
+
+**What filters had to change.** Two, and both for the same reason — state that was per-app
+had to become per-person or per-picture:
+
+- **Googly** parked its pupil velocity in module variables. With two faces the second draw
+  overwrote the first every frame, so both pairs of eyes swung to whichever head was drawn
+  last. Keyed by `face.id` now, which is the track identity and stable for as long as that
+  person keeps being matched.
+- **Skydive** paints a sky, not a sticker. Drawn once per face it would have painted its sky
+  over the previous jumper. It is split into a `scene(ctx, faces, t)` — sky and clouds, painted
+  once — and a per-face `draw`, so two children get two skydivers in one sky. Each takes an
+  equal slot of the frame in the order they are actually sitting (`face.rank` of `face.count`,
+  left to right), shrinking and steering less far as they crowd. Alone, the maths collapses to
+  exactly the single skydiver that was there before.
+
+Big Head needed nothing: it already clipped and zoomed around one head, so it repeats per face.
+The stickers needed nothing either — face space was already per face.
+
+**One microphone, one voice.** A filter's pitch follows the nearest face, by inter-eye
+distance: the person closest to the camera is the likeliest one talking, and there is only one
+mic to shift.
+
+`test/multiface.mjs` covers it, including the two claims that pixels cannot make on their own —
+that ids survive two faces moving toward each other, and that the cap keeps the nearest faces
+rather than the first ones reported.
 
 ## Somewhere else entirely
 
@@ -556,10 +621,17 @@ measures cost, it doesn't keep video. The page prints its own verdict, and the r
 stays on screen if the POST fails.
 
 That was the first version. What it found sent the investigation somewhere else, so the page
-was rewritten around the preview instead: it now runs **thirteen** phases in about three
-minutes — A–H decomposing the preview layer by layer, and I–M testing the candidate fixes.
-The table above is kept because the numbers under it are still the reason recording is not
-where the cost is.
+was rewritten around the preview instead: it now runs **fifteen** phases in about four
+minutes — A–H decomposing the preview layer by layer, I–M testing the candidate fixes, and
+**N–O pricing a second face on the mesh tier**. The table above is kept because the numbers
+under it are still the reason recording is not where the cost is.
+
+N and O are the only rows that swap the tracker, and they are only meaningful against each
+other: both run the mesh with the app's own preview settings, N asking for one face and O
+for two. Run as-is, with one person in front of the camera, they answer whether asking for a
+second face taxes a session that never has one. Run again with two people in shot, O prices
+the second landmark pass itself. Every row records which tracker produced it, because a mesh
+row read as a blazeface row is exactly the mistake that costs a trip to the device.
 
 ### What it found
 
@@ -802,6 +874,14 @@ Everything asked for works and is deployed: photos and clips save to the server,
 1280x720 H.264 with AAC audio, and `gallery.html` gets them into a phone's camera roll.
 What follows is tuning of the sticker lag, not the feature.
 
+**One number is outstanding**, and it is the only unmeasured thing here: what a second face
+costs the mesh tier on the device. The fast tier's is known to be nothing — blazeface was
+already finding every face and the extra ones were being discarded. The mesh runs a landmark
+pass per face, and `numFaces: 2` is now asked for whenever a mesh filter is on. Whether that
+taxes a session with only one child in front of it is what `recdiag.html` phases **N and O**
+exist to answer; the HUD's `faces  n / m` line reports the same thing live. Until those are
+read on the Portal, treat the mesh tier's multi-face cost as unknown rather than free.
+
 **Performance budget as measured**, blazeface at 320x180 in the worker:
 
 | | `infer` | `detect` |
@@ -870,7 +950,7 @@ Three unknowns decide the entire architecture, and only the device can answer th
 | `/gallery.html` | the album, for a phone or laptop where saving actually works |
 | `/probe.html` | the original capability probe |
 | `/sharetest.html` | what this device can and cannot share, and where |
-| `/recdiag.html` | the thirteen-phase performance harness |
+| `/recdiag.html` | the fifteen-phase performance harness |
 | `/bench.html`, `/track.html` | the tracker sweeps that chose the models |
 
 The root used to serve the probe, which was right for the first week and confusing ever

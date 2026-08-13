@@ -3,6 +3,7 @@
 // worker instead, feeding the app synthetic anchors it can drive on demand —
 // a still face, a moving face, or no face at all — and then asserts on pixels.
 import puppeteer from "puppeteer-core";
+import { installFaceStub } from "./facestub.mjs";
 
 const CHROME = process.env.CHROME ||
   "/Users/you/.cache/puppeteer/chrome/mac_arm-150.0.7871.24/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
@@ -33,67 +34,9 @@ p.on("console", m => {
 await p.setViewport({ width: 1280, height: 644 });
 
 // Replaces the tracker with a controllable one. Same message contract as
-// tracker.worker.js: init -> ready, frame -> result.
-await p.evaluateOnNewDocument(() => {
-  // The face is MediaPipe's own canonical model, orthographically projected —
-  // the geometry the tracker was trained to report, so a filter that fits this
-  // fits a person. Twenty-two of its 468 vertices, taken from
-  // canonical_face_model.obj (CC-BY 4.0), in canonical units: x right, y up,
-  // z out of the face.
-  const CANON = {
-    eyeR: [-4.446, 2.664], eyeL: [4.446, 2.664],
-    nose: [0.000, -1.127], mouth: [0.000, -3.994],
-    earR: [-7.664, 0.673], earL: [7.664, 0.673],
-    headTop: [0.000, 8.262], skullR: [-5.133, 7.486], skullL: [5.133, 7.486],
-    templeR: [-7.743, 2.365], templeL: [7.743, 2.365],
-    browR: [-3.987, 5.109], browL: [3.987, 5.109],
-    chin: [0.000, -9.403], jawR: [-5.941, -6.224], jawL: [5.941, -6.224],
-    noseUnder: [0.000, -2.089], nostrilR: [-1.406, -1.714], nostrilL: [1.406, -1.714],
-    lipBottom: [0.000, -4.542], mouthR: [-2.456, -4.343], mouthL: [2.456, -4.343]
-  };
-  const CORE = ["eyeR", "eyeL", "nose", "mouth", "earR", "earL"];
-  const SCALE = 18, CXP = 640, CYP = 331, W = 1280, H = 720;
-  // Where a landmark lands in the frame, for the fit assertions to compare against.
-  window.__at = k => ({
-    x: (CXP + CANON[k][0] * SCALE) / W,
-    y: (CYP - CANON[k][1] * SCALE) / H
-  });
-
-  // `jitterPx` reproduces the thing a fake camera cannot: a real tracker never
-  // reports the same point twice, so "still" in the app means "moving by the
-  // noise floor". A test with a perfectly motionless face passes on a threshold
-  // far too tight to ever fire on the device.
-  window.__face = { mode: "still", phase: 0, jitterPx: 0, dense: true, jawOpen: 0.45 };
-  window.__anchors = () => {
-    const f = window.__face;
-    if (f.mode === "gone") return null;
-    // A drift big enough to be visible, applied only in "move".
-    const d = f.mode === "move" ? Math.sin((f.phase += 0.25)) * 0.06 : 0;
-    const n = () => (f.jitterPx ? (Math.random() - 0.5) * 2 * f.jitterPx / 1280 : 0);
-    const a = { blendshapes: f.dense ? { jawOpen: f.jawOpen } : {}, dense: !!f.dense };
-    for (const k in CANON) {
-      if (!f.dense && CORE.indexOf(k) < 0) continue;
-      const p = window.__at(k);
-      a[k] = { x: p.x + d + n(), y: p.y + n() };
-    }
-    return a;
-  };
-  window.Worker = class {
-    postMessage(m) {
-      if (m.type === "init") {
-        setTimeout(() => this.onmessage && this.onmessage({ data: { type: "ready", mode: m.mode, loadMs: 1 } }), 5);
-        return;
-      }
-      if (m.type === "frame") {
-        if (m.bitmap && m.bitmap.close) m.bitmap.close();
-        setTimeout(() => this.onmessage && this.onmessage({
-          data: { type: "result", anchors: window.__anchors(), inferMs: 12, seq: m.seq }
-        }), 12);
-      }
-    }
-    terminate() {}
-  };
-});
+// tracker.worker.js: init -> ready, frame -> result. Lives in facestub.mjs so
+// the multi-face test drives the same one.
+await installFaceStub(p);
 
 await p.goto("http://127.0.0.1:" + PORT + "/app.html", { waitUntil: "domcontentloaded" });
 await p.waitForFunction(() => document.getElementById("loader").classList.contains("hidden"), { timeout: 30000 });

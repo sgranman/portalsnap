@@ -14,7 +14,7 @@ p.on("pageerror", e => { console.log("  [pageerror] " + e.message); fail++; });
 await p.setViewport({ width: 1280, height: 644 });
 await p.goto("http://127.0.0.1:" + PORT + "/recdiag.html", { waitUntil: "domcontentloaded" });
 await p.click("#go");
-console.log("  running thirteen phases (~3 min)…");
+console.log("  running fifteen phases (~4 min)…");
 
 const seen = [];
 const watch = setInterval(async () => {
@@ -41,7 +41,7 @@ check("report reached the server", /^Sent/.test(st), st);
 
 const data = await p.evaluate(() => JSON.parse(document.getElementById("raw").textContent));
 const row = id => data.rows.find(r => r.id === id) || {};
-check("all thirteen phases reported", data.rows.length === 13, "rows=" + data.rows.length);
+check("all fifteen phases reported", data.rows.length === 15, "rows=" + data.rows.length);
 check("every phase produced samples", data.rows.every(r => r.samples > 0),
   JSON.stringify(data.rows.map(r => r.id + ":" + r.samples)));
 check("no phase errors", data.rows.every(r => !r.errors.length),
@@ -71,6 +71,17 @@ check("a capped composite really composites less", row("K").compN > 0 && row("K"
 check("L reports how many frames it composited", typeof row("L").compN === "number", "L compN=" + row("L").compN);
 check("M caps the composite at the rate the app ships", row("M").compHz === 20 && row("M").compN > row("K").compN,
   "K=" + row("K").compN + " M=" + row("M").compN);
+// N and O price the second face on the tier that pays for it. They are only
+// worth reading against each other, so each must really be the tracker it claims
+// — a mesh row that silently ran blazeface would look like a free second face.
+check("phases N and O run the mesh tier", row("N").tracker === "mesh" && row("O").tracker === "mesh",
+  row("N").tracker + " / " + row("O").tracker);
+check("N asks for one face and O for two", row("N").maxFaces === 1 && row("O").maxFaces === 2,
+  row("N").maxFaces + " / " + row("O").maxFaces);
+check("every other phase is back on the fast tier",
+  data.rows.filter(r => r.id !== "N" && r.id !== "O").every(r => r.tracker === "fast"),
+  JSON.stringify(data.rows.map(r => r.id + ":" + r.tracker)));
+
 check("verdict names a dominant cost", /Dominant preview cost/.test(data.verdict || ""));
 check("verdict reads the rate curve", /Redraw rate/.test(data.verdict || ""));
 check("verdict judges the recording variations", /^K \(/m.test(data.verdict || ""));

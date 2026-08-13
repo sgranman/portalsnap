@@ -341,9 +341,25 @@ let segMask = null, segCanvas = null, segCtx = null, segShare = 0;
 let inFlight = false, seq = 0;
 let lastResultAt = 0, lastInferMs = 0, lastGrabMs = 0, detFps = 0, detTimes = [];
 
-// Smoothed anchors, in normalized coords. `target` is the latest detection,
-// `shown` is what we draw — it chases the target every render frame.
-let target = null, shown = null;
+// One entry per person the tracker is currently following. Everything that used
+// to be a single global — the latest detection, the smoothed copy being drawn,
+// the velocity estimate and its confidence — is per track, because two children
+// sitting side by side move independently and sharing any of it would drag one
+// child's hat toward the other's head.
+//
+//   { id, target, shown, vel, predConf, centre, lastAt }
+//
+// `id` is stable for as long as a face keeps being matched, which is what lets a
+// filter hold state per person: see the googly eyes, whose pupils swing from
+// each head's own motion.
+let tracks = [];
+let nextTrackId = 1;
+let maxFaces = 1;               // what the running tier will follow, from FACE_CAP
+
+// The test hook. `filters.mjs` and `multiface.mjs` drive synthetic faces through
+// a stubbed worker and need to assert on identity — that a hat stayed on the
+// same head — which no pixel measurement can show.
+window.__tracks = () => tracks.map(t => ({ id: t.id, x: t.centre.x, y: t.centre.y }));
 
 // Per-anchor velocity in normalized units per ms, smoothed across detections,
 // used to lead the target by the pipeline latency. See Anchors.project.
@@ -354,12 +370,27 @@ let target = null, shown = null;
 // from 10fps detections simply cannot follow a sharp reversal. Scaling the lead
 // by how well each new velocity agrees with the smoothed one keeps most of the
 // gain and erases both regressions: -14% / -5% / -1%.
-let vel = {}, predConf = 0;
 const PREDICT_ALPHA = 0.55;      // velocity smoothing across detections
 const PREDICT_CONF_ALPHA = 0.5;  // how fast confidence collapses on a reversal
 const PREDICT_CLAMP = 0.05;      // rail against noise spikes; normal motion never reaches it
 const PREDICT_MAX_MS = 140;      // never lead further than the worst latency seen
 const REACQUIRE_MS = 400;        // a gap this long means the face moved unseen
+
+// How long a track survives without being matched to a detection.
+//
+// Not zero, because a face that misses one detection has not left the room, and
+// a sticker that blinks off and on is worse than one that lags. Not the 800ms
+// the whole overlay waits on either: that hides everything when tracking dies,
+// while this decides when one person of several has gone, and a filter left on a
+// chair for most of a second is a visible ghost. Five hundred milliseconds is
+// about five missed detections at the recording rate.
+const TRACK_GONE_MS = 500;
+
+// How far a face may move between detections and still be recognised as the same
+// person, as a multiple of its own inter-eye distance — roughly one head width.
+// Two people would have to be closer to each other than to where they each just
+// were for this to pick wrong, which is two children swapping seats inside 60ms.
+const MATCH_GATE = 1.5;
 
 // One pixel of the tracker's 320-wide input, in normalized units — about 4px
 // across a 1280 frame, or 1% of a face's width. Anchors are not moved by less
@@ -446,56 +477,14 @@ function onResult(m) {
     return;
   }
 
-  if (m.anchors) {
-    // Velocity from consecutive detections. A long gap means the face was
-    // lost and whatever it was doing then says nothing about now.
-    const gap = now - lastResultAt;
-    if (!target || gap > REACQUIRE_MS) {
-      vel = {};
-      predConf = 0;
-    } else if (gap > 0) {
-      let agree = 0, judged = 0;
-      for (const k of KEYS) {
-        const a = target[k], b = m.anchors[k];
-        if (!a || !b) continue;
-        const vx = (b.x - a.x) / gap, vy = (b.y - a.y) / gap;
-        const p = vel[k];
-        if (p) {
-          // Direction agreement scaled by how much the speed changed: braking
-          // hard is as poor a basis for extrapolation as turning around.
-          const mv = Math.hypot(vx, vy), mo = Math.hypot(p.x, p.y);
-          if (mv > 0 && mo > 0) {
-            const cos = (vx * p.x + vy * p.y) / (mv * mo);
-            agree += Math.max(0, cos) * (Math.min(mv, mo) / Math.max(mv, mo));
-            judged++;
-          }
-        }
-        vel[k] = p
-          ? { x: p.x + (vx - p.x) * PREDICT_ALPHA, y: p.y + (vy - p.y) * PREDICT_ALPHA }
-          : { x: vx, y: vy };
-      }
-      // One confidence for the whole face: anchors move together, and six
-      // independent estimates would just be six ways to jitter.
-      if (judged) predConf += (agree / judged - predConf) * PREDICT_CONF_ALPHA;
-      else predConf = 0;
-    }
-
-    // How far the furthest anchor moved since the last detection. Read while
-    // sitting still, its median is the tracker's noise floor, which is the
-    // number EASE_DEADBAND has to clear — guessing at it was what made the
-    // still-face skip a no-op on the device.
-    if (target) {
-      let far = 0;
-      for (const k of KEYS) {
-        const a = target[k], b = m.anchors[k];
-        if (a && b) far = Math.max(far, Math.hypot(b.x - a.x, b.y - a.y));
-      }
-      moveMags.push(far);
-      if (moveMags.length > 90) moveMags.shift();
-    }
-
-    target = m.anchors;
-    lastResultAt = now;
+  if (m.faces) {
+    matchTracks(m.faces, now);
+    // Only a *sighting* counts as freshness, never merely a reply. The tracker
+    // now answers every frame whether or not anybody is there — an empty list is
+    // its answer for an empty room — so stamping this on arrival would leave the
+    // HUD reading "face yes" in front of a wall, and the segmenting filters read
+    // the same clock.
+    if (m.faces.length) lastResultAt = now;
   }
 
   // Re-arm the moment a result lands. Waiting for the next poll tick threw
@@ -506,16 +495,132 @@ function onResult(m) {
   schedulePump(0);
 }
 
+/* ------------------------- Who is who, frame to frame ------------------------- */
+
+// The tracker answers "where are the faces", never "whose face is this" — it
+// reports a fresh unordered list every detection, and MediaPipe is free to
+// return them in a different order each time. Deciding which of those is the
+// person who was wearing the crown last frame is this app's job, and getting it
+// wrong looks like the crown hopping between two children's heads.
+//
+// A face is placed by the midpoint of its eyes, which is the one point every
+// tier reports and the one least disturbed by an expression.
+const faceCentre = a => ({ x: (a.eyeR.x + a.eyeL.x) / 2, y: (a.eyeR.y + a.eyeL.y) / 2 });
+
+// Fold one detection into the track that owns it, carrying over everything that
+// only means something as a difference from the previous frame.
+function adopt(t, face, now) {
+  const gap = now - t.lastAt;
+
+  // Velocity from consecutive detections. A long gap means the face was lost and
+  // whatever it was doing then says nothing about now.
+  if (!t.target || gap > REACQUIRE_MS) {
+    t.vel = {};
+    t.predConf = 0;
+  } else if (gap > 0) {
+    let agree = 0, judged = 0;
+    for (const k of KEYS) {
+      const a = t.target[k], b = face[k];
+      if (!a || !b) continue;
+      const vx = (b.x - a.x) / gap, vy = (b.y - a.y) / gap;
+      const p = t.vel[k];
+      if (p) {
+        // Direction agreement scaled by how much the speed changed: braking
+        // hard is as poor a basis for extrapolation as turning around.
+        const mv = Math.hypot(vx, vy), mo = Math.hypot(p.x, p.y);
+        if (mv > 0 && mo > 0) {
+          const cos = (vx * p.x + vy * p.y) / (mv * mo);
+          agree += Math.max(0, cos) * (Math.min(mv, mo) / Math.max(mv, mo));
+          judged++;
+        }
+      }
+      t.vel[k] = p
+        ? { x: p.x + (vx - p.x) * PREDICT_ALPHA, y: p.y + (vy - p.y) * PREDICT_ALPHA }
+        : { x: vx, y: vy };
+    }
+    // One confidence for the whole face: anchors move together, and six
+    // independent estimates would just be six ways to jitter.
+    if (judged) t.predConf += (agree / judged - t.predConf) * PREDICT_CONF_ALPHA;
+    else t.predConf = 0;
+  }
+
+  // How far the furthest anchor moved since the last detection. Read while
+  // sitting still, its median is the tracker's noise floor, which is the number
+  // EASE_DEADBAND has to clear — guessing at it was what made the still-face
+  // skip a no-op on the device. Every track feeds the one ring: it is a property
+  // of the tracker, not of a person.
+  if (t.target) {
+    let far = 0;
+    for (const k of KEYS) {
+      const a = t.target[k], b = face[k];
+      if (a && b) far = Math.max(far, Math.hypot(b.x - a.x, b.y - a.y));
+    }
+    moveMags.push(far);
+    if (moveMags.length > 90) moveMags.shift();
+  }
+
+  t.target = face;
+  t.centre = faceCentre(face);
+  t.lastAt = now;
+}
+
+// Nearest-first greedy assignment, gated by head width.
+//
+// Greedy is the right algorithm at this size rather than a concession: with at
+// most three faces the whole pairing is nine numbers, and the only arrangement
+// it mis-assigns is two faces that have each moved closer to the other's last
+// position than to their own — two children swapping places inside one detection
+// interval. The gate matters more than the search: without it, a face appearing
+// on the far side of the frame would be adopted by whichever track happened to
+// be nearest instead of starting its own.
+function matchTracks(faces, now) {
+  // Tracks nobody has seen for long enough are gone, not lagging. Dropped before
+  // matching so a new face is never handed a stale identity.
+  if (tracks.length) tracks = tracks.filter(t => now - t.lastAt < TRACK_GONE_MS);
+
+  const pairs = [];
+  for (let i = 0; i < faces.length; i++) {
+    const c = faceCentre(faces[i]);
+    const gate = Math.max(0.05, window.Anchors.eyeSpan(faces[i]) * MATCH_GATE);
+    for (let j = 0; j < tracks.length; j++) {
+      const d = Math.hypot(c.x - tracks[j].centre.x, c.y - tracks[j].centre.y);
+      if (d < gate) pairs.push({ d, i, j });
+    }
+  }
+  pairs.sort((a, b) => a.d - b.d);
+
+  const tookFace = [], tookTrack = [];
+  for (const p of pairs) {
+    if (tookFace[p.i] || tookTrack[p.j]) continue;
+    tookFace[p.i] = tookTrack[p.j] = true;
+    adopt(tracks[p.j], faces[p.i], now);
+  }
+
+  // Whoever is left is someone new. Appended rather than inserted, so the draw
+  // order stays the order people arrived in — a filter that overlaps two faces
+  // then keeps a stable z-order instead of flickering as they trade places.
+  for (let i = 0; i < faces.length; i++) {
+    if (tookFace[i]) continue;
+    if (tracks.length >= maxFaces) break;
+    const t = { id: nextTrackId++, target: null, shown: null, vel: {}, predConf: 0,
+                centre: faceCentre(faces[i]), lastAt: now };
+    adopt(t, faces[i], now);
+    tracks.push(t);
+  }
+}
+
 // Prefer the worker; fall back to main-thread inference rather than stranding
 // a child on a loading screen. The fallback blocks for ~23ms per detection,
 // which is worse but still usable.
 async function startTracker(mode) {
-  target = shown = null;
+  tracks = [];
   segMask = null;
   segShare = 0;
-  vel = {};
-  predConf = 0;
   inFlight = false;
+  // How many people the tier about to start will follow. Read before the
+  // detector is built, because both the worker and the landmarker need it at
+  // construction time.
+  maxFaces = window.Anchors.FACE_CAP[mode] || 1;
   if (forceBackend !== "main") {
     try {
       await startWorker(mode);
@@ -561,7 +666,7 @@ function startWorker(mode) {
     };
     w.onerror = ev => { w.terminate(); finish(reject, new Error(ev.message || "worker failed to load")); };
 
-    w.postMessage({ type: "init", mode });
+    w.postMessage({ type: "init", mode, maxFaces });
   });
 }
 
@@ -569,7 +674,7 @@ async function startMainThread(mode) {
   if (worker) { worker.terminate(); worker = null; }
   if (mainDetector) { mainDetector.close(); mainDetector = null; }
   const V = await import("./vendor/mediapipe/vision_bundle.mjs");
-  mainDetector = await window.Anchors.createDetector(V, mode);
+  mainDetector = await window.Anchors.createDetector(V, mode, maxFaces);
 }
 
 /* --------------------- Frame pump (one in flight) --------------------- */
@@ -611,7 +716,7 @@ async function pump() {
         const t0 = performance.now();
         const res = mainDetector.detectForVideo(bmp, (mainClock += 34));
         onResult({
-          anchors: window.Anchors.toAnchors(res, trackerMode),
+          faces: window.Anchors.toFaces(res, trackerMode, maxFaces),
           inferMs: performance.now() - t0
         });
       } else {
@@ -678,16 +783,23 @@ const KEYS = [
 // eases toward `target`. Alpha rises with distance: snappy on fast head
 // movement, still on slow — the cheap half of a one-euro filter.
 function ease(dt) {
+  for (const t of tracks) easeTrack(t, dt);
+}
+
+function easeTrack(t, dt) {
+  const target = t.target, shown = t.shown;
   if (!target) return;
-  if (!shown) { shown = JSON.parse(JSON.stringify(target)); return; }
+  if (!shown) { t.shown = JSON.parse(JSON.stringify(target)); return; }
 
   // Lead by the latency we can measure: the frame was grabbed `grab` ms before
-  // it went to the tracker, and inference took `infer` on top of that.
-  const lead = Math.min(PREDICT_MAX_MS, lastGrabMs + lastInferMs) * predConf;
+  // it went to the tracker, and inference took `infer` on top of that. The
+  // confidence is this track's own — one child holding still should not have
+  // their sticker flung about by another child's sudden turn.
+  const lead = Math.min(PREDICT_MAX_MS, lastGrabMs + lastInferMs) * t.predConf;
 
   for (const k of KEYS) {
     if (!target[k] || !shown[k]) continue;
-    const aim = window.Anchors.project(target[k], vel[k], lead, PREDICT_CLAMP);
+    const aim = window.Anchors.project(target[k], t.vel[k], lead, PREDICT_CLAMP);
     const dx = aim.x - shown[k].x, dy = aim.y - shown[k].y;
     const dist = Math.hypot(dx, dy);
     // Movement below the tracker's own input resolution cannot be movement: the
@@ -711,7 +823,12 @@ function ease(dt) {
 }
 
 // Pixel-space frame every filter draws against.
-function buildFace(a) {
+//
+// `id` is the track's, and it is part of the contract: a filter carrying state
+// between frames — the googly eyes' pupil swing is the one that does — must key
+// it by this rather than parking it in a module variable, which with two faces
+// would be one child's pupils driven by the other child's head.
+function buildFace(a, id) {
   const w = fx.width, h = fx.height;
   const eyeR = { x: a.eyeR.x * w, y: a.eyeR.y * h };
   const eyeL = { x: a.eyeL.x * w, y: a.eyeL.y * h };
@@ -741,6 +858,13 @@ function buildFace(a) {
   const yaw = Math.max(-1, Math.min(1, (nose.x - earMidX) / (earSpan / 2)));
 
   const face = {
+    id,
+    // Filled in by the caller once every face is built, because neither can be
+    // known from one face alone: `count` is how many people are in frame and
+    // `rank` is this one's place left to right. A filter that lays its art out
+    // across the frame rather than on a head — the skydiver — needs both to give
+    // each person their own room.
+    rank: 0, count: 1,
     cx, cy, angle, eyeDist,
     nose, mouth, earR, earL, earSpan, yaw,
     noseY: nose.y,
@@ -798,27 +922,39 @@ const STILL_EPS = 0.0005;    // normalized units, so 0.6px across a 1280 frame
 const ANIM_MIN_DT = 1000 / 15 - 1;
 
 // Compared against the last *painted* state rather than the previous frame, so
-// a slow drift still repaints once it adds up to something visible.
+// a slow drift still repaints once it adds up to something visible. One entry
+// per face that was on screen when it was painted, in the order they were drawn.
 let painted = null, paintedId = "", lastPaintAt = 0;
 
 // The pitch the current filter is asking for, kept for the HUD: a filter that
 // derives it from the face has no single number to report otherwise.
 let shownVoice = 1;
 
-function needsPaint(now) {
+function needsPaint(now, live) {
   if (!painted || paintedId !== active.id) return true;
   // A filter that takes the video samples live pixels, so its output changes
   // even when the face does not. Skipping those frames would freeze a stale
   // copy of the picture on screen — the one case where a still face still needs
-  // every frame drawn.
-  if (active.draw.length >= 4 || active.needsSegment) return true;
-  for (const k of KEYS) {
-    const a = painted[k], b = shown[k];
-    if (!a !== !b) return true;
-    if (a && (Math.abs(a.x - b.x) > STILL_EPS || Math.abs(a.y - b.y) > STILL_EPS)) return true;
+  // every frame drawn. A filter with a `scene` is in the same position: its
+  // backdrop animates whether or not anybody moves.
+  if (active.draw.length >= 4 || active.needsSegment || active.scene) return true;
+  // Somebody arrived or left. Cheapest possible check and the most common
+  // reason a second face needs a redraw at all.
+  if (painted.length !== live.length) return true;
+  for (let i = 0; i < live.length; i++) {
+    // Identity, not just count: two faces that traded track slots have to
+    // repaint even if the pixels would land in the same two places, because a
+    // filter keying state by id would now be drawing something different.
+    if (painted[i].id !== live[i].id) return true;
+    const was = painted[i].snap, is = live[i].shown;
+    for (const k of KEYS) {
+      const a = was[k], b = is[k];
+      if (!a !== !b) return true;
+      if (a && (Math.abs(a.x - b.x) > STILL_EPS || Math.abs(a.y - b.y) > STILL_EPS)) return true;
+    }
+    const pb = was.blendshapes, sb = is.blendshapes || {};
+    for (const k in sb) if (Math.abs((pb[k] || 0) - sb[k]) > 0.01) return true;
   }
-  const pb = painted.blendshapes, sb = shown.blendshapes || {};
-  for (const k in sb) if (Math.abs((pb[k] || 0) - sb[k]) > 0.01) return true;
   // Nothing moved. Whether there is still a reason to redraw depends on the
   // filter having a clock, which is read off its signature: a filter that
   // declares the time argument uses it. Keeping that in the signature rather
@@ -865,33 +1001,70 @@ function render() {
 
   const hidden = overlayUp();
   const fresh = now - lastResultAt < 800;   // hide the overlay if tracking drops
-  // Gated on `target`, not `shown`: `shown` is seeded by the first ease() call,
-  // so requiring it here meant a filter picked from a cold start could never
-  // begin drawing at all. A segmenting filter has no anchors at all and waits on
-  // a mask instead.
   const segTier = !!(active && active.needsSegment);
-  const wantDraw = !!(active && fresh && !hidden && (segTier ? segMask : target));
+
+  // Every track worth drawing this frame. A track earns its place by having
+  // been matched to a detection recently — its own clock, not the tracker's, so
+  // one child leaving the room takes their sticker with them while the other
+  // keeps theirs.
+  //
+  // ease() runs first because `shown` is seeded by its first call: gating on it
+  // before that meant a filter picked from a cold start could never begin
+  // drawing at all. A segmenting filter has no faces and waits on a mask instead.
+  let live = [];
+  if (active && !segTier && !hidden) {
+    ease(dt);
+    live = tracks.filter(t => t.shown && now - t.lastAt < TRACK_GONE_MS);
+  }
+  const wantDraw = !!(active && !hidden && (segTier ? (fresh && segMask) : live.length));
 
   if (wantDraw) {
-    if (!segTier) ease(dt);
-    if (needsPaint(now)) {
+    if (needsPaint(now, live)) {
       wipe();
-      // What the tracker knows: a face, or where the person is.
-      const f = segTier ? { mask: segMask, share: segShare, blendshapes: {} } : buildFace(shown);
+      // What the tracker knows: where the people are, or where the person is.
+      const faces = segTier ? [] : live.map(t => buildFace(t.shown, t.id));
+      if (faces.length > 1) {
+        // Left to right in the frame, so a filter spreading art across the
+        // picture can hand out slots in the order the children are actually
+        // sitting. Ranked through a sorted copy; `faces` itself stays in track
+        // order, which is the order people arrived and therefore a z-order that
+        // holds still while they move around each other.
+        faces.slice().sort((a, b) => a.cx - b.cx).forEach((f, i) => { f.rank = i; });
+        for (const f of faces) f.count = faces.length;
+      }
+
       // The video is handed to the filter as a fourth argument. Overlay and
       // video are the same size and share the stage's mirror, so pixels sampled
       // from one land in the right place on the other — which is what makes a
       // zoomed head or a face pasted onto a cartoon possible without a second
       // renderer.
-      try { active.draw(ctx, f, now, video); }
-      catch (e) { console.warn("filter", active.id, e); }
+      //
+      // One try around the whole set rather than one per face, deliberately: a
+      // filter that throws mid-draw leaves the context transformed, so carrying
+      // on to the next face would draw it into whatever frame the broken one
+      // left behind. Everyone is skipped for this frame and `wipe` puts it right
+      // for the next.
+      try {
+        if (segTier) {
+          active.draw(ctx, { mask: segMask, share: segShare, blendshapes: {} }, now, video);
+        } else {
+          // Art that belongs to the picture rather than to a head — a sky, a
+          // horizon — painted once however many people are in front of it.
+          if (active.scene) active.scene(ctx, faces, now, video);
+          for (const f of faces) active.draw(ctx, f, now, video);
+        }
+      } catch (e) { console.warn("filter", active.id, e); }
+
       // A filter may set the pitch from the face itself, so a head that grows
       // can drop the voice with it. Applied only while recording — nothing is
       // listening otherwise and the graph is suspended — but tracked either way,
       // so the HUD can show what the next clip would sound like.
-      shownVoice = voiceOf(active, f);
+      //
+      // One microphone, so one pitch: it follows the nearest face, the same
+      // person the camera is nearest to and the likeliest one talking.
+      shownVoice = voiceOf(active, nearest(faces));
       if (recording && active.voiceFrom) setVoice(shownVoice);
-      painted = segTier ? { blendshapes: {} } : snapshot(shown);
+      painted = live.map(t => ({ id: t.id, snap: snapshot(t.shown) }));
       paintedId = active.id;
       overlayDirty = true;
       lastPaintAt = now;
@@ -930,6 +1103,11 @@ function render() {
       "\njit     " + jitterPx().toFixed(1) + " px" +
       "\ndrawing " + (wantDraw ? "yes" : "no") +
       "\nface    " + (fresh ? "yes" : "no") +
+      // People being followed right now, against what this tier will carry.
+      // The mesh pays per face, so this is the line to read against `infer`
+      // when a second child sits down: it is the only way to see on the device
+      // what the second head actually costs.
+      "\nfaces   " + live.length + " / " + maxFaces +
       "\nmic     " + (stream && stream.getAudioTracks().length ? "yes" : "no") +
       // The pitch the next clip will record at, and whether the graph exists to
       // apply it — "1.42 (off)" means the shifter never came up and the clip
@@ -1014,6 +1192,15 @@ async function selectTracker(filter) {
 // themselves when they watch it back, which is the funnier half anyway.
 // A filter may state a fixed ratio, or derive one from the face — a head that
 // balloons when you open your mouth should sound like it.
+// The face closest to the camera, by inter-eye distance. Where one thing has to
+// be chosen from several people — the pitch of the one microphone — this is who
+// it follows.
+function nearest(faces) {
+  let best = null;
+  for (const f of faces) if (!best || f.eyeDist > best.eyeDist) best = f;
+  return best;
+}
+
 function voiceOf(f, face) {
   if (!f) return 1;
   if (f.voiceFrom && face) {

@@ -43,45 +43,80 @@
     mouthL: 291
   };
 
-  function toAnchors(res, mode) {
-    if (!res) return null;
+  // How many faces each tier will follow at once.
+  //
+  // Blazeface reports every face it finds in the one pass it was already making,
+  // so a second and third child cost nothing but the drawing. The mesh runs a
+  // separate landmark pass per face on top of a budget that is already ~57ms for
+  // one, so it stops at two — and that cost only arrives when a second face is
+  // actually in frame. The segmenter has no faces at all; its mask covers
+  // whoever is in the picture, however many that is.
+  const FACE_CAP = { fast: 3, mesh: 2, segment: 0 };
+
+  // Inter-eye distance, the cheapest honest proxy for how close a face is. Used
+  // to rank detections when more arrive than the tier will carry: the child
+  // leaning into the camera should keep their ears when a passer-by wanders
+  // through the back of the shot.
+  function eyeSpan(a) {
+    return Math.hypot(a.eyeL.x - a.eyeR.x, a.eyeL.y - a.eyeR.y);
+  }
+
+  // Every face in the result, biggest first, capped at `max`. Always an array —
+  // an empty one when nobody is there, which is what "no face" now means.
+  function toFaces(res, mode, max) {
+    if (!res) return [];
+    const cap = Math.max(1, max || 1);
+    const out = [];
 
     if (mode === "mesh") {
       const faces = res.faceLandmarks || [];
-      if (!faces.length) return null;
-      const lm = faces[0];
-      const a = { blendshapes: {}, dense: true };
-      for (const k in MESH) {
-        const p = lm[MESH[k]];
-        if (!p) return null;
-        a[k] = { x: p.x, y: p.y };
+      for (let i = 0; i < faces.length; i++) {
+        const lm = faces[i];
+        const a = { blendshapes: {}, dense: true };
+        let whole = true;
+        for (const k in MESH) {
+          const p = lm[MESH[k]];
+          if (!p) { whole = false; break; }
+          a[k] = { x: p.x, y: p.y };
+        }
+        if (!whole) continue;
+        // Named points rather than the raw 478: everything a filter draws
+        // against goes through the same smoothing, prediction and deadband as
+        // the six core anchors, and a flat mesh array could not. Fifteen extra
+        // points cost nothing to ease; 478 would have to be special-cased
+        // everywhere.
+        for (const k in MESH_EXTRA) {
+          const p = lm[MESH_EXTRA[k]];
+          if (p) a[k] = { x: p.x, y: p.y };
+        }
+        // Blendshapes are per face and parallel to the landmark list, so face 1
+        // must read index 1. Reading [0] for everyone is how one child's grin
+        // would open another child's mouth.
+        const bs = res.faceBlendshapes && res.faceBlendshapes[i];
+        if (bs) for (const c of bs.categories) a.blendshapes[c.categoryName] = c.score;
+        out.push(a);
       }
-      // Named points rather than the raw 478: everything a filter draws against
-      // goes through the same smoothing, prediction and deadband as the six
-      // core anchors, and a flat mesh array could not. Fifteen extra points cost
-      // nothing to ease; 478 would have to be special-cased everywhere.
-      for (const k in MESH_EXTRA) {
-        const p = lm[MESH_EXTRA[k]];
-        if (p) a[k] = { x: p.x, y: p.y };
+    } else {
+      const dets = res.detections || [];
+      for (let i = 0; i < dets.length; i++) {
+        const kp = dets[i].keypoints || [];
+        if (kp.length < 6) continue;
+        const a = { blendshapes: {} };
+        for (const k in KP) a[k] = { x: kp[KP[k]].x, y: kp[KP[k]].y };
+        out.push(a);
       }
-      if (res.faceBlendshapes && res.faceBlendshapes[0]) {
-        for (const c of res.faceBlendshapes[0].categories) a.blendshapes[c.categoryName] = c.score;
-      }
-      return a;
     }
 
-    const dets = res.detections || [];
-    if (!dets.length) return null;
-    const kp = dets[0].keypoints || [];
-    if (kp.length < 6) return null;
-    const a = { blendshapes: {} };
-    for (const k in KP) a[k] = { x: kp[KP[k]].x, y: kp[KP[k]].y };
-    return a;
+    if (out.length > cap) {
+      out.sort((p, q) => eyeSpan(q) - eyeSpan(p));
+      out.length = cap;
+    }
+    return out;
   }
 
   // `V` is the MediaPipe namespace: the global `Vision` in classic contexts,
   // or the module namespace object on the main-thread fallback path.
-  async function createDetector(V, mode) {
+  async function createDetector(V, mode, maxFaces) {
     const fileset = await V.FilesetResolver.forVisionTasks("./vendor/mediapipe/wasm");
 
     // A third tier, for filters that need to know where the *person* is rather
@@ -101,7 +136,12 @@
       return V.FaceLandmarker.createFromOptions(fileset, {
         baseOptions: { modelAssetPath: "./models/face_landmarker.task", delegate: "GPU" },
         runningMode: "VIDEO",
-        numFaces: 1,
+        // The one place the second face has to be paid for: the landmarker runs
+        // a mesh pass per face. Whether *asking* for two costs anything when
+        // only one is in frame is not known — it is a per-face pass, so it
+        // should not, but that is reasoning rather than a measurement. Phases N
+        // and O of recdiag.html exist to settle it on the device.
+        numFaces: Math.max(1, maxFaces || FACE_CAP.mesh),
         // Measured at ~4ms on the Portal — cheap enough to always leave on.
         outputFaceBlendshapes: true
       });
@@ -133,5 +173,5 @@
     return { x: pt.x + dx, y: pt.y + dy };
   }
 
-  root.Anchors = { KP, MESH, MESH_EXTRA, toAnchors, createDetector, project };
+  root.Anchors = { KP, MESH, MESH_EXTRA, FACE_CAP, eyeSpan, toFaces, createDetector, project };
 })(typeof self !== "undefined" ? self : this);

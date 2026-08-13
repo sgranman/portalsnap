@@ -387,18 +387,41 @@ const crown = {
 
 /* --------------------------- Googly eyes --------------------------- */
 
+// Pupil swing is per person: each pair lags its own head, so two children
+// shaking their heads at different moments get different eyes. Keyed by
+// `face.id` — held in one module variable, as it was, the second face would
+// have overwritten the first's motion every frame and both pairs would have
+// swung to whichever head was drawn last.
+const swing = new Map();
+
+function pupilLag(face, t) {
+  let s = swing.get(face.id);
+  if (!s) {
+    s = { vx: 0, vy: 0, px: face.cx, py: face.cy };
+    swing.set(face.id, s);
+    // Track ids only ever climb, so an entry that stops being touched belongs to
+    // someone who has left. Swept when the map outgrows what any tier will
+    // track, which keeps this to a few numbers rather than one leak per person
+    // who ever sat down in front of the camera.
+    if (swing.size > 4) for (const [id, e] of swing) if (t - e.seen > 2000) swing.delete(id);
+  }
+  s.seen = t;
+  s.vx = s.vx * 0.86 + (face.cx - s.px) * 0.14;
+  s.vy = s.vy * 0.86 + (face.cy - s.py) * 0.14;
+  s.px = face.cx; s.py = face.cy;
+  return s;
+}
+
 const googly = {
   id: "googly", name: "Googly", emoji: "👀", needsMesh: false, voice: 1.75,
   draw(ctx, face, t) {
     // Pupils lag the head, so they swing when you move — the whole joke.
-    googly._vx = (googly._vx || 0) * 0.86 + (face.cx - (googly._px ?? face.cx)) * 0.14;
-    googly._vy = (googly._vy || 0) * 0.86 + (face.cy - (googly._py ?? face.cy)) * 0.14;
-    googly._px = face.cx; googly._py = face.cy;
+    const s = pupilLag(face, t);
 
     const S = face.earSpan;
     const cap = S * 0.10;
-    const dx = Math.max(-cap, Math.min(cap, -googly._vx / face.eyeDist * 0.45));
-    const dy = Math.max(-cap, Math.min(cap, -googly._vy / face.eyeDist * 0.45 + Math.sin(t / 320) * S * 0.02));
+    const dx = Math.max(-cap, Math.min(cap, -s.vx / face.eyeDist * 0.45));
+    const dy = Math.max(-cap, Math.min(cap, -s.vy / face.eyeDist * 0.45 + Math.sin(t / 320) * S * 0.02));
 
     inFaceSpace(ctx, face, c => {
       const R = S * 0.20;
@@ -554,10 +577,13 @@ const skydiver = {
   // cartoon helmet anyway. A full-frame effect that repaints every frame wants the
   // detection rate more than it wants precision.
   id: "skydiver", name: "Skydive", emoji: "🪂", needsMesh: false, voice: 1.18,
-  draw(ctx, face, t, video) {
+
+  // The sky belongs to the picture, not to a head, so it is painted once whoever
+  // is in front of it — two children get two skydivers in one sky rather than
+  // one child's clouds drawn over the other's.
+  scene(ctx, faces, t) {
     const w = ctx.canvas.width, h = ctx.canvas.height;
 
-    // Sky.
     const sky = ctx.createLinearGradient(0, 0, 0, h);
     sky.addColorStop(0, "#1f5fc4");
     sky.addColorStop(0.55, "#79b6ef");
@@ -565,7 +591,7 @@ const skydiver = {
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, h);
 
-    // Clouds rushing upward past him, each on its own loop so they never line up.
+    // Clouds rushing upward past them, each on its own loop so they never line up.
     ctx.fillStyle = "rgba(255,255,255,.9)";
     for (let i = 0; i < 7; i++) {
       const speed = 110 + i * 46;
@@ -578,13 +604,25 @@ const skydiver = {
       ctx.arc(x - r * 0.85, y + r * 0.2, r * 0.65, 0, TAU);
       ctx.fill();
     }
+  },
 
-    // Where he is: middle of the frame, nudged by how far your head has strayed
-    // from the middle of yours. Quarter gain, so a small lean is a gentle drift.
-    const R = h * 0.115;                       // cartoon head radius
-    const drift = (face.cx / w - 0.5) * w * 0.25;
+  draw(ctx, face, t, video) {
+    const w = ctx.canvas.width, h = ctx.canvas.height;
+
+    // Each jumper gets an equal share of the sky, in the order the children are
+    // actually sitting — `rank` is left to right — so nobody is drawn on top of
+    // anybody. Alone, the slot is the middle of the frame and this is exactly
+    // where the single skydiver always was.
+    const n = face.count;
+    const slot = w * (face.rank + 1) / (n + 1);
+
+    // They shrink as they crowd, and steer less far, because both a jumper's
+    // canopy and their drift have to fit inside a slot that is now a third of
+    // the frame rather than all of it. Alone: full size, quarter gain, unchanged.
+    const R = h * 0.115 * (n === 1 ? 1 : n === 2 ? 0.8 : 0.66);   // cartoon head radius
+    const drift = (face.cx / w - 0.5) * w * (0.25 / n);
     const rise = (face.cy / h - 0.5) * h * 0.18;
-    const cx = w / 2 + drift;
+    const cx = slot + drift;
     const cy = h * 0.50 + rise;
     const sway = Math.sin(t / 420) * R * 0.12;
     const flap = Math.sin(t / 240) * 0.3;
