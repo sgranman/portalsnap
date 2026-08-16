@@ -953,12 +953,117 @@ wants no unauthenticated route to media to exist at all.
 This is also what the Send button now copies. It used to copy a `/media/…` URL, which after all
 of the above is a 401 for whoever received it.
 
+### The exchange, step by step
+
+Time runs downward. The Portal never learns the approval secret, and the phone never learns the
+device secret — that is the split described above, drawn out:
+
+```
+   PORTAL (unpaired)                SERVER                      PHONE (paired)
+         │                            │                              │
+         │─── GET /app.html ─────────►│                              │
+         │◄────── 302 /pair ──────────│                              │
+         │─── POST /auth/pair/start ─►│  mints a device secret, an   │
+         │◄── id, deviceSecret, ──────│  approval secret, and a      │
+         │    approveUrl, code        │  six-character code          │
+         │                            │                              │
+         │  shows a QR of approveUrl, which is                       │
+         │  /pair#approve=<id>.<approvalSecret>                      │
+         │· · · · · · · · · · · scanned · · · · · · · · · · · · · · ►│
+         │                            │                              │
+         │─── poll ──────────────────►│◄─── describe ────────────────│
+         │◄── {pending: true} ────────│──── "Android, Chrome 138" ──►│
+         │                            │                              │
+         │                            │◄─── approve ─────────────────│
+         │─── poll ──────────────────►│     (with the phone's        │
+         │                            │      own cookie)             │
+         │◄── Set-Cookie: psnap=… ────│  the device record is made   │
+         │    {ok, device}            │  here, not at approval: an   │
+         │                            │  abandoned pairing leaves    │
+   reloads into the camera            │  nothing behind              │
+```
+
+Five minutes and the pairing is gone. The page redraws itself ten seconds before that, so a
+Portal left on this screen all afternoon is never showing a QR that stopped working at lunchtime.
+
+### Routes
+
+Everything not listed as open needs a session cookie, including `/`, `/gallery.html`, the
+diagnostics pages, `/vendor/`, `/models/` and every `/media/` route in the table further up.
+
+| Route | | |
+|---|---|---|
+| `GET /pair` | **open** | The only page an unpaired browser can load. Which of the four things it does is decided by the URL fragment: `#claim=…`, `#invite=…`, `#approve=…`, or nothing at all, which is the show-a-QR-and-wait screen. |
+| `GET /auth/qr.svg?t=<text>` | **open** | Renders up to 512 characters as an SVG QR. The encoder runs here so the pairing page ships none. |
+| `POST /auth/claim` | **open** | `{secret, name}`. Works only while no device is paired. Sets the cookie. |
+| `POST /auth/invite/redeem` | **open** | `{id, secret, name}`. Single use. Sets the cookie. Open by necessity — the device being invited has no session yet. |
+| `POST /auth/pair/start` | **open** | Mints a pairing. Returns `id`, `deviceSecret`, `approveUrl`, `code`. |
+| `POST /auth/pair/poll` | **open** | `{id, deviceSecret}` → `{pending:true}`, or the cookie once approved. |
+| `GET /s/<id>.<secret>` | **open** | One capture, ranged, `Cache-Control: private`. |
+| `POST /auth/pair/describe` | paired | `{id, secret}` → what the waiting device claims to be. |
+| `POST /auth/pair/approve` | paired | `{id, secret, name}` from a scan, or `{code, name}` from typing. |
+| `POST /auth/invite` | paired | Mints an invite URL for a new device. |
+| `GET /auth/devices` | paired | The list, with `current` marking the caller. |
+| `POST /auth/devices/rename` | paired | `{id, name}`. |
+| `POST /auth/devices/revoke` | paired | `{id}`. Revoking yourself clears your own cookie; revoking the last device re-arms the claim link and prints it. |
+| `GET /auth/whoami` | paired | Used by `/pair` to notice it is already signed in. |
+| `POST /auth/logout` | paired | Clears the cookie without revoking the device. |
+| `GET POST DELETE /share` | paired | List, mint `{name, days}`, revoke `?id=`. |
+
+### What is stored, and what is in the cookie
+
+The cookie is `psnap=<deviceId>.<token>` — `HttpOnly`, `SameSite=Lax`, `Path=/`, a year long, and
+`Secure` whenever the request arrived over HTTPS. `SameSite=Lax` is what makes CSRF a non-issue:
+a cross-site `POST` and a cross-site subresource both arrive without it. The year slides — one
+request a day re-issues the cookie — so a device in daily use never pairs twice, while one that
+sits in a drawer for a year falls out on its own.
+
+`data/auth.json` is the only state, written tmp-then-rename like an upload:
+
+```json
+{ "version": 1,
+  "devices": [{ "id": "…", "name": "Portal", "hash": "sha256 of the token",
+                "created": 0, "lastSeen": 0, "ua": "…" }],
+  "shares":  [{ "id": "…", "hash": "sha256 of the secret", "file": "pic-….jpg",
+                "created": 0, "expires": 0, "by": "device id" }] }
+```
+
+Pending pairings and unredeemed invites are **not** in there. They live five minutes in memory,
+because a restart cancelling one that was in flight is the correct outcome — the Portal just
+draws a fresh QR. That also means the only thing an attacker gets from the file is a list of
+names and dates.
+
+The numbers, all in one place at the top of `auth.js`: sessions last 365 days and refresh at
+most daily; pairings and invites last 5 minutes; a typed code gets 10 attempts before its
+pairing is dead, with 30 attempts a minute server-wide; at most 200 pairings may be pending at
+once, since starting one needs no session; share links default to 7 days and `SHARE_MAX_DAYS`
+caps what may be asked for.
+
+Rate limiting is counted server-wide rather than per-IP on purpose. Behind a tunnel every
+request shares one source address, so an IP bucket would be one bucket for the whole internet.
+
+### Where this lives in the code
+
+| | |
+|---|---|
+| `auth.js` | All of it: sessions, devices, pairings, invites, share tokens, persistence. No HTTP in here. |
+| `server.js` | One `authorize` check at the top of the request handler, before any route runs, so there is a single place to get it wrong. `openRoute` is the entire unauthenticated surface and is deliberately short. |
+| `public/pair.html` | The four fragment modes, and the polling. |
+| `public/devices.html` | Rename, revoke, invite QR, live share links. |
+| `public/session.js` | Wraps `fetch` so a 401 anywhere sends the page to `/pair`. Loaded before everything else. Several call sites — the poster backfill especially — swallow their own errors on purpose, so without this being signed out would look like an album that quietly stops filling in. |
+| `vendor/qrcode.js` | The QR encoder, server-side. |
+| `test/auth.mjs` | The lock, both pairing routes, share links, invites, revocation. |
+
 ### What this does not do
 
 No encryption at rest — the server has to read the files to serve them, so a key sitting beside
 them buys nothing that disk encryption doesn't do better. No per-photo permissions, no accounts,
 no password reset flow to get wrong. Revoking the last device is allowed on purpose: it is the
 way back in when every trusted device is lost, and the server returns to printing a claim link.
+
+Nor does it defend against someone who can read the server's logs or its disk: the log is where
+the claim link is printed, which is the root of trust by design. On a home server that is the
+person who owns the photographs anyway.
 
 ## Where this stands, and what to do next
 
