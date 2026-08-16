@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PortalSnap — pair this device</title>
+<style>
+  /* Same palette as the app. This page is read at two very different
+     distances — a phone at arm's length, and a Portal from across a
+     room — so the type scale is even wider than the app's. */
+  :root {
+    --bg: #0e0f16;
+    --bar: #191b26;
+    --line: #2b2e3d;
+    --ink: #ffffff;
+    --dim: #a2a8bd;
+    --accent: #6d5bf5;
+    --hot: #ff5c8a;
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; min-height: 100%;
+    background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", -apple-system, Roboto, sans-serif;
+  }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px; min-height: 100vh;
+  }
+  main { width: 100%; max-width: 560px; text-align: center; }
+  h1 { font-size: 38px; font-weight: 800; margin: 0 0 10px; letter-spacing: -.02em; }
+  p  { font-size: 19px; color: var(--dim); margin: 0 auto 20px; max-width: 34ch; line-height: 1.45; }
+  .hide { display: none !important; }
+
+  /* The QR needs a light quiet zone to scan reliably, so it gets a white card
+     rather than being dropped straight onto the dark page.
+
+     Sized against the viewport height, not fixed: the Portal's usable height is
+     644px once its browser chrome has taken its 156, and at a fixed 320 the
+     line explaining that nothing happens until someone approves fell off the
+     bottom of the one screen it was written for. */
+  #qrcard {
+    background: #fff; border-radius: 20px; padding: 16px;
+    width: min(320px, 44vh); height: min(320px, 44vh); margin: 0 auto 18px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #qrcard svg { width: 100%; height: 100%; display: block; }
+
+  .code {
+    font: 800 46px/1 "Segoe UI", sans-serif;
+    letter-spacing: .16em; text-indent: .16em;
+    font-variant-numeric: tabular-nums;
+    background: var(--bar); border: 1px solid var(--line); border-radius: 16px;
+    padding: 18px 10px; margin: 0 auto 20px; max-width: 380px;
+    user-select: all;
+  }
+
+  input[type=text] {
+    width: 100%; max-width: 380px; font-size: 22px; font-family: inherit;
+    padding: 14px 16px; margin: 0 auto 16px; display: block;
+    background: var(--bar); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 14px;
+  }
+  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #codein { text-transform: uppercase; letter-spacing: .12em; text-align: center; font-weight: 700; }
+
+  button {
+    font: 700 22px/1 "Segoe UI", sans-serif; color: #fff;
+    background: var(--accent); border: none; border-radius: 999px;
+    padding: 18px 34px; cursor: pointer; touch-action: manipulation;
+    min-width: 220px;
+  }
+  button:active { transform: scale(.97); }
+  button.alt { background: transparent; border: 2px solid var(--line); color: var(--dim); }
+  button[disabled] { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+  #msg { font-size: 19px; font-weight: 600; margin-top: 20px; min-height: 1.4em; }
+  #msg.bad { color: var(--hot); }
+  #msg.good { color: var(--ok); }
+
+  .foot { margin-top: 26px; font-size: 15px; color: var(--dim); }
+  .foot a { color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Pair this device</h1>
+  <p id="lede">Getting a code…</p>
+
+  <div id="qrcard" class="hide"><svg id="qr" viewBox="0 0 1 1"></svg></div>
+  <div id="code" class="code hide"></div>
+
+  <div id="nameform" class="hide">
+    <input type="text" id="name" maxlength="40" placeholder="Name this device" autocomplete="off">
+    <div class="row"><button id="go">Pair it</button></div>
+  </div>
+
+  <div id="codeform" class="hide">
+    <input type="text" id="codein" maxlength="7" placeholder="ABC123" autocomplete="off"
+           autocapitalize="characters" spellcheck="false">
+    <div class="row"><button id="gocode">Approve</button></div>
+  </div>
+
+  <div id="msg"></div>
+  <div class="foot" id="foot"></div>
+</main>
+
+<script>
+const el = id => document.getElementById(id);
+const show = (id, on) => el(id).classList.toggle("hide", !on);
+
+function say(text, kind) {
+  el("msg").textContent = text || "";
+  el("msg").className = kind || "";
+}
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store"
+  });
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* a body we can't read is still a status */ }
+  return { ok: res.ok, status: res.status, data };
+}
+
+// What the waiting device claims to be, in words. This is the only evidence
+// the approver has, and a 120-character Chrome string read off a phone is not
+// evidence anybody actually reads — so it is summarised, with the raw string
+// kept underneath for anyone who wants it.
+function describeUA(ua) {
+  if (!ua) return "";
+  const parts = [];
+  if (/Android/.test(ua)) parts.push("Android");
+  else if (/iPhone|iPad|iPod/.test(ua)) parts.push("iOS");
+  else if (/Macintosh/.test(ua)) parts.push("macOS");
+  else if (/Windows/.test(ua)) parts.push("Windows");
+  else if (/Linux/.test(ua)) parts.push("Linux");
+  const chrome = /Chrome\/(\d+)/.exec(ua);
+  if (chrome) parts.push("Chrome " + chrome[1]);
+  else if (/Safari/.test(ua)) parts.push("Safari");
+  else if (/Firefox\/(\d+)/.test(ua)) parts.push("Firefox");
+  return parts.length ? "It says it is " + parts.join(", ") + "." : "";
+}
+
+// A default worth accepting without editing. Deliberately coarse: the point is
+// telling two phones apart in a list, not fingerprinting anything.
+function guessName() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua)) return "iPad";
+  if (/Android/.test(ua)) return /Mobile/.test(ua) ? "Android phone" : "Android tablet";
+  if (/Macintosh/.test(ua)) return "Mac";
+  if (/Windows/.test(ua)) return "Windows PC";
+  return "A device";
+}
+
+// The secret always travels in the fragment, which browsers never send to a
+// server. It is in this page's URL bar and nowhere else — not in an access
+// log, not in a Referer header.
+function fragment() {
+  const raw = location.hash.replace(/^#/, "");
+  const eq = raw.indexOf("=");
+  if (eq < 0) return { mode: "", value: "" };
+  return { mode: raw.slice(0, eq), value: decodeURIComponent(raw.slice(eq + 1)) };
+}
+
+function splitPair(value) {
+  const dot = value.indexOf(".");
+  return dot < 0 ? null : { id: value.slice(0, dot), secret: value.slice(dot + 1) };
+}
+
+function drawQR(text) {
+  // The encoder runs on the server, so this page ships no library at all.
+  const img = el("qr");
+  fetch("/auth/qr.svg?t=" + encodeURIComponent(text), { cache: "no-store" })
+    .then(r => r.text())
+    .then(svg => {
+      const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
+      const got = doc.documentElement;
+      img.setAttribute("viewBox", got.getAttribute("viewBox"));
+      img.innerHTML = got.innerHTML;
+      show("qrcard", true);
+    })
+    .catch(() => show("qrcard", false));
+}
+
+/* ------------------------- enrolling this device ------------------------- */
+
+// Claim (the one-time link from the server log) and invite (a QR minted by a
+// device that is already trusted) differ only in which endpoint they post to.
+function enrolMode(kind, value) {
+  const parts = kind === "invite" ? splitPair(value) : null;
+  if (kind === "invite" && !parts) return dead("That invite link is malformed.");
+
+  el("title").textContent = kind === "claim" ? "Claim this server" : "Join this server";
+  el("lede").textContent = kind === "claim"
+    ? "Nothing is paired yet. This phone becomes the first trusted device, and can then let others in."
+    : "You've been invited. Give this device a name so you can recognise it later.";
+  el("name").value = guessName();
+  show("nameform", true);
+
+  el("go").onclick = async () => {
+    el("go").disabled = true;
+    say("Pairing…");
+    const body = kind === "claim"
+      ? { secret: value, name: el("name").value }
+      : { id: parts.id, secret: parts.secret, name: el("name").value };
+    const r = await api(kind === "claim" ? "/auth/claim" : "/auth/invite/redeem", body);
+    if (!r.ok) {
+      el("go").disabled = false;
+      return say((r.data && r.data.error) || "That didn't work.", "bad");
+    }
+    say("Paired. Taking you in…", "good");
+    location.href = "/";
+  };
+}
+
+/* ------------------- approving a device that is waiting ------------------- */
+
+// Runs on a phone that is already paired, after it scans the Portal's QR.
+async function approveMode(value) {
+  const parts = splitPair(value);
+  if (!parts) return dead("That pairing link is malformed.");
+
+  const who = await api("/auth/pair/describe", { id: parts.id, secret: parts.secret });
+  if (who.status === 401) return needPairingFirst();
+  if (!who.ok) return dead((who.data && who.data.error) || "That pairing has expired.");
+
+  el("title").textContent = "Let this device in?";
+  el("lede").textContent = "A device is waiting to be paired. Name it, and it will sign itself in.";
+  el("name").value = "Portal";
+  show("nameform", true);
+  el("go").textContent = "Let it in";
+  el("foot").textContent = describeUA(who.data.ua);
+  el("foot").title = who.data.ua || "";
+
+  el("go").onclick = async () => {
+    el("go").disabled = true;
+    say("Approving…");
+    const r = await api("/auth/pair/approve",
+                        { id: parts.id, secret: parts.secret, name: el("name").value });
+    if (!r.ok) {
+      el("go").disabled = false;
+      return say((r.data && r.data.error) || "That didn't work.", "bad");
+    }
+    el("title").textContent = "Done";
+    el("lede").textContent = "That device is signing itself in now. You can put this phone away.";
+    show("nameform", false);
+    say("Approved.", "good");
+  };
+}
+
+function needPairingFirst() {
+  el("title").textContent = "This phone isn't paired yet";
+  el("lede").textContent =
+    "Only a device that is already trusted can let another one in. Pair this phone first — " +
+    "from a device that is already signed in, or with the claim link from the server's log.";
+}
+
+function dead(text) {
+  el("title").textContent = "That link is no good";
+  el("lede").textContent = text;
+}
+
+/* --------------------- showing a QR and waiting (Portal) --------------------- */
+
+// Two timers, both tracked: a poll that repeats every couple of seconds, and a
+// redraw before the code expires. An expired poll calls restart() directly, so
+// without clearing the pending redraw they would accumulate over an afternoon.
+let pairing = null, timer = null, redraw = null;
+
+async function displayMode() {
+  // A device that is already signed in doesn't need to pair — but it is the
+  // right place to approve one that does, by code, when a camera won't focus.
+  const me = await api("/auth/whoami");
+  if (me.ok) return alreadyIn(me.data.device && me.data.device.name);
+
+  el("title").textContent = "Pair this device";
+  await restart();
+}
+
+async function restart() {
+  clearTimeout(timer);
+  clearTimeout(redraw);
+  const r = await api("/auth/pair/start", {});
+  if (!r.ok) return say("Couldn't reach the server.", "bad");
+  pairing = r.data;
+
+  el("lede").textContent = "Scan this with a phone that is already signed in — or type the code below into it.";
+  drawQR(pairing.approveUrl);
+  el("code").textContent = pairing.code;
+  show("code", true);
+  el("foot").textContent = "Nothing happens until someone you trust approves it.";
+
+  poll();
+  // Redraw before the code dies, so a Portal left on this screen for an hour
+  // is never showing a QR that stopped working fifty minutes ago.
+  redraw = setTimeout(restart, Math.max(10000, pairing.expires - Date.now() - 10000));
+}
+
+async function poll() {
+  clearTimeout(timer);
+  if (!pairing) return;
+  const r = await api("/auth/pair/poll", { id: pairing.id, deviceSecret: pairing.deviceSecret });
+  if (r.ok && r.data.ok) {
+    el("title").textContent = "You're in";
+    el("lede").textContent = "Paired as " + r.data.device + ".";
+    show("qrcard", false); show("code", false);
+    say("Starting the camera…", "good");
+    return setTimeout(() => location.href = "/", 900);
+  }
+  if (r.status === 404) return restart();      // expired underneath us
+  timer = setTimeout(poll, 2000);
+}
+
+function alreadyIn(name) {
+  el("title").textContent = "This device is signed in";
+  el("lede").textContent = name
+    ? "Paired as " + name + ". Open the camera, or approve another device with its code."
+    : "Open the camera, or approve another device with its code.";
+  show("codeform", true);
+  el("foot").innerHTML = '<a href="/">Open the camera</a> &nbsp;·&nbsp; <a href="/devices.html">Manage devices</a>';
+
+  el("gocode").onclick = async () => {
+    const code = el("codein").value.trim().toUpperCase();
+    if (!code) return;
+    el("gocode").disabled = true;
+    say("Checking…");
+    const r = await api("/auth/pair/approve", { code, name: "Portal" });
+    el("gocode").disabled = false;
+    if (!r.ok) return say((r.data && r.data.error) || "That didn't work.", "bad");
+    say("Approved — that device is signing itself in.", "good");
+    el("codein").value = "";
+  };
+}
+
+/* --------------------------------- start --------------------------------- */
+
+const frag = fragment();
+if (frag.mode === "claim" || frag.mode === "invite") enrolMode(frag.mode, frag.value);
+else if (frag.mode === "approve") approveMode(frag.value);
+else displayMode();
+
+// Scanning a second QR on a page that is already open should switch modes
+// rather than sit there doing nothing.
+addEventListener("hashchange", () => location.reload());
+</script>
+</body>
+</html>

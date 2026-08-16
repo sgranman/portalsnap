@@ -6,21 +6,17 @@
 // camera. So this checks the plumbing — that the tier loads, swaps, produces
 // masks, composites, and swaps back — and the HUD reports the one number that
 // says whether the model is behaving on a real face.
-import puppeteer from "puppeteer-core";
-const CHROME = process.env.CHROME ||
-  "/Users/you/.cache/puppeteer/chrome/mac_arm-150.0.7871.24/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
-const PORT = process.env.PORT || 8099;
+import { BASE, launch } from "./harness.mjs";
 let fail = 0;
 const check = (n, ok, x = "") => { console.log((ok ? "  PASS  " : "  FAIL  ") + n + (x ? "   " + x : "")); if (!ok) fail++; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const b = await puppeteer.launch({ executablePath: CHROME, headless: true,
-  args: ["--use-fake-ui-for-media-stream","--use-fake-device-for-media-stream","--autoplay-policy=no-user-gesture-required","--no-sandbox"] });
+const b = await launch();
 const p = await b.newPage();
 p.on("pageerror", e => { console.log("  [pageerror] " + e.message); fail++; });
 p.on("console", m => { if (/tracker:|worker unavailable|tracking unavailable/.test(m.text())) { console.log("  [warn] " + m.text()); fail++; } });
 await p.setViewport({ width: 1280, height: 644 });
-await p.goto("http://127.0.0.1:" + PORT + "/app.html", { waitUntil: "domcontentloaded" });
+await p.goto(BASE + "/app.html", { waitUntil: "domcontentloaded" });
 await p.waitForFunction(() => document.getElementById("loader").classList.contains("hidden"), { timeout: 60000 });
 await p.click("#hudTap");
 // The HUD is filled in by the render loop, not by the tap: reading it straight

@@ -1,11 +1,6 @@
 // End-to-end check of PortalSnap capture -> upload -> album, against a fake
 // camera and mic so it runs unattended.
-import puppeteer from "puppeteer-core";
-
-const CHROME = process.env.CHROME ||
-  "/Users/you/.cache/puppeteer/chrome/mac_arm-150.0.7871.24/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
-const PORT = process.env.PORT || 8099;
-const BASE = "http://127.0.0.1:" + PORT;
+import { BASE, launch, api, clearAlbum } from "./harness.mjs";
 
 const log = (...a) => console.log(...a);
 let failures = 0;
@@ -21,23 +16,11 @@ function check(name, ok, extra = "") {
 // through the API rather than with rm: the server is live and holds `.part`
 // files mid-upload.
 {
-  const list = await (await fetch(BASE + "/media/list")).json();
-  for (const item of list.items || []) {
-    await fetch(BASE + "/media/" + item.name, { method: "DELETE" });
-  }
-  if ((list.items || []).length) log("  (cleared " + list.items.length + " leftover item(s) from the album)");
+  const cleared = await clearAlbum();
+  if (cleared) log("  (cleared " + cleared + " leftover item(s) from the album)");
 }
 
-const browser = await puppeteer.launch({
-  executablePath: CHROME,
-  headless: true,
-  args: [
-    "--use-fake-ui-for-media-stream",
-    "--use-fake-device-for-media-stream",
-    "--autoplay-policy=no-user-gesture-required",
-    "--no-sandbox"
-  ]
-});
+const browser = await launch();
 
 const page = await browser.newPage();
 await page.setViewport({ width: 1280, height: 800 });
@@ -53,7 +36,7 @@ page.on("response", r => { if (r.status() >= 400) log("    [404] " + r.url()); }
 // worth opening directly, and an old /index.html bookmark should not break.
 {
   const titleOf = async u => {
-    const r = await fetch(BASE + u);
+    const r = await api(u);
     const m = /<title>([^<]*)<\/title>/.exec(await r.text());
     return { status: r.status, title: m ? m[1] : null };
   };
@@ -63,9 +46,9 @@ page.on("response", r => { if (r.status() >= 400) log("    [404] " + r.url()); }
   check("an old /index.html bookmark lands on the app too", idx.title === root.title, JSON.stringify(idx));
   const probe = await titleOf("/probe.html");
   check("the probe is still reachable", probe.status === 200 && /Probe/i.test(probe.title || ""), JSON.stringify(probe));
-  const missing = await fetch(BASE + "/definitely-not-here.html");
+  const missing = await api("/definitely-not-here.html");
   check("a missing page is still a 404", missing.status === 404, "status " + missing.status);
-  const escape = await fetch(BASE + "/..%2fserver.js", { redirect: "manual" });
+  const escape = await api("/..%2fserver.js", { redirect: "manual" });
   check("path traversal is still refused", escape.status === 403 || escape.status === 404, "status " + escape.status);
 }
 
@@ -219,7 +202,7 @@ check("delete removes it from the album", afterDel === 1, "tiles=" + afterDel);
 // browser answers 200 out of its own cache long after the file is gone. That is
 // correct caching and a useless test.
 if (clip && clip.poster) {
-  const orphan = await fetch(BASE + clip.poster, { cache: "no-store" });
+  const orphan = await api(clip.poster, { cache: "no-store" });
   check("deleting a clip removes its preview too", orphan.status === 404, "poster fetch " + orphan.status);
 }
 

@@ -8,6 +8,11 @@ services:
       - ./:/app
     environment:
       PORT: 8080
+      # Only used to print a tappable claim link in the log on first start,
+      # while no device is paired yet: `docker compose logs portalsnap`.
+      PUBLIC_URL: https://portalsnap.example.net
+      # SHARE_LINKS: "off"     # refuse to mint links that work without a device
+      # SHARE_MAX_DAYS: 30     # the longest a link may be asked to live
     restart: unless-stopped
     networks:
       - web

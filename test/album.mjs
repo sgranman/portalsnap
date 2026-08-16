@@ -10,11 +10,7 @@
 //
 // Eight snaps looked perfect and ninety-six were unusable, so this seeds enough
 // to scroll and then asserts that no tile overlaps the one below it.
-import puppeteer from "puppeteer-core";
-const CHROME = process.env.CHROME ||
-  "/Users/you/.cache/puppeteer/chrome/mac_arm-150.0.7871.24/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
-const PORT = process.env.PORT || 8099;
-const BASE = "http://127.0.0.1:" + PORT;
+import { BASE, launch, api } from "./harness.mjs";
 const SEED = 40;
 
 let fail = 0;
@@ -26,10 +22,10 @@ const PIXEL = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4AWP4z8Dwn4GBgYGJgYEBAA4AAv8d0EUAAAAASUVORK5CYII=",
   "base64");
 
-const before = (await (await fetch(BASE + "/media/list")).json()).items || [];
+const before = (await (await api("/media/list")).json()).items || [];
 const mine = [];
 for (let i = 0; i < SEED; i++) {
-  const r = await fetch(BASE + "/media?ext=png", {
+  const r = await api("/media?ext=png", {
     method: "POST", headers: { "Content-Type": "image/png" }, body: PIXEL
   });
   const j = await r.json();
@@ -37,8 +33,7 @@ for (let i = 0; i < SEED; i++) {
 }
 check("seeded enough snaps to make the album scroll", mine.length === SEED, mine.length + " of " + SEED);
 
-const b = await puppeteer.launch({ executablePath: CHROME, headless: true,
-  args: ["--use-fake-ui-for-media-stream","--use-fake-device-for-media-stream","--autoplay-policy=no-user-gesture-required","--no-sandbox"] });
+const b = await launch();
 
 try {
   // The Portal's viewport with browser chrome, and again in full screen.
@@ -101,8 +96,8 @@ try {
   await p.close();
 } finally {
   await b.close();
-  for (const n of mine) await fetch(BASE + "/media/" + n, { method: "DELETE" });
-  const after = (await (await fetch(BASE + "/media/list")).json()).items || [];
+  for (const n of mine) await api("/media/" + n, { method: "DELETE" });
+  const after = (await (await api("/media/list")).json()).items || [];
   check("the album is left as it was found", after.length === before.length,
     before.length + " before, " + after.length + " after");
 }

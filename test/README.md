@@ -15,12 +15,38 @@ is vendored:
 npm init -y && npm i puppeteer-core
 npx puppeteer browsers install chrome     # or point CHROME at one you have
 
-PORT=8099 node server.js &                # anything but 8080, so it can't hit the Portal's
+# anything but 8080, so it can't hit the Portal's; scratch directories so the
+# suite never touches a real album or a real device list
+PORTALSNAP_DATA=$TMPDIR/psnap-test PORTALSNAP_MEDIA=$TMPDIR/psnap-media \
+  PORTALSNAP_CLAIM=test-only PORT=8099 node server.js &
+
 CHROME=/path/to/chrome node test/filters.mjs
 ```
 
 `CHROME` defaults to a Chrome for Testing path on this machine; `PORT` defaults to 8099.
 All of them launch with `--use-fake-device-for-media-stream`, so no camera or mic is needed.
+
+`PORTALSNAP_MEDIA` matters more than it looks: `e2e.mjs` starts by emptying the album, and
+without it that is the album on this machine.
+
+### Getting past the door
+
+Every route except `/pair` needs a paired device, so `harness.mjs` claims one. It posts
+`PORTALSNAP_CLAIM` to `/auth/claim`, keeps the resulting cookie in `test/.session`, and puts it
+on the browser rather than the page — every worker and worklet the page opens inherits it,
+which is the only reason the face tracker loads at all.
+
+Claiming works exactly once per data directory, which is why the cookie is cached: the second
+run of the day reuses it, and only falls back to claiming if the server no longer accepts it.
+Delete `test/.session` after wiping the data directory.
+
+There is no way to switch authorization off for a test run, deliberately. A suite that runs
+against an unlocked server proves nothing about the one that is deployed, and the obvious
+shortcut — trusting loopback — would disable the lock entirely under the quick-tunnel recipe in
+the main README, where every request arrives from localhost.
+
+`harness.mjs` also exports `api()`, which is `fetch` with the cookie attached, for the handful
+of tests that talk to the server from Node rather than through a page.
 
 | | what it covers |
 |---|---|
@@ -37,6 +63,7 @@ All of them launch with `--use-fake-device-for-media-stream`, so no camera or mi
 | `voice-gc.mjs` | clips still contain sound after a forced garbage collection — see below |
 | `segment.mjs` | the segmentation tier with the **real** model: loads, swaps in and out, produces masks, composites, and a moon photo isn't a photo of the room |
 | `recdiag.mjs` | `recdiag.html`'s fifteen phases really configure what they claim to |
+| `auth.mjs` | the lock: what an unpaired visitor gets (302 for a navigation, JSON 401 for everything else), that the tracker still runs in the worker through a cookie, both pairing routes, that the QR's secret can't collect the token, share links, invites, and revocation |
 
 **The fake camera has no face in it.** That is why `filters.mjs` stubs the tracker worker
 instead — same three messages as `tracker.worker.js`, returning synthetic anchors the test

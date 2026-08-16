@@ -13,11 +13,27 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const auth = require("./auth.js");
+const qrcode = require("./vendor/qrcode.js");
 
 const PORT = Number(process.env.PORT || 8080);
 const PUBLIC = path.join(__dirname, "public");
 const REPORTS = path.join(__dirname, "reports");
-const MEDIA = path.join(__dirname, "media");
+// Both roots are overridable, which is what lets the test suite run against a
+// scratch directory instead of the album someone's children are actually in —
+// `e2e.mjs` starts by emptying it.
+const MEDIA = process.env.PORTALSNAP_MEDIA || path.join(__dirname, "media");
+const DATA = process.env.PORTALSNAP_DATA || path.join(__dirname, "data");
+
+// Where this server is reachable from a phone. Only used to print a claim link
+// worth tapping; everything else derives its URLs from the request's own Host.
+const PUBLIC_URL = (process.env.PUBLIC_URL || "").replace(/\/+$/, "");
+
+// Share links are the one route to a photo that needs no paired device. They
+// can be switched off wholesale by a host who wants no such route to exist.
+const SHARE_LINKS = process.env.SHARE_LINKS !== "off";
+const SHARE_MAX_DAYS = Number(process.env.SHARE_MAX_DAYS || 30);
+const SHARE_DEFAULT_DAYS = 7;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -56,10 +72,49 @@ const MAX_UPLOAD = 64 * 1024 * 1024;
 
 fs.mkdirSync(REPORTS, { recursive: true });
 fs.mkdirSync(MEDIA, { recursive: true });
+auth.init({ dataDir: DATA, claim: process.env.PORTALSNAP_CLAIM });
 
+// No single request may take the server down. `decodeURIComponent` throws a
+// URIError on a malformed escape — `/s/%` is enough — and an exception thrown
+// out of this callback ends the process, which on an unauthenticated route is
+// a one-byte denial of service against a machine in someone's living room.
 const server = http.createServer((req, res) => {
+  try {
+    handle(req, res);
+  } catch (err) {
+    console.error("request failed: " + (err && err.message));
+    if (!res.headersSent) send(res, 400, "text/plain", "Bad Request");
+    else res.destroy();
+  }
+});
+
+// Percent-decoding that answers "no" instead of throwing.
+function safeDecode(s) {
+  try { return decodeURIComponent(s); } catch (e) { return null; }
+}
+
+function handle(req, res) {
   const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
 
+  // The pairing flow and share links are the whole unauthenticated surface.
+  if (openRoute(req, res, url)) return;
+
+  // Everything else — the app, the album, the diagnostics pages, the vendored
+  // runtime and the models — needs a paired device. Checked here, before any
+  // route runs, so there is exactly one place to get this wrong.
+  const device = auth.deviceFor(req);
+  if (!device) return refuse(req, res);
+  // Once a day this restarts the cookie's year. Set here rather than in each
+  // route's header block: `writeHead` merges with what is already set, so it
+  // survives whichever of them ends up answering.
+  if (auth.touch(device)) {
+    const fresh = auth.refreshCookie(req);
+    if (fresh) res.setHeader("Set-Cookie", fresh);
+  }
+
+  if (url.pathname.startsWith("/auth/") || url.pathname === "/share") {
+    return authRoute(req, res, url, device);
+  }
   if (req.method === "POST" && url.pathname === "/report") {
     return receiveReport(req, res);
   }
@@ -78,7 +133,8 @@ const server = http.createServer((req, res) => {
 
   // Two roots: the app under PUBLIC, saved captures under MEDIA. Resolve
   // inside whichever applies and reject any path that escapes it.
-  const rel = decodeURIComponent(url.pathname);
+  const rel = safeDecode(url.pathname);
+  if (rel === null) return send(res, 400, "text/plain", "Bad Request");
   const inMedia = rel.startsWith("/media/");
   const root = inMedia ? MEDIA : PUBLIC;
   // The root is the app. It used to be the capability probe, which was right
@@ -122,7 +178,300 @@ const server = http.createServer((req, res) => {
       res.end(req.method === "HEAD" ? undefined : body);
     });
   });
-});
+}
+
+/* ------------------------------- Access -------------------------------- */
+
+// How an unauthenticated request is turned away, and the distinction matters
+// more than it looks. A browser *navigating* somewhere gets sent to the pairing
+// page. Anything else — a fetch, an <img>, a worker pulling in the tracker —
+// gets a 401 with a JSON body. Redirecting those to an HTML page instead would
+// hand `JSON.parse` a login form and surface as "couldn't reach the server",
+// and would paint the album as broken images with no clue why.
+function refuse(req, res) {
+  const mode = req.headers["sec-fetch-mode"];
+  const navigating = mode
+    ? mode === "navigate"
+    : /text\/html/.test(String(req.headers.accept || ""));
+  if (navigating && (req.method === "GET" || req.method === "HEAD")) {
+    res.writeHead(302, { Location: "/pair", "Cache-Control": "no-store" });
+    return res.end();
+  }
+  send(res, 401, "application/json", JSON.stringify({ error: "unpaired" }));
+}
+
+// Reads a JSON body, capped. Returns null to the callback on anything it can't
+// parse, and the caller answers 400 — no route should see a half-body.
+function readJson(req, done) {
+  let body = "";
+  req.on("data", chunk => {
+    body += chunk;
+    if (body.length > 8192) { req.destroy(); done(null); }
+  });
+  req.on("end", () => {
+    try { done(JSON.parse(body || "{}")); } catch (e) { done(null); }
+  });
+  req.on("error", () => done(null));
+}
+
+const json = (res, code, obj) => send(res, code, "application/json", JSON.stringify(obj));
+
+// The pairing page's own origin, as the phone will need to reach it. Taken from
+// the request rather than configuration, so a quick tunnel, a LAN address and a
+// stable hostname all mint links that work.
+function originOf(req) {
+  const proto = auth.isSecure(req) ? "https" : "http";
+  return proto + "://" + (req.headers.host || "localhost");
+}
+
+// Everything reachable without a paired device. Returns true if it handled the
+// request. Kept deliberately short: every line here is public internet.
+function openRoute(req, res, url) {
+  const p = url.pathname;
+
+  if ((req.method === "GET" || req.method === "HEAD") && (p === "/pair" || p === "/pair.html")) {
+    fs.readFile(path.join(PUBLIC, "pair.html"), (err, body) => {
+      if (err) return send(res, 500, "text/plain", "pairing page missing");
+      res.writeHead(200, { "Content-Type": MIME[".html"], "Cache-Control": "no-store" });
+      res.end(req.method === "HEAD" ? undefined : body);
+    });
+    return true;
+  }
+
+  // Renders whatever text the pairing page asks for. That page only ever asks
+  // for its own pairing URL, and a QR of an attacker's own string tells them
+  // nothing they didn't type, so this needs no session — only a length cap.
+  if (req.method === "GET" && p === "/auth/qr.svg") {
+    const text = String(url.searchParams.get("t") || "");
+    if (!text || text.length > 512) {
+      json(res, 400, { error: "bad qr text" });
+      return true;
+    }
+    try {
+      const q = qrcode(0, "M");
+      q.addData(text);
+      q.make();
+      res.writeHead(200, { "Content-Type": MIME[".svg"], "Cache-Control": "no-store" });
+      res.end(q.createSvgTag({ cellSize: 8, margin: 16, scalable: true }));
+    } catch (e) {
+      json(res, 400, { error: "cannot encode" });
+    }
+    return true;
+  }
+
+  if (req.method === "POST" && p === "/auth/claim") {
+    readJson(req, b => {
+      if (!b) return json(res, 400, { error: "bad request" });
+      const got = auth.claim(b.secret, b.name, req.headers["user-agent"]);
+      if (!got) return json(res, 403, { error: "that claim link is no longer valid" });
+      const head = {};
+      auth.setSession(req, head, got.device, got.token);
+      res.writeHead(200, Object.assign({
+        "Content-Type": "application/json", "Cache-Control": "no-store"
+      }, head));
+      res.end(JSON.stringify({ ok: true, device: got.device.name }));
+      console.log("paired: " + got.device.name + " (claimed)");
+    });
+    return true;
+  }
+
+  // A device being invited by an already-paired one has no session yet, so
+  // redemption has to live out here. The invite secret is the credential.
+  if (req.method === "POST" && p === "/auth/invite/redeem") {
+    readJson(req, b => {
+      if (!b) return json(res, 400, { error: "bad request" });
+      const got = auth.redeemInvite(b.id, b.secret, b.name, req.headers["user-agent"]);
+      if (!got) return json(res, 403, { error: "that invite has expired" });
+      const head = {};
+      auth.setSession(req, head, got.device, got.token);
+      res.writeHead(200, Object.assign({
+        "Content-Type": "application/json", "Cache-Control": "no-store"
+      }, head));
+      res.end(JSON.stringify({ ok: true, device: got.device.name }));
+      console.log("paired: " + got.device.name + " (invited)");
+    });
+    return true;
+  }
+
+  // The Portal asking for a QR to display, and then asking whether anyone has
+  // approved it yet. Both are pre-session by definition.
+  if (req.method === "POST" && p === "/auth/pair/start") {
+    const started = auth.startPairing(req.headers["user-agent"]);
+    json(res, 200, {
+      id: started.id,
+      deviceSecret: started.deviceSecret,
+      // What the QR encodes and what gets typed. The secret rides in the
+      // fragment so it never reaches a server log or a Referer header.
+      approveUrl: originOf(req) + "/pair#approve=" + started.id + "." + started.approvalSecret,
+      code: started.code,
+      expires: started.expires
+    });
+    return true;
+  }
+
+  if (req.method === "POST" && p === "/auth/pair/poll") {
+    readJson(req, b => {
+      if (!b) return json(res, 400, { error: "bad request" });
+      const got = auth.collect(b.id, b.deviceSecret);
+      if (got.gone) return json(res, 404, { error: "expired" });
+      if (got.pending) return json(res, 200, { pending: true });
+      const head = {};
+      auth.setSession(req, head, got.device, got.token);
+      res.writeHead(200, Object.assign({
+        "Content-Type": "application/json", "Cache-Control": "no-store"
+      }, head));
+      res.end(JSON.stringify({ ok: true, device: got.device.name }));
+      console.log("paired: " + got.device.name + " (approved from another device)");
+    });
+    return true;
+  }
+
+  if (SHARE_LINKS && (req.method === "GET" || req.method === "HEAD") && p.startsWith("/s/")) {
+    serveShare(req, res, safeDecode(p.slice(3)));
+    return true;
+  }
+
+  return false;
+}
+
+// Authenticated auth: managing devices, approving a pairing, minting links.
+function authRoute(req, res, url, device) {
+  const p = url.pathname;
+
+  if (req.method === "GET" && p === "/auth/whoami") {
+    return json(res, 200, { device: { id: device.id, name: device.name } });
+  }
+
+  if (req.method === "POST" && p === "/auth/logout") {
+    const head = {};
+    auth.clearSession(req, head);
+    res.writeHead(200, Object.assign({
+      "Content-Type": "application/json", "Cache-Control": "no-store"
+    }, head));
+    return res.end(JSON.stringify({ ok: true }));
+  }
+
+  if (req.method === "GET" && p === "/auth/devices") {
+    return json(res, 200, { devices: auth.listDevices(device) });
+  }
+
+  if (req.method === "POST" && p === "/auth/devices/rename") {
+    return readJson(req, b => {
+      if (!b || !b.id) return json(res, 400, { error: "bad request" });
+      if (!auth.renameDevice(b.id, b.name)) return json(res, 404, { error: "no such device" });
+      json(res, 200, { ok: true });
+    });
+  }
+
+  if (req.method === "POST" && p === "/auth/devices/revoke") {
+    return readJson(req, b => {
+      if (!b || !b.id) return json(res, 400, { error: "bad request" });
+      if (!auth.revokeDevice(b.id)) return json(res, 404, { error: "no such device" });
+      console.log("revoked device " + b.id);
+      // Revoking the last one empties the house. Print the way back in.
+      if (!auth.paired()) claimBanner();
+      // Revoking yourself is allowed — it is how you sign a borrowed phone out.
+      const head = {};
+      if (b.id === device.id) auth.clearSession(req, head);
+      res.writeHead(200, Object.assign({
+        "Content-Type": "application/json", "Cache-Control": "no-store"
+      }, head));
+      res.end(JSON.stringify({ ok: true, self: b.id === device.id }));
+    });
+  }
+
+  // Mints the QR that enrols a brand-new device.
+  if (req.method === "POST" && p === "/auth/invite") {
+    const inv = auth.startInvite();
+    return json(res, 200, {
+      url: originOf(req) + "/pair#invite=" + inv.id + "." + inv.secret,
+      expires: inv.expires
+    });
+  }
+
+  // Approving a Portal that is sitting there showing a QR: either by having
+  // scanned it (the fragment carried the approval secret) or by typing the code.
+  if (req.method === "POST" && p === "/auth/pair/approve") {
+    return readJson(req, b => {
+      if (!b) return json(res, 400, { error: "bad request" });
+      let pairing = null;
+      if (b.id && b.secret) {
+        pairing = auth.pairingByApproval(b.id, b.secret);
+        if (!pairing) return json(res, 404, { error: "that pairing has expired" });
+      } else if (b.code) {
+        const found = auth.pairingByCode(b.code);
+        if (found.error) return json(res, 403, { error: found.error });
+        pairing = found.pairing;
+      } else {
+        return json(res, 400, { error: "bad request" });
+      }
+      auth.approve(pairing, b.name, device);
+      console.log("approved a pairing for \"" + (b.name || "New device") + "\"");
+      json(res, 200, { ok: true, ua: pairing.ua });
+    });
+  }
+
+  // What the Portal is waiting to be told about, so the phone can show it.
+  if (req.method === "POST" && p === "/auth/pair/describe") {
+    return readJson(req, b => {
+      if (!b) return json(res, 400, { error: "bad request" });
+      const pairing = b.id && b.secret ? auth.pairingByApproval(b.id, b.secret) : null;
+      if (!pairing) return json(res, 404, { error: "that pairing has expired" });
+      json(res, 200, { ua: pairing.ua, expires: pairing.expires });
+    });
+  }
+
+  if (p === "/share") {
+    if (!SHARE_LINKS) return json(res, 403, { error: "share links are switched off here" });
+
+    if (req.method === "GET") return json(res, 200, { shares: auth.listShares() });
+
+    if (req.method === "POST") {
+      return readJson(req, b => {
+        if (!b || !MEDIA_NAME.test(String(b.name || ""))) {
+          return json(res, 400, { error: "bad name" });
+        }
+        if (!fs.existsSync(path.join(MEDIA, b.name))) {
+          return json(res, 404, { error: "no such capture" });
+        }
+        const days = Math.min(Number(b.days) || SHARE_DEFAULT_DAYS, SHARE_MAX_DAYS);
+        const made = auth.mintShare(b.name, days, device);
+        json(res, 200, {
+          url: originOf(req) + "/s/" + made.token,
+          expires: made.expires
+        });
+      });
+    }
+
+    if (req.method === "DELETE") {
+      const id = url.searchParams.get("id");
+      if (!auth.revokeShare(id)) return json(res, 404, { error: "no such link" });
+      return json(res, 200, { ok: true });
+    }
+  }
+
+  return json(res, 404, { error: "no such endpoint" });
+}
+
+// A share link resolves to exactly one capture and serves it through the same
+// ranged reader the album uses, so a shared clip still scrubs.
+function serveShare(req, res, token) {
+  const name = auth.shareTarget(token);
+  if (!name || !MEDIA_NAME.test(name)) {
+    return send(res, 404, "text/plain", "This link has expired.");
+  }
+  const file = path.join(MEDIA, name);
+  fs.stat(file, (err, st) => {
+    if (err) return send(res, 404, "text/plain", "This link has expired.");
+    sendRange(req, res, file, st, {
+      "Content-Type": MIME[path.extname(name).toLowerCase()] || "application/octet-stream",
+      // Private, so a shared cache between the recipient and here never holds a
+      // copy that outlives the link.
+      "Cache-Control": "private, max-age=3600",
+      "Content-Disposition": "inline; filename=\"portalsnap-" + name + "\""
+    });
+  });
+}
 
 /* ----------------------------- Photo album ----------------------------- */
 
@@ -259,7 +608,8 @@ function listMedia(res) {
 }
 
 function deleteMedia(res, url) {
-  const name = path.basename(decodeURIComponent(url.pathname));
+  const decoded = safeDecode(url.pathname);
+  const name = decoded === null ? "" : path.basename(decoded);
   if (!MEDIA_NAME.test(name)) {
     return send(res, 400, "application/json", JSON.stringify({ error: "bad name" }));
   }
@@ -268,6 +618,9 @@ function deleteMedia(res, url) {
     // The preview goes with the clip, or the album accumulates orphans nobody
     // can see or remove.
     if (/^vid-/.test(name)) fs.unlink(path.join(MEDIA, posterFor(name)), () => {});
+    // A share link that outlives its file would 404 anyway. Dropping it keeps
+    // the list of what is currently reachable from outside actually true.
+    auth.revokeSharesFor(name);
     console.log("deleted media/" + name);
     send(res, 200, "application/json", JSON.stringify({ ok: true }));
   });
@@ -312,4 +665,18 @@ server.listen(PORT, "0.0.0.0", () => {
     }
   }
   console.log("\nNOTE: the Portal needs HTTPS for camera access — see README.");
+
+  if (!auth.paired()) claimBanner();
 });
+
+// The only time a secret is ever printed. Whoever can read the log owns the
+// server, which is the intended bootstrap: on a home server that is the person
+// who started it. It stops working the moment a device pairs.
+function claimBanner() {
+  const where = PUBLIC_URL || "https://<your-hostname>";
+  console.log("\n  ┌─ Nothing is paired yet ────────────────────────────────");
+  console.log("  │  Open this on your phone to claim this server:");
+  console.log("  │  " + where + "/pair#claim=" + auth.claimSecret);
+  if (!PUBLIC_URL) console.log("  │  (set PUBLIC_URL to have this printed ready to tap)");
+  console.log("  └────────────────────────────────────────────────────────\n");
+}

@@ -2,12 +2,8 @@
 // no existing test ever reached the drawing path. This one stubs the tracker
 // worker instead, feeding the app synthetic anchors it can drive on demand —
 // a still face, a moving face, or no face at all — and then asserts on pixels.
-import puppeteer from "puppeteer-core";
+import { BASE, launch } from "./harness.mjs";
 import { installFaceStub } from "./facestub.mjs";
-
-const CHROME = process.env.CHROME ||
-  "/Users/you/.cache/puppeteer/chrome/mac_arm-150.0.7871.24/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
-const PORT = process.env.PORT || 8099;
 
 let fail = 0;
 const check = (n, ok, x = "") => {
@@ -16,11 +12,7 @@ const check = (n, ok, x = "") => {
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const b = await puppeteer.launch({
-  executablePath: CHROME, headless: true,
-  args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
-         "--autoplay-policy=no-user-gesture-required", "--no-sandbox"]
-});
+const b = await launch();
 const p = await b.newPage();
 p.on("pageerror", e => { console.log("  [pageerror] " + e.message); fail++; });
 let expectFilterThrow = false;
@@ -38,7 +30,7 @@ await p.setViewport({ width: 1280, height: 644 });
 // the multi-face test drives the same one.
 await installFaceStub(p);
 
-await p.goto("http://127.0.0.1:" + PORT + "/app.html", { waitUntil: "domcontentloaded" });
+await p.goto(BASE + "/app.html", { waitUntil: "domcontentloaded" });
 await p.waitForFunction(() => document.getElementById("loader").classList.contains("hidden"), { timeout: 30000 });
 
 const chips = () => p.evaluate(() => [...document.querySelectorAll(".chip")].map(c => c.textContent));

@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PortalSnap — devices</title>
+<style>
+  /* Read on a phone, mostly. Same palette as the app and the pairing page. */
+  :root {
+    --bg: #0e0f16;
+    --bar: #191b26;
+    --line: #2b2e3d;
+    --ink: #ffffff;
+    --dim: #a2a8bd;
+    --accent: #6d5bf5;
+    --hot: #ff5c8a;
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; min-height: 100%;
+    background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", -apple-system, Roboto, sans-serif;
+  }
+  main { max-width: 620px; margin: 0 auto; padding: 24px 18px 60px; }
+  h1 { font-size: 30px; font-weight: 800; margin: 0 0 4px; letter-spacing: -.02em; }
+  h2 { font-size: 20px; font-weight: 700; margin: 34px 0 12px; }
+  .sub { color: var(--dim); font-size: 16px; margin: 0 0 8px; line-height: 1.45; }
+
+  .card {
+    background: var(--bar); border: 1px solid var(--line); border-radius: 16px;
+    padding: 14px 16px; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .card .grow { flex: 1; min-width: 0; }
+  .card .nm { font-size: 18px; font-weight: 700; }
+  /* Wrapping, not an ellipsis: "last seen 5 minutes ago · added 12 Aug" cut off
+     at "last seen 5 minutes a…" tells you nothing you came here to learn. */
+  .card .meta { font-size: 13px; color: var(--dim); margin-top: 3px; line-height: 1.4; }
+  /* The badge sits on the detail line rather than beside the name — next to it,
+     on a phone, it pushed every two-word device name onto two lines. */
+  .tag {
+    font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    color: #cfc7ff;
+  }
+
+  button {
+    font: 700 16px/1 "Segoe UI", sans-serif; color: #fff;
+    background: var(--accent); border: none; border-radius: 999px;
+    padding: 12px 20px; cursor: pointer; touch-action: manipulation;
+  }
+  button:active { transform: scale(.97); }
+  button.small { font-size: 14px; padding: 9px 14px; }
+  button.alt { background: transparent; border: 1px solid var(--line); color: var(--dim); }
+  button.danger { background: transparent; border: 1px solid var(--hot); color: var(--hot); }
+  button[disabled] { opacity: .5; cursor: default; }
+
+  /* The invite QR only appears once you ask for one — it is a live credential,
+     not decoration, and it should not sit on screen for five minutes by
+     default just because someone opened this page. */
+  #invite { display: none; text-align: center; }
+  #invite.show { display: block; }
+  #qrcard {
+    background: #fff; border-radius: 18px; padding: 14px;
+    width: 260px; height: 260px; margin: 12px auto 10px;
+  }
+  #qrcard svg { width: 100%; height: 100%; display: block; }
+  #invurl {
+    font: 13px/1.4 ui-monospace, Menlo, monospace; color: var(--dim);
+    word-break: break-all; margin-bottom: 12px;
+  }
+
+  .empty { color: var(--dim); font-size: 16px; padding: 6px 2px 0; }
+  #msg { font-size: 16px; font-weight: 600; min-height: 1.4em; margin-top: 14px; }
+  #msg.bad { color: var(--hot); }
+  #msg.good { color: var(--ok); }
+  .foot { margin-top: 34px; font-size: 14px; color: var(--dim); }
+  .foot a { color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Devices</h1>
+  <p class="sub">Anything on this list can open the camera and see every photo and clip.</p>
+  <div id="devices"></div>
+
+  <button id="add">Add a device</button>
+
+  <div id="invite">
+    <div id="qrcard"><svg id="qr" viewBox="0 0 1 1"></svg></div>
+    <p class="sub">Scan this on the new device. It works once, for five minutes.</p>
+    <div id="invurl"></div>
+    <button class="alt small" id="hideinv">Done</button>
+  </div>
+
+  <h2>Share links</h2>
+  <p class="sub">Links to a single photo or clip that work without a paired device. Anyone who
+     has the link can open it until it expires.</p>
+  <div id="shares"></div>
+
+  <div id="msg"></div>
+  <div class="foot">
+    <a href="/">Camera</a> &nbsp;·&nbsp; <a href="/gallery.html">Album</a> &nbsp;·&nbsp;
+    <a href="#" id="signout">Sign this device out</a>
+  </div>
+</main>
+
+<script>
+const el = id => document.getElementById(id);
+function say(text, kind) {
+  el("msg").textContent = text || "";
+  el("msg").className = kind || "";
+}
+
+async function api(path, init) {
+  const res = await fetch(path, { cache: "no-store", ...init });
+  // A revoked device finds out here, and the honest thing is to send it to the
+  // pairing page rather than render an empty list as though nothing is wrong.
+  if (res.status === 401) { location.href = "/pair"; throw new Error("unpaired"); }
+  let data = {};
+  try { data = await res.json(); } catch (e) {}
+  return { ok: res.ok, status: res.status, data };
+}
+const post = (path, body) => api(path, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body || {})
+});
+
+const ago = ts => {
+  if (!ts) return "never";
+  const mins = Math.round((Date.now() - ts) / 60000);
+  if (mins < 2) return "just now";
+  if (mins < 60) return mins + " minutes ago";
+  const hrs = Math.round(mins / 60);
+  if (hrs < 36) return hrs + " hours ago";
+  return Math.round(hrs / 24) + " days ago";
+};
+const until = ts => {
+  const days = Math.round((ts - Date.now()) / 86400000);
+  if (days > 1) return "expires in " + days + " days";
+  const hrs = Math.max(0, Math.round((ts - Date.now()) / 3600000));
+  return hrs > 1 ? "expires in " + hrs + " hours" : "expires within the hour";
+};
+
+/* -------------------------------- devices -------------------------------- */
+
+async function drawDevices() {
+  const r = await api("/auth/devices");
+  const host = el("devices");
+  host.textContent = "";
+
+  for (const d of r.data.devices || []) {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    const grow = document.createElement("div");
+    grow.className = "grow";
+    const nm = document.createElement("div");
+    nm.className = "nm";
+    nm.textContent = d.name;
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    if (d.current) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "this device · ";
+      meta.appendChild(tag);
+    }
+    meta.appendChild(document.createTextNode(
+      "last seen " + ago(d.lastSeen) + " · added " + new Date(d.created).toLocaleDateString()));
+    grow.append(nm, meta);
+
+    const rename = document.createElement("button");
+    rename.className = "alt small";
+    rename.textContent = "Rename";
+    rename.onclick = async () => {
+      const name = prompt("Call this device:", d.name);
+      if (!name) return;
+      await post("/auth/devices/rename", { id: d.id, name });
+      drawDevices();
+    };
+
+    const revoke = document.createElement("button");
+    revoke.className = "danger small";
+    revoke.textContent = d.current ? "Sign out" : "Revoke";
+    // Two taps, like deleting a photo: this is the one control here that can
+    // lock someone out of the house.
+    let armed = false;
+    revoke.onclick = async () => {
+      if (!armed) {
+        armed = true;
+        revoke.textContent = "Really?";
+        return setTimeout(() => {
+          if (!armed) return;
+          armed = false;
+          revoke.textContent = d.current ? "Sign out" : "Revoke";
+        }, 4000);
+      }
+      const res = await post("/auth/devices/revoke", { id: d.id });
+      if (res.data && res.data.self) return location.href = "/pair";
+      say("Revoked " + d.name + ".", "good");
+      drawDevices();
+    };
+
+    card.append(grow, rename, revoke);
+    host.appendChild(card);
+  }
+
+  if (!(r.data.devices || []).length) {
+    host.innerHTML = '<div class="empty">Nothing is paired.</div>';
+  }
+}
+
+el("add").onclick = async () => {
+  const r = await post("/auth/invite");
+  if (!r.ok) return say((r.data && r.data.error) || "Couldn't make an invite.", "bad");
+  el("invurl").textContent = r.data.url;
+  const svg = await (await fetch("/auth/qr.svg?t=" + encodeURIComponent(r.data.url))).text();
+  const got = new DOMParser().parseFromString(svg, "image/svg+xml").documentElement;
+  el("qr").setAttribute("viewBox", got.getAttribute("viewBox"));
+  el("qr").innerHTML = got.innerHTML;
+  el("invite").classList.add("show");
+};
+el("hideinv").onclick = () => {
+  el("invite").classList.remove("show");
+  drawDevices();
+};
+
+/* ------------------------------ share links ------------------------------ */
+
+async function drawShares() {
+  const r = await api("/share");
+  const host = el("shares");
+  host.textContent = "";
+
+  if (!r.ok) {
+    host.innerHTML = '<div class="empty">Share links are switched off on this server.</div>';
+    return;
+  }
+  const list = (r.data.shares || []).sort((a, b) => b.created - a.created);
+  if (!list.length) {
+    host.innerHTML = '<div class="empty">No links yet. The Send button in the app makes them.</div>';
+    return;
+  }
+
+  for (const s of list) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const grow = document.createElement("div");
+    grow.className = "grow";
+    const nm = document.createElement("div");
+    nm.className = "nm";
+    nm.textContent = s.file.startsWith("vid-") ? "Clip" : "Photo";
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = until(s.expires) + " · " + s.file;
+    grow.append(nm, meta);
+
+    const revoke = document.createElement("button");
+    revoke.className = "danger small";
+    revoke.textContent = "Revoke";
+    revoke.onclick = async () => {
+      await api("/share?id=" + encodeURIComponent(s.id), { method: "DELETE" });
+      say("Link revoked.", "good");
+      drawShares();
+    };
+
+    card.append(grow, revoke);
+    host.appendChild(card);
+  }
+}
+
+el("signout").onclick = async ev => {
+  ev.preventDefault();
+  await post("/auth/logout");
+  location.href = "/pair";
+};
+
+drawDevices();
+drawShares();
+</script>
+</body>
+</html>

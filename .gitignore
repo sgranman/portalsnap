@@ -5,6 +5,15 @@ reports/*.json
 # device can't download them; they are not source.
 media/
 
+# Which devices are trusted, and which share links are live. Per-installation
+# state, and the closest thing here to a secret — it holds hashes of the tokens
+# in every paired device's cookie.
+data/
+
+# The test harness's own session, so a second test run doesn't need to claim
+# the server again.
+test/.session
+
 node_modules/
 .DS_Store
 

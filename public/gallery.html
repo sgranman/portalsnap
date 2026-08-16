@@ -91,6 +91,9 @@
     Everything kept on the Portal lands here. Open a photo and tap <b>Save</b> to put it in
     this device's camera roll, or long-press the picture and choose <b>Save&nbsp;image</b>.
   </p>
+  <!-- The only signpost to the devices page. Without it, the way to add a
+       phone or revoke one is a URL nobody has been told. -->
+  <p class="sub"><a href="/devices.html">Devices and share links</a></p>
 </header>
 
 <div id="grid"><div class="msg">Loading…</div></div>
@@ -107,6 +110,7 @@
   <div id="note"></div>
 </div>
 
+<script src="./session.js"></script>
 <script>
 const el = id => document.getElementById(id);
 let current = null;

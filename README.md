@@ -138,12 +138,12 @@ reports a 70px overlap on a 135px tile.
 
 `media/` is gitignored and sits inside the bind mount, so it survives redeploys.
 
-**Everything here is public.** The tunnel serves `portalsnap.example.net` to the open internet
-with no authentication: anyone with the hostname can open `/gallery.html` and download every
-photo and clip. That is fine for a toy on a home server and worth stating out loud, because it
-is not obvious from the code and it is the reason a shared *link* would work at all. Options, if
-that is not wanted: Cloudflare Access in front of the hostname, a shared secret in the path, or
-binding the container to the LAN instead of the tunnel.
+**None of this is public any more.** It was, for the first week: the tunnel served the whole
+app to the open internet, and anyone with the hostname could open `/gallery.html` and download
+every photo and clip. Now every route except the pairing page needs a paired device, and the
+photos are the reason — see [Who can open any of this](#who-can-open-any-of-this). A single
+capture can still be handed to someone without a device, but only through a link that has to be
+minted for it.
 
 ### The Portal cannot share, and says it can
 
@@ -868,6 +868,98 @@ That matters because the browser tests can put a face in front of the tracker bu
 assert on where a hat *should* have landed; the clamp and the lead need arithmetic, not
 pixels. See `test/README.md` for the rest of the suite and what each part covers.
 
+## Who can open any of this
+
+For the first week the answer was *anyone who knows the hostname*. The tunnel is on the open
+internet, and `media/` is photographs of children. Guessing a filename is not much of a defence
+either: they are `pic-<UTC second>-<four base36 characters>`, which is about 1.7 million tries
+per second of wall clock, and the listing endpoint would have handed over the whole album anyway.
+
+So every route now needs a **paired device**, and the interesting problem is that the device
+which most needs to stay signed in is the one you can least type on.
+
+### No passwords, anywhere
+
+There is no login form, because a Portal is a touchscreen across a room with a keyboard nobody
+wants to use, and because a self-hosted thing with a password in its compose file is a password
+that leaks. Instead each device holds 256 bits of randomness in a cookie, and gets it in exactly
+one of three ways:
+
+| | |
+|---|---|
+| **claim** | While nothing is paired, the server prints a one-time link to its own log. Whoever can read the log — on a home server, the person who started it — opens it on a phone and becomes device #1. Regenerated on every restart until it is used, and discarded for good the moment it is. |
+| **invite** | Any paired device mints a QR from `/devices.html`. Whoever scans it is enrolled. Five minutes, single use. |
+| **pair** | The Portal's route, below. |
+
+Only the hash of each token is stored, so `data/auth.json` is a list of names and dates rather
+than a ring of keys. There is no scrypt over the top and no need for one: the token is random,
+not chosen, so there is nothing to grind through.
+
+### The Portal shows a QR and waits
+
+This is the OAuth device-authorization grant, and it fits so exactly that it is worth naming.
+An unpaired browser is redirected to `/pair`, which draws a QR and a six-character code and then
+polls. A phone that is *already* trusted scans the QR — or types the code, for when a camera
+won't focus — and approves it. The Portal collects its cookie on the next poll and reloads into
+the camera. Nobody types anything on the Portal.
+
+Two details are load-bearing:
+
+**The pairing has two secrets, not one.** The Portal keeps a *device* secret, which is the only
+thing that can collect the token, and the QR carries a separate *approval* secret, which can do
+nothing but approve. Without the split, anyone who merely saw the screen — over a video call,
+or across the room — could poll alongside the Portal and take the token the moment a parent
+approved. This is why the real device grant has both a device code and a user code.
+
+**The secret rides in the URL fragment** (`/pair#approve=…`), which browsers never send to a
+server. It exists in the phone's address bar and nowhere else: not in an access log, not in a
+`Referer`.
+
+What the split does *not* stop is the attack every device grant has: someone starts a pairing
+of their own, sends the approve link to a person who is already trusted, and hopes they tap
+*Let it in*. The only defence is that the page says plainly that a device is waiting and shows
+what it claims to be — the same defence a bank has against a customer reading a code out over
+the phone. On a family server whose approvers are two adults, that is the right amount of
+paranoia; it is worth knowing it is the soft edge.
+
+### Cookies, and why there was no choice
+
+The face tracker is pulled into a worker by `importScripts`, the pitch shifter by
+`audioWorklet.addModule`, and every album tile is an `<img src>`. None of those three can carry
+an `Authorization` header, and all of them send a same-origin cookie — so a bearer token would
+have taken the filters down with it. `test/auth.mjs` watches the HUD report `backend worker`
+for exactly this reason: a cookie that fails to reach the worker looks identical to a tracking
+bug, because `importScripts` reports a 401 as nothing more useful than "worker failed to load".
+
+The other half of that is **what a refusal looks like**. A navigation gets a 302 to `/pair`;
+everything else gets a 401 with a JSON body. Sending a `fetch` to an HTML login page instead
+would surface in the app as "couldn't reach the server" and paint the album as broken images.
+
+There is deliberately **no bypass for loopback**, tempting as it was for the tests. The dev
+recipe further down is `cloudflared tunnel --url http://localhost:8080`, where every request
+from the open internet arrives on loopback — "trusted because local" would have unlocked the
+door it was holding shut. The test harness signs in properly instead, which is also the only
+way the suite proves anything about the server people actually run.
+
+### Sending one photo to someone who has no device
+
+Grandparents do not want a paired device. `POST /share` mints `/s/<token>` for exactly one
+capture, seven days by default, revocable from `/devices.html`, and served through the same
+ranged reader the album uses so a shared clip still scrubs. The token is fresh randomness with
+no relationship to the filename, which is the whole point — the filename is the weak thing.
+Deleting a capture revokes its links. `SHARE_LINKS=off` refuses to mint any, for a host who
+wants no unauthenticated route to media to exist at all.
+
+This is also what the Send button now copies. It used to copy a `/media/…` URL, which after all
+of the above is a 401 for whoever received it.
+
+### What this does not do
+
+No encryption at rest — the server has to read the files to serve them, so a key sitting beside
+them buys nothing that disk encryption doesn't do better. No per-photo permissions, no accounts,
+no password reset flow to get wrong. Revoking the last device is allowed on purpose: it is the
+way back in when every trusted device is lost, and the server returns to printing a claim link.
+
 ## Where this stands, and what to do next
 
 Everything asked for works and is deployed: photos and clips save to the server, clips are
@@ -948,6 +1040,8 @@ Three unknowns decide the entire architecture, and only the device can answer th
 |---|---|
 | `/` | the app — this is what the Portal's home-screen link should point at |
 | `/gallery.html` | the album, for a phone or laptop where saving actually works |
+| `/pair` | the only page reachable without a paired device: shows a QR, or approves one |
+| `/devices.html` | what is trusted, what links are live, and how to revoke either |
 | `/probe.html` | the original capability probe |
 | `/sharetest.html` | what this device can and cannot share, and where |
 | `/recdiag.html` | the fifteen-phase performance harness |
@@ -1012,6 +1106,50 @@ ssh homeserver 'cd ~/docker/portalsnap && git pull && docker compose restart'
 
 Routing is a Public Hostname entry in the Cloudflare Zero Trust dashboard
 (`portalsnap.<domain>` → `http://portalsnap:8080`); no ports are published on the host.
+
+### Getting in the first time
+
+A fresh installation has no trusted devices, so it prints a claim link to its own log and
+waits. Set `PUBLIC_URL` in `docker-compose.yml` first and it prints one you can tap:
+
+```bash
+docker compose up -d
+docker compose logs portalsnap
+
+#   ┌─ Nothing is paired yet ────────────────────────────────
+#   │  Open this on your phone to claim this server:
+#   │  https://portalsnap.example.net/pair#claim=Yk3f…
+#   └────────────────────────────────────────────────────────
+```
+
+Open it on a phone and that phone is device #1. From there:
+
+- **The Portal**: open the app on it. It lands on `/pair`, shows a QR, and waits. Scan it with
+  the phone and tap *Let it in* — or type the six characters into `/pair` on the phone if the
+  camera won't focus.
+- **Anyone else's phone**: `/devices.html` → *Add a device* → scan.
+
+`/devices.html` is also where devices are renamed and revoked, and where live share links are
+listed and killed. A revoked device is locked out on its next request.
+
+The claim link stops working the instant the first device pairs. If every trusted device is
+ever lost, revoke the last one from itself — or delete `data/auth.json` — and the server goes
+back to printing a claim link on restart.
+
+Environment worth knowing about:
+
+| | |
+|---|---|
+| `PUBLIC_URL` | only used to print a tappable claim link |
+| `SHARE_LINKS=off` | refuse to mint links that work without a paired device |
+| `SHARE_MAX_DAYS` | longest a share link may be asked to live (default 30) |
+| `PORTALSNAP_DATA` | where the device list lives (default `./data`) |
+| `PORTALSNAP_MEDIA` | where captures live (default `./media`) |
+| `PORTALSNAP_SECURE_COOKIE=1` | force `Secure` on the session cookie, for a proxy that doesn't set `X-Forwarded-Proto` |
+
+The server never terminates TLS itself and never sets `Secure` on a cookie it is about to send
+over plain HTTP, because a browser silently discards that cookie and the symptom is a login
+that will not stick.
 
 ### Alternative: quick tunnel
 
@@ -1094,6 +1232,18 @@ module worker has neither. The `.mjs` build serves the main-thread fallback path
 
 `vision_wasm_nosimd_internal.wasm` (10MB) is unused on the Portal, which has SIMD. It is
 kept only as a fallback for devices that don't, and can be deleted to shrink the repo.
+
+`vendor/qrcode.js` is the one dependency that runs on the *server*, which is why it sits at the
+repo root rather than under `public/` — the pairing page ships no encoder, it just asks
+`/auth/qr.svg` for one. It is Kazuhiko Arase's `qrcode-generator`, MIT, plain ES5 with a UMD
+footer and no dependencies of its own:
+
+```bash
+curl -L -o vendor/qrcode.js https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js
+```
+
+nayuki's generator is the better-known one and was the first choice, but it ships TypeScript;
+using it would have meant a build step, and there isn't one here.
 
 ## Fallback if the browser blocks the camera
 

@@ -318,6 +318,9 @@
   </div>
 </div>
 
+<!-- What to do when this device stops being a paired one. Loaded first: it
+     wraps fetch, so it has to be in place before anything calls it. -->
+<script src="./session.js"></script>
 <!-- Classic script: shared by the worker (importScripts) and the fallback path. -->
 <script src="./anchors.js"></script>
 <script type="module">
@@ -1619,8 +1622,10 @@ el("keep").onclick = async () => {
     }
 
     // Kept for the Send button: a shell that will not carry a file may still
-    // pass a link, and until it is saved there is no link to pass.
-    if (out.url) pending.savedUrl = location.origin + out.url;
+    // pass a link, and until it is saved there is nothing to make one from.
+    // The name rather than the URL — Send mints a share link from it, because
+    // the /media/ URL only opens on a device that is already paired.
+    if (out.name) pending.savedName = out.name;
 
     el("keep").textContent = "Saved ✓";
     say("It's in Photos now", "good");
@@ -1693,23 +1698,29 @@ el("share").onclick = async () => {
     if (r === "sent" || r === "cancelled") return;
   }
 
-  // Then a link to the saved copy — a shell that will not carry a file might
-  // still hand a URL to another app. Nothing to link to until it is saved.
-  if (pending.savedUrl) {
-    const r = await attemptShare({ url: pending.savedUrl, title: "PortalSnap" });
-    if (r === "sent" || r === "cancelled") return;
+  // Then a link — a shell that will not carry a file might still hand a URL to
+  // another app. Not the /media/ URL: since the album needs a paired device,
+  // that link is a 401 for whoever it was sent to. A share link is a
+  // capability for this one capture, good for a week, revocable from the
+  // devices page. Nothing to link to until it is saved.
+  if (pending.savedName) {
+    const link = await shareLink(pending.savedName);
+    if (link) {
+      const r = await attemptShare({ url: link, title: "PortalSnap" });
+      if (r === "sent" || r === "cancelled") return;
 
-    // Failing that, the clipboard: pasting a link somewhere is still a way out.
-    try {
-      await navigator.clipboard.writeText(pending.savedUrl);
-      return say("Link copied — paste it anywhere", "good");
-    } catch (e) { /* one more door that isn't there */ }
+      // Failing that, the clipboard: pasting a link somewhere is still a way out.
+      try {
+        await navigator.clipboard.writeText(link);
+        return say("Link copied — good for a week", "good");
+      } catch (e) { /* one more door that isn't there */ }
+    }
   }
 
   // Every route refused. Stop offering a button that cannot work, and point at
   // the one thing on this device that does.
   markShareDead();
-  say(pending.savedUrl
+  say(pending.savedName
       ? "This browser can't send — open gallery.html on a phone"
       : "Tap Keep it first, then open gallery.html on a phone", "bad");
 };
@@ -1727,9 +1738,13 @@ el("gclose").onclick = () => {
 async function openAlbum() {
   if (recording) return;
   el("gallery").classList.add("show");
+  // The phone that collects the photos has to be a paired one now, and the
+  // pairing page is where a phone that isn't gets in — so name it here, where
+  // someone is standing in front of the album wondering how to get at it.
   el("ghelp").innerHTML =
     "To get these onto a phone, open <b>" + location.host + "/gallery.html</b> there " +
-    "— the Portal itself can't save files.";
+    "— the Portal itself can't save files. A new phone pairs at <b>" +
+    location.host + "/pair</b>.";
 
   const grid = el("grid");
   grid.textContent = "";
