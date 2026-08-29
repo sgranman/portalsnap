@@ -1392,6 +1392,8 @@ curl -L -o public/models/face_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
 curl -L -o public/models/blaze_face_short_range.tflite \
   https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
+curl -L -o public/models/selfie_segmenter_landscape.tflite \
+  https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/1/selfie_segmenter_landscape.tflite
 ```
 
 Both bundle formats are needed: the worker is a **classic** worker using `importScripts`

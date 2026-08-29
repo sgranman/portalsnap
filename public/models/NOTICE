@@ -4,16 +4,22 @@ Copyright 2023 The MediaPipe Authors.
 Licensed under the Apache License, Version 2.0 (see the LICENSE file in this
 directory).
 
-Redistributed unmodified from Google's `mediapipe-models` distribution bucket
-(https://storage.googleapis.com/mediapipe-models/):
+Redistributed unmodified from Google's `mediapipe-models` distribution bucket,
+https://storage.googleapis.com/mediapipe-models/. Each file was verified
+byte-identical to its upstream URL on 2026-08-28; the README's refresh recipe
+downloads these exact paths.
 
-  face_landmarker.task
-    face_landmarker/face_landmarker/float16/1/face_landmarker.task
-  blaze_face_short_range.tflite
-    face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
-  selfie_segmenter_landscape.tflite
-    image_segmenter/selfie_segmenter_landscape/float16/1/ — exact upstream path
-    not recorded when it was vendored; confirm before refreshing this file.
+face_landmarker.task                          3758596 bytes
+  face_landmarker/face_landmarker/float16/1/face_landmarker.task
+  64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff
+
+blaze_face_short_range.tflite                  229746 bytes
+  face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
+  b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f
+
+selfie_segmenter_landscape.tflite              250177 bytes
+  image_segmenter/selfie_segmenter_landscape/float16/1/selfie_segmenter_landscape.tflite
+  490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e
 
 Each model is also covered by the model card published alongside it at
 https://ai.google.dev/edge/mediapipe/solutions/guide, which documents intended
