@@ -19,3 +19,7 @@ node_modules/
 
 # Local tooling caches
 .impeccable/
+
+# Personal deployment runbook and compose overrides — never published.
+DEPLOY.local.md
+docker-compose.override.yml

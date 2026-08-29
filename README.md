@@ -3,8 +3,44 @@
 A browser-based face-filter app for kids, targeting the Facebook Portal's built-in browser
 (replacing the filter app Meta removed from the device).
 
-**Status: Phase 0 — capability probe.** Nothing about the Portal's browser can be assumed,
-so the first job is to find out what it actually supports before choosing a face-tracking stack.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+**Status: everything asked for works and is deployed.** Photos and clips save to the server,
+clips are 1280x720 H.264 with AAC audio, and the gallery gets them into a phone's camera
+roll. What is left is tuning, not features — see
+[Where this stands](#where-this-stands-and-what-to-do-next).
+
+## Run it
+
+```bash
+git clone https://github.com/sgranman/portalsnap.git && cd portalsnap
+node server.js                                   # serves ./public on :8080
+cloudflared tunnel --url http://localhost:8080   # another terminal — prints an https URL
+```
+
+Open the printed HTTPS URL on your phone and that phone becomes the first trusted device;
+everything else, the Portal included, pairs from there by QR. The HTTPS is not optional —
+the camera needs a secure context, and `http://192.168.x.x:8080` is refused before the
+permission prompt ever appears. [Running it](#running-it) covers the alternatives, Docker,
+and first-time pairing.
+
+**No build step, no runtime dependencies.** The app is plain static files; the server is
+Node's standard library plus one vendored QR encoder. MediaPipe and its models are committed
+to the repo on purpose, so a discontinued device never depends on a CDN staying up.
+
+| | |
+|---|---|
+| [SECURITY.md](SECURITY.md) | what is stored, who can reach it, and why share links need a decision |
+| [THIRD-PARTY.md](THIRD-PARTY.md) | vendored MediaPipe (Apache-2.0) and qrcode-generator (MIT) |
+| [LICENSE](LICENSE) | MIT |
+| [test/README.md](test/README.md) | `npm test` for the pure-maths tests, Puppeteer for the rest |
+
+## How to read the rest of this
+
+What follows is the build journal, roughly in the order it happened: what the device turned
+out to be capable of, and the decisions each measurement forced. It is long because the
+measurements are the point — nearly every design choice here was made by a number rather
+than a preference.
 
 ## Confirmed device profile (measured on-device)
 
@@ -1156,61 +1192,67 @@ The root used to serve the probe, which was right for the first week and confusi
 after — tapping a bookmark should open the camera, not a diagnostics page. `/index.html`
 lands on the app too, so an older bookmark still works.
 
-## Running the probe
+## Running it
 
-Camera and mic access require a **secure context**. `http://192.168.x.x:8080` will be
-rejected by the browser before any permission prompt appears — HTTPS is mandatory.
+Camera and mic access require a **secure context**. `http://192.168.x.x:8080` is rejected by
+the browser before any permission prompt appears, so plain HTTP over the LAN is not an
+option — something has to put HTTPS in front. `server.js` deliberately never terminates TLS
+itself.
 
-### Fastest path: quick tunnel from this machine
+### The short way
 
 ```bash
-brew install cloudflared          # one time
-node server.js                    # terminal 1 — serves ./public on :8080
+node server.js                                   # terminal 1 — serves ./public on :8080
 cloudflared tunnel --url http://localhost:8080   # terminal 2 — prints an https://….trycloudflare.com URL
 ```
 
-Open that HTTPS URL in the Portal's browser. The root is the app; add `/probe.html` for the
-capability probe, then tap **Camera + Mic**.
+`cloudflared tunnel --url` needs **no Cloudflare account and no domain**; installing
+`cloudflared` is the whole setup. Open the printed HTTPS URL in the Portal's browser and
+that is it — the root is the app, `/probe.html` is the capability probe.
 
-### Deployed: the home server
+Two things to know: the URL is random and changes every time you restart the tunnel, and it
+is **on the open internet** for as long as it runs. Which brings us to the part that matters.
 
-Live at `~/docker/portalsnap/` on **homeserver**, behind the existing Cloudflare Tunnel.
+### Which is why authorization is not optional
 
-The repo is private, and the server's existing GitHub key is a deploy key scoped to a
-different repo, so portalsnap got its own read-only deploy key following the established
-per-repo pattern:
+A quick tunnel publishes a camera app to anyone who learns the hostname. That is the exact
+threat the authorization here was built against, and it is why there is no "trust the local
+network" and no "skip auth on loopback" shortcut anywhere in this codebase: behind a tunnel
+*every* request arrives on loopback, so that shortcut would not relax the lock, it would
+remove it.
 
-```bash
-# on the server
-ssh-keygen -t ed25519 -f ~/.ssh/portalsnap_deploy -N "" -C "portalsnap-deploy@homeserver"
-cat >> ~/.ssh/config <<'EOF'
+Every route except `/pair` needs a paired device. [SECURITY.md](SECURITY.md) covers what is
+stored and who can reach it — in particular that share links are bearer URLs, and are on by
+default.
 
-Host github.com-portalsnap
-  HostName github.com
-  User git
-  IdentityFile ~/.ssh/portalsnap_deploy
-  IdentitiesOnly yes
-EOF
-
-# from a machine with gh authenticated
-gh repo deploy-key add portalsnap_deploy.pub --title "homeserver home server (read-only)"
-
-# back on the server
-git clone git@github.com-portalsnap:sgranman/portalsnap.git ~/docker/portalsnap
-cd ~/docker/portalsnap && docker compose up -d
-```
-
-Redeploying after a push:
+### With Docker
 
 ```bash
-ssh homeserver 'cd ~/docker/portalsnap && git pull && docker compose restart'
+docker compose up -d
+cloudflared tunnel --url http://localhost:8080
 ```
 
-`public/` is read per-request through the bind mount, so **page and filter edits go live on
-`git pull` alone** — the restart is only needed when `server.js` changes.
+The compose file binds the container to `127.0.0.1:8080`, so the plain-HTTP port is never
+reachable from the LAN and the tunnel reaches it over loopback. `public/` is read
+per-request through the bind mount, so **page and filter edits go live on `git pull`
+alone** — a restart is only needed when `server.js` changes.
 
-Routing is a Public Hostname entry in the Cloudflare Zero Trust dashboard
-(`portalsnap.<domain>` → `http://portalsnap:8080`); no ports are published on the host.
+### Other ways to get HTTPS
+
+Any TLS terminator works. The server sets `Cross-Origin-Opener-Policy` and
+`Cross-Origin-Embedder-Policy` on every page and asset it serves — the app, the tracker
+worker, the wasm and the models — and a proxy passes those through untouched, so nothing
+extra is needed to keep `crossOriginIsolated` true.
+
+- **A named Cloudflare Tunnel** at a stable hostname, if you own a domain. Worth it mainly
+  because a fixed hostname is far easier to retype on a touchscreen than a random one.
+- **Caddy with `tls internal`**, for a LAN-only deployment that never touches the internet.
+  Caddy issues and renews its own certificate, including for a bare IP address, which avoids
+  needing a DNS entry your router may not support. Each viewing device then either trusts
+  Caddy's root CA or clicks through the interstitial once — on a locked-down device like the
+  Portal, expect the latter.
+- **A reverse proxy you already run.** Set `PORTALSNAP_SECURE_COOKIE=1` if it does not send
+  `X-Forwarded-Proto`.
 
 ### Getting in the first time
 
@@ -1255,13 +1297,6 @@ Environment worth knowing about:
 The server never terminates TLS itself and never sets `Secure` on a cookie it is about to send
 over plain HTTP, because a browser silently discards that cookie and the symptom is a login
 that will not stick.
-
-### Alternative: quick tunnel
-
-Deploy behind the existing Cloudflare Tunnel at a stable hostname (e.g.
-`portalsnap.example.net`), which is far easier to retype on a touchscreen than a random
-tunnel URL. See `docker-compose.yml`; add the Public Hostname route in the Cloudflare
-Zero Trust dashboard pointing at `http://portalsnap:8080`.
 
 ### Reading the results
 
@@ -1317,7 +1352,15 @@ second, rather than opening a `confirm()` dialog that is easy to mis-tap and har
 ## Vendored assets
 
 `public/vendor/` and `public/models/` are committed on purpose — a discontinued device on
-an aging browser should not depend on third-party hosts staying reachable. To refresh them:
+an aging browser should not depend on third-party hosts staying reachable.
+
+Because they are redistributed rather than fetched, their licenses travel with them:
+Apache-2.0 for MediaPipe and its models, in `LICENSE` and `NOTICE` beside the files in each
+directory, and summarised in [THIRD-PARTY.md](THIRD-PARTY.md). The bundles are minified and
+carry no header of their own, which is exactly why those files have to exist. If you refresh
+any of this, leave them in place.
+
+To refresh:
 
 ```bash
 npm pack @mediapipe/tasks-vision

@@ -1,0 +1,17 @@
+MediaPipe Tasks Vision
+Copyright 2023 The MediaPipe Authors.
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file in this
+directory).
+
+The files in this directory are redistributed unmodified from the npm package
+@mediapipe/tasks-vision:
+
+  vision_bundle.js                     minified bundle, classic-script build
+  vision_bundle.mjs                    minified bundle, ES-module build
+  wasm/vision_wasm_internal.*          SIMD runtime
+  wasm/vision_wasm_module_internal.*   SIMD runtime, module build
+  wasm/vision_wasm_nosimd_internal.*   non-SIMD fallback runtime
+
+The bundles are minified and carry no license header of their own, which is why
+this notice exists alongside them.

@@ -15,10 +15,50 @@
 import puppeteer from "puppeteer-core";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { fileURLToPath } from "url";
 
-export const CHROME = process.env.CHROME ||
-  "/Users/you/.cache/puppeteer/chrome/mac_arm-150.0.7871.24/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+// No Chrome is vendored, so find one. `npx puppeteer browsers install chrome`
+// puts a Chrome for Testing under the puppeteer cache, which is the build these
+// tests are written against; a normal Chrome works too. Set CHROME to skip all
+// of this and point at one directly.
+function findChrome() {
+  if (process.env.CHROME) return process.env.CHROME;
+
+  const home = os.homedir();
+  const cache = process.env.PUPPETEER_CACHE_DIR || path.join(home, ".cache", "puppeteer", "chrome");
+  const leaf = {
+    darwin: "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    linux: "chrome-linux64/chrome",
+    win32: "chrome-win64/chrome.exe"
+  }[process.platform];
+
+  // Newest installed Chrome for Testing first — the directory names sort by version.
+  if (leaf && fs.existsSync(cache)) {
+    const builds = fs.readdirSync(cache).sort().reverse();
+    for (const b of builds) {
+      const p = path.join(cache, b, leaf);
+      if (fs.existsSync(p)) return p;
+      // macOS x64 builds use a different directory name than arm64.
+      const alt = p.replace("chrome-mac-arm64", "chrome-mac-x64");
+      if (fs.existsSync(alt)) return alt;
+    }
+  }
+
+  const installed = {
+    darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+    linux: ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"],
+    win32: ["C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"]
+  }[process.platform] || [];
+  for (const p of installed) if (fs.existsSync(p)) return p;
+
+  throw new Error(
+    "No Chrome found. Run `npx puppeteer browsers install chrome`, " +
+    "or set CHROME to the browser you want these tests to drive."
+  );
+}
+
+export const CHROME = findChrome();
 export const PORT = process.env.PORT || 8099;
 export const BASE = "http://127.0.0.1:" + PORT;
 

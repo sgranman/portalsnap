@@ -1,0 +1,21 @@
+MediaPipe pre-trained models
+Copyright 2023 The MediaPipe Authors.
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file in this
+directory).
+
+Redistributed unmodified from Google's `mediapipe-models` distribution bucket
+(https://storage.googleapis.com/mediapipe-models/):
+
+  face_landmarker.task
+    face_landmarker/face_landmarker/float16/1/face_landmarker.task
+  blaze_face_short_range.tflite
+    face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
+  selfie_segmenter_landscape.tflite
+    image_segmenter/selfie_segmenter_landscape/float16/1/ — exact upstream path
+    not recorded when it was vendored; confirm before refreshing this file.
+
+Each model is also covered by the model card published alongside it at
+https://ai.google.dev/edge/mediapipe/solutions/guide, which documents intended
+use and known limitations. These are face-detection models: read the fairness
+and demographic-limitation sections before deploying this for anyone else.

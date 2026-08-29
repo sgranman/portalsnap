@@ -1,9 +1,10 @@
 # Tests
 
-Two tests in the repo root have no prerequisites at all. `node test-project.js` loads
-`public/anchors.js` in a `vm` and checks the projection maths; `node test-pitch.js` does the
-same to `public/pitch.worklet.js`, shimming the two globals an AudioWorklet needs and measuring
-the output frequency of a sine at each ratio. Both check arithmetic a browser cannot see.
+Two tests in the repo root have no prerequisites at all, and `npm test` runs both.
+`node test-project.js` loads `public/anchors.js` in a `vm` and checks the projection maths;
+`node test-pitch.js` does the same to `public/pitch.worklet.js`, shimming the two globals an
+AudioWorklet needs and measuring the output frequency of a sine at each ratio. Both check
+arithmetic a browser cannot see.
 
 The app itself ships with no dependencies and no build step, and that stays true — everything
 here is a development tool that happens to live in the same repo.
@@ -12,18 +13,21 @@ The rest drive a real browser, so they need `puppeteer-core` and a Chrome, neith
 is vendored:
 
 ```bash
-npm init -y && npm i puppeteer-core
-npx puppeteer browsers install chrome     # or point CHROME at one you have
+npm install                               # puppeteer-core, the only devDependency
+npm run chrome                            # or point CHROME at a browser you already have
 
 # anything but 8080, so it can't hit the Portal's; scratch directories so the
 # suite never touches a real album or a real device list
 PORTALSNAP_DATA=$TMPDIR/psnap-test PORTALSNAP_MEDIA=$TMPDIR/psnap-media \
   PORTALSNAP_CLAIM=test-only PORT=8099 node server.js &
 
-CHROME=/path/to/chrome node test/filters.mjs
+node test/filters.mjs                      # or any other file in here
 ```
 
-`CHROME` defaults to a Chrome for Testing path on this machine; `PORT` defaults to 8099.
+`CHROME` is found automatically: `harness.mjs` looks through the puppeteer cache for the
+newest installed Chrome for Testing, then falls back to a system Chrome or Chromium, and
+fails with an explanatory error if there is none. Set `CHROME` to skip all of that. `PORT`
+defaults to 8099.
 All of them launch with `--use-fake-device-for-media-stream`, so no camera or mic is needed.
 
 `PORTALSNAP_MEDIA` matters more than it looks: `e2e.mjs` starts by emptying the album, and

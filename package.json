@@ -1,0 +1,40 @@
+{
+  "name": "portalsnap",
+  "version": "1.0.0",
+  "description": "A browser-based face-filter camera for kids, built for the Facebook Portal's browser after Meta removed the filter app",
+  "license": "MIT",
+  "author": "Dan Sgranfetto",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sgranman/portalsnap.git"
+  },
+  "keywords": [
+    "face-filter",
+    "mediapipe",
+    "facebook-portal",
+    "webrtc",
+    "camera",
+    "no-build-step"
+  ],
+  "type": "commonjs",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test-project.js && node test-pitch.js",
+    "test:browser": "node test/e2e.mjs",
+    "chrome": "puppeteer browsers install chrome"
+  },
+  "//": "The app and server have NO runtime dependencies and no build step, deliberately. Everything below is a development tool that happens to live in the same repo.",
+  "devDependencies": {
+    "puppeteer-core": "^25.7.0"
+  },
+  "files": [
+    "public/",
+    "vendor/",
+    "server.js",
+    "auth.js"
+  ]
+}

@@ -5,20 +5,34 @@ services:
     working_dir: /app
     command: node server.js
     volumes:
+      # The whole repo, so `git pull` alone updates pages and filters. This is
+      # also where data/ and media/ persist — they are host directories, not
+      # container state, and nothing here survives a `docker compose down -v`
+      # any less than the repo itself does.
       - ./:/app
+    ports:
+      # Loopback only. The camera needs HTTPS, so something has to sit in front
+      # of this either way (see "Running it" in the README) — and binding to
+      # 127.0.0.1 means the plain-HTTP port is never reachable from the LAN by
+      # accident. Change to "8080:8080" only if you know why you want that.
+      - "127.0.0.1:8080:8080"
     environment:
       PORT: 8080
-      # Only used to print a tappable claim link in the log on first start,
-      # while no device is paired yet: `docker compose logs portalsnap`.
-      PUBLIC_URL: https://portalsnap.example.net
+
+      # Where this server is reachable from a phone. Only used to print a
+      # tappable claim link on first start, while nothing is paired yet:
+      # `docker compose logs portalsnap`. Everything else derives its URLs from
+      # the request's own Host header, so this being wrong costs you one
+      # convenience and nothing else.
+      # PUBLIC_URL: https://example.trycloudflare.com
+
+      # Share links serve one photo to anyone holding the URL, with no device
+      # and no login. On by default; read SECURITY.md and decide deliberately.
       # SHARE_LINKS: "off"     # refuse to mint links that work without a device
       # SHARE_MAX_DAYS: 30     # the longest a link may be asked to live
-    restart: unless-stopped
-    networks:
-      - web
 
-# Reachable only through the cloudflared container on the shared `web` network.
-# Add a Public Hostname route: portalsnap.<domain> -> http://portalsnap:8080
-networks:
-  web:
-    external: true
+      # For a proxy that doesn't set X-Forwarded-Proto. Without it the server
+      # won't mark the session cookie Secure, and the symptom is a login that
+      # will not stick.
+      # PORTALSNAP_SECURE_COOKIE: "1"
+    restart: unless-stopped
