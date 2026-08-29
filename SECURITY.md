@@ -87,6 +87,14 @@ rather than inheriting the default.
   device. Losing every trusted device is recoverable: delete that file and the
   server goes back to printing a claim link on restart.
 
+## Diagnostic pages are off by default
+
+The capability probe, the tracker sweeps and the recording harness are not
+served unless the server is started with `PORTALSNAP_DIAG=1`. They sit behind
+the same pairing as everything else, so this is not a security boundary — but
+each one opens a camera of its own, and a normal installation has no reason to
+expose them.
+
 ## Scope
 
 This is a personal project, not a hardened product. It has had no external

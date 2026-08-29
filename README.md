@@ -1183,14 +1183,32 @@ Three unknowns decide the entire architecture, and only the device can answer th
 | `/gallery.html` | the album, for a phone or laptop where saving actually works |
 | `/pair` | the only page reachable without a paired device: shows a QR, or approves one |
 | `/devices.html` | what is trusted, what links are live, and how to revoke either |
+
+The root used to serve the probe, which was right for the first week and confusing ever
+after — tapping a bookmark should open the camera, not a diagnostics page. `/index.html`
+lands on the app too, so an older bookmark still works.
+
+### Diagnostic pages
+
+These are how nearly every number in this README was arrived at, and they stay in the repo
+for that reason. They are also developer tools rather than part of the app, and each one
+starts a camera and a tracker of its own — so the server does not serve them unless asked:
+
+```bash
+PORTALSNAP_DIAG=1 node server.js
+```
+
+| URL | |
+|---|---|
 | `/probe.html` | the original capability probe |
 | `/sharetest.html` | what this device can and cannot share, and where |
 | `/recdiag.html` | the fifteen-phase performance harness |
 | `/bench.html`, `/track.html` | the tracker sweeps that chose the models |
 
-The root used to serve the probe, which was right for the first week and confusing ever
-after — tapping a bookmark should open the camera, not a diagnostics page. `/index.html`
-lands on the app too, so an older bookmark still works.
+Without the flag each returns a 404 that says why, and `POST /report` — which exists only
+to receive what the probe sends — is refused too. This is not a security boundary: all of
+these already sit behind the same pairing as everything else. It keeps them out of a normal
+installation, where they are surface area nobody needs.
 
 ## Running it
 
@@ -1208,7 +1226,8 @@ cloudflared tunnel --url http://localhost:8080   # terminal 2 — prints an http
 
 `cloudflared tunnel --url` needs **no Cloudflare account and no domain**; installing
 `cloudflared` is the whole setup. Open the printed HTTPS URL in the Portal's browser and
-that is it — the root is the app, `/probe.html` is the capability probe.
+that is it — the root is the app. The capability probe and the other
+[diagnostic pages](#diagnostic-pages) need `PORTALSNAP_DIAG=1` to be served.
 
 Two things to know: the URL is random and changes every time you restart the tunnel, and it
 is **on the open internet** for as long as it runs. Which brings us to the part that matters.
@@ -1293,6 +1312,7 @@ Environment worth knowing about:
 | `PORTALSNAP_DATA` | where the device list lives (default `./data`) |
 | `PORTALSNAP_MEDIA` | where captures live (default `./media`) |
 | `PORTALSNAP_SECURE_COOKIE=1` | force `Secure` on the session cookie, for a proxy that doesn't set `X-Forwarded-Proto` |
+| `PORTALSNAP_DIAG=1` | serve the [diagnostic pages](#diagnostic-pages); off by default |
 
 The server never terminates TLS itself and never sets `Secure` on a cookie it is about to send
 over plain HTTP, because a browser silently discards that cookie and the symptom is a login

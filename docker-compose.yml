@@ -31,6 +31,10 @@ services:
       # SHARE_LINKS: "off"     # refuse to mint links that work without a device
       # SHARE_MAX_DAYS: 30     # the longest a link may be asked to live
 
+      # The capability probe, the tracker sweeps and the recording harness.
+      # Developer tools, each starting a camera of its own; off unless asked for.
+      # PORTALSNAP_DIAG: "1"
+
       # For a proxy that doesn't set X-Forwarded-Proto. Without it the server
       # won't mark the session cookie Secure, and the symptom is a login that
       # will not stick.

@@ -22,8 +22,14 @@ const REPORTS = path.join(__dirname, "reports");
 // Both roots are overridable, which is what lets the test suite run against a
 // scratch directory instead of the album someone's children are actually in —
 // `e2e.mjs` starts by emptying it.
-const MEDIA = process.env.PORTALSNAP_MEDIA || path.join(__dirname, "media");
-const DATA = process.env.PORTALSNAP_DATA || path.join(__dirname, "data");
+// path.resolve, not just the raw value: these are compared against a joined
+// path later to keep requests inside the root, and that check is string-based.
+// An env var with a trailing slash — `PORTALSNAP_MEDIA=$TMPDIR/album` on macOS,
+// where TMPDIR itself ends in one — would otherwise produce a root with a double
+// slash that no normalised path can ever start with, and every media file would
+// 403.
+const MEDIA = path.resolve(process.env.PORTALSNAP_MEDIA || path.join(__dirname, "media"));
+const DATA = path.resolve(process.env.PORTALSNAP_DATA || path.join(__dirname, "data"));
 
 // Where this server is reachable from a phone. Only used to print a claim link
 // worth tapping; everything else derives its URLs from the request's own Host.
@@ -34,6 +40,31 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || "").replace(/\/+$/, "");
 const SHARE_LINKS = process.env.SHARE_LINKS !== "off";
 const SHARE_MAX_DAYS = Number(process.env.SHARE_MAX_DAYS || 30);
 const SHARE_DEFAULT_DAYS = 7;
+
+// The diagnostic pages: the capability probe, the two tracker sweeps, the
+// recording harness and the share-support checker. They are how every number
+// in the README was arrived at, and they are worth keeping — but they are
+// developer tools, not part of the app a child opens, and each one starts a
+// camera and a tracker of its own. Off unless asked for.
+//
+// Nothing here is a security boundary. Every one of these pages already sits
+// behind the same pairing as the rest of the app; this only keeps them out of
+// a normal installation, where they are surface area nobody needs.
+const DIAG = /^(1|true|on|yes)$/i.test(process.env.PORTALSNAP_DIAG || "");
+const DIAG_PAGES = new Set([
+  "/probe.html",      // capability probe — what the device can do
+  "/bench.html",      // tracker sweep, main thread
+  "/track.html",      // tracker sweep, worker
+  "/recdiag.html",    // the fifteen-phase recording harness
+  "/sharetest.html"   // what this device can share, and where
+]);
+
+// A 404 on a page that plainly exists in public/ is confusing enough to be
+// worth a sentence rather than a bare "Not found".
+function diagHint(what) {
+  return "Not found: " + what + " — the diagnostic pages are switched off. " +
+    "Restart the server with PORTALSNAP_DIAG=1 to enable them.";
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -116,6 +147,7 @@ function handle(req, res) {
     return authRoute(req, res, url, device);
   }
   if (req.method === "POST" && url.pathname === "/report") {
+    if (!DIAG) return json(res, 404, { error: diagHint("/report") });
     return receiveReport(req, res);
   }
   if (req.method === "POST" && url.pathname === "/media") {
@@ -135,6 +167,9 @@ function handle(req, res) {
   // inside whichever applies and reject any path that escapes it.
   const rel = safeDecode(url.pathname);
   if (rel === null) return send(res, 400, "text/plain", "Bad Request");
+  if (!DIAG && DIAG_PAGES.has(rel)) {
+    return send(res, 404, "text/plain", diagHint(rel));
+  }
   const inMedia = rel.startsWith("/media/");
   const root = inMedia ? MEDIA : PUBLIC;
   // The root is the app. It used to be the capability probe, which was right

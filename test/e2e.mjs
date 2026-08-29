@@ -44,8 +44,19 @@ page.on("response", r => { if (r.status() >= 400) log("    [404] " + r.url()); }
   check("the root serves the app", root.status === 200 && /^PortalSnap$/.test(root.title || ""), JSON.stringify(root));
   const idx = await titleOf("/index.html");
   check("an old /index.html bookmark lands on the app too", idx.title === root.title, JSON.stringify(idx));
+  // The diagnostic pages are off unless PORTALSNAP_DIAG=1, and this suite has to
+  // pass either way — so assert the switch, not one side of it. A 404 counts
+  // only if it is the gate talking; a genuine missing file would not say so.
   const probe = await titleOf("/probe.html");
-  check("the probe is still reachable", probe.status === 200 && /Probe/i.test(probe.title || ""), JSON.stringify(probe));
+  const gated = probe.status === 404;
+  check("the probe is gated by PORTALSNAP_DIAG, and reachable when it is set",
+    gated || (probe.status === 200 && /Probe/i.test(probe.title || "")),
+    JSON.stringify(probe) + (gated ? "  (diagnostics off)" : ""));
+  if (gated) {
+    const body = await (await api("/probe.html")).text();
+    check("a gated page explains itself rather than looking broken",
+      /PORTALSNAP_DIAG/.test(body), body.slice(0, 80));
+  }
   const missing = await api("/definitely-not-here.html");
   check("a missing page is still a 404", missing.status === 404, "status " + missing.status);
   const escape = await api("/..%2fserver.js", { redirect: "manual" });

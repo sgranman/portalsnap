@@ -1,9 +1,10 @@
 // recdiag.html now has twelve phases: A-H decompose the preview, I-L test the
 // candidate fixes. Verify the DOM really matches what each phase claims, since a
 // phase that quietly measures the wrong thing is worse than no measurement.
-import { BASE, launch } from "./harness.mjs";
+import { BASE, launch, requireDiag } from "./harness.mjs";
 let fail = 0;
 const check = (n, ok, x = "") => { console.log((ok ? "  PASS  " : "  FAIL  ") + n + (x ? "   " + x : "")); if (!ok) fail++; };
+await requireDiag("/recdiag.html");
 const b = await launch();
 const p = await b.newPage();
 p.on("pageerror", e => { console.log("  [pageerror] " + e.message); fail++; });

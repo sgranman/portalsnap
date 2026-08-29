@@ -19,7 +19,7 @@ npm run chrome                            # or point CHROME at a browser you alr
 # anything but 8080, so it can't hit the Portal's; scratch directories so the
 # suite never touches a real album or a real device list
 PORTALSNAP_DATA=$TMPDIR/psnap-test PORTALSNAP_MEDIA=$TMPDIR/psnap-media \
-  PORTALSNAP_CLAIM=test-only PORT=8099 node server.js &
+  PORTALSNAP_CLAIM=test-only PORTALSNAP_DIAG=1 PORT=8099 node server.js &
 
 node test/filters.mjs                      # or any other file in here
 ```
@@ -28,7 +28,13 @@ node test/filters.mjs                      # or any other file in here
 newest installed Chrome for Testing, then falls back to a system Chrome or Chromium, and
 fails with an explanatory error if there is none. Set `CHROME` to skip all of that. `PORT`
 defaults to 8099.
+
 All of them launch with `--use-fake-device-for-media-stream`, so no camera or mic is needed.
+
+`PORTALSNAP_DIAG=1` is there because `recdiag.mjs` and part of `e2e.mjs` drive the
+diagnostic pages, which the server does not serve by default. `recdiag.mjs` says so and
+stops if the flag is missing; `e2e.mjs` asserts the switch works either way, so it passes
+with or without it.
 
 `PORTALSNAP_MEDIA` matters more than it looks: `e2e.mjs` starts by emptying the album, and
 without it that is the album on this machine.

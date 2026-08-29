@@ -110,7 +110,7 @@ export async function session() {
     throw new Error(
       "the harness could not pair with the server at " + BASE + ".\n" +
       "  Start it with a scratch data directory and a known claim secret:\n" +
-      "    PORTALSNAP_DATA=$TMPDIR/psnap-test PORTALSNAP_CLAIM=test-only PORT=" + PORT +
+      "    PORTALSNAP_DATA=$TMPDIR/psnap-test PORTALSNAP_CLAIM=test-only PORTALSNAP_DIAG=1 PORT=" + PORT +
       " node server.js\n" +
       "  (a server that is already paired cannot be claimed again — that is the point of claiming)"
     );
@@ -153,6 +153,19 @@ export async function api(target, init = {}) {
     ...init,
     headers: { ...(init.headers || {}), Cookie: "psnap=" + value }
   });
+}
+
+// The diagnostic pages are off unless the server was started with
+// PORTALSNAP_DIAG=1. A test that needs one should say so up front, because the
+// alternative is a 404 that reads like the page is broken rather than absent.
+export async function requireDiag(page) {
+  const res = await api(page, { method: "HEAD" });
+  if (res.ok) return;
+  throw new Error(
+    page + " is not being served (HTTP " + res.status + ").\n" +
+    "  The diagnostic pages are off by default. Restart the server with\n" +
+    "  PORTALSNAP_DIAG=1 and run this again."
+  );
 }
 
 // Empties the album through the API. `e2e.mjs` counts tiles and needs to start
