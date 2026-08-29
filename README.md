@@ -1387,6 +1387,9 @@ npm pack @mediapipe/tasks-vision
 tar xzf mediapipe-tasks-vision-*.tgz -C /tmp
 cp /tmp/package/vision_bundle.mjs /tmp/package/vision_bundle.js public/vendor/mediapipe/
 cp -r /tmp/package/wasm public/vendor/mediapipe/
+# The module-worker runtime is unused here (see below). Upstream ships it in that
+# directory, so the copy above restores it and this removes it again.
+rm -f public/vendor/mediapipe/wasm/vision_wasm_module_internal.{js,wasm}
 
 curl -L -o public/models/face_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
@@ -1400,8 +1403,36 @@ Both bundle formats are needed: the worker is a **classic** worker using `import
 (`vision_bundle.js`), because MediaPipe reaches for `importScripts` or `document` and a
 module worker has neither. The `.mjs` build serves the main-thread fallback path.
 
-`vision_wasm_nosimd_internal.wasm` (10MB) is unused on the Portal, which has SIMD. It is
-kept only as a fallback for devices that don't, and can be deleted to shrink the repo.
+### Which WASM runtime actually loads
+
+MediaPipe compiles its inference engine three ways and picks one at load time, by
+feature-testing the browser. From `vision_bundle.js`, lightly unminified:
+
+```js
+`wasm${module ? "_module" : ""}${simdSupported ? "" : "_nosimd"}_internal`
+```
+
+| | |
+|---|---|
+| `vision_wasm_internal.*` | SIMD, classic — **the only one this app ever fetches** |
+| `vision_wasm_nosimd_internal.*` | no SIMD; kept as a fallback for devices without it |
+| ~~`vision_wasm_module_internal.*`~~ | deleted — see below |
+
+The `_module` half of that filename is only chosen when `forVisionTasks()` is passed a
+second argument of `true`, and nothing here does — `anchors.js`, `bench.html` and
+`track.html` all call it with one. Nor could that change casually: the tracker is a
+**classic** worker on purpose, for the `importScripts` reason above. So that runtime was
+12MB no code path could reach, and it is no longer vendored. The `rm` in the recipe above
+keeps it that way after a refresh.
+
+`vision_wasm_nosimd_internal.wasm` (11MB) is a different case and stays. The Portal has SIMD
+— the probe table at the top of this README says so — and never loads it, but a device
+without SIMD would load nothing else. That file is the difference between working and not
+working on hardware this project is otherwise well suited to.
+
+Both conclusions come from logging every request into `/wasm/` while the app ran, rather than
+from reading filenames: it fetches `vision_wasm_internal.js` and `vision_wasm_internal.wasm`,
+and nothing else.
 
 `vendor/qrcode.js` is the one dependency that runs on the *server*, which is why it sits at the
 repo root rather than under `public/` — the pairing page ships no encoder, it just asks
