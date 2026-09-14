@@ -43,7 +43,9 @@ Tested on the gen 1 Portal with a real person:
 (2.2x at the centre, easing to no change at the rim). The props are drawn with gradients. The
 two open questions above were answered by guessing, so check both against the videos:
 
-- **Nibbling:** yes. The carrot rides the lower lip and wiggles while the mouth is open.
+- **Nibbling:** yes. The carrot rides the lower lip and wiggles while the mouth is open. At the
+  user's request it also gets eaten: each open-then-close takes a scalloped bite and drops
+  crumbs, three bites finish it, and a fresh one pops in 1.3s later.
 - **Cheek puff:** no warp yet. A pair of gentle `bulge` patches on the cheeks would add one.
 
 ## The effects

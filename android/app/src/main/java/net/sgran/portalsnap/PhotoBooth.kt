@@ -522,12 +522,89 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
 
 // Big shiny eyes (a real magnifying lens on each eye), round fuzzy ears, a glossy pink nose,
 // whiskers, and a carrot held up to the mouth in two pink paws. The carrot rides the lower
-// lip, so it bobs as the mouth opens, and wiggles while the mouth works.
+// lip and wiggles while the mouth works. Open and close to take a bite: three bites and
+// it's gone, then a fresh one pops in.
 object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) {
     private val NO_MAP = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f)
     // 2.2x at the middle of each eye. At 0.45 (1.8x) it was real but read as "normal eyes"
     // at Portal viewing distance.
     private const val EYE_BULGE = 0.55f
+
+    // A bite is an open then a close. The gap between the two thresholds keeps a jaw hovering
+    // near one of them from chattering through a whole carrot.
+    private const val BITES = 3
+    private const val OPEN_AT = 0.3f
+    private const val CLOSED_AT = 0.12f
+    private const val GONE_FADE_MS = 400L
+    private const val REFILL_MS = 1300L
+
+    private class Carrot {
+        var bites = 0
+        var open = false
+        /** The eaten fraction as drawn, easing toward bites / BITES. */
+        var eaten = 0f
+        var finishedAt = 0L
+        var bornAt = 0L
+        var seen = 0L
+    }
+
+    // Per person, keyed by track id, so two kids eat at their own pace.
+    private val carrots = HashMap<Int, Carrot>()
+    private val crumbs = Particles(200)
+    private val crumbColors = intArrayOf(hex("#f5872a"), hex("#ffb35c"), hex("#e06a14"))
+    private val crumbPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val biteEdge = Path()
+
+    override fun update(d: Draw, faces: List<Face>) {
+        for (f in faces) {
+            val s = carrots.getOrPut(f.id) { Carrot() }
+            s.seen = d.t
+            val jaw = f.bs("jawOpen")
+            if (!s.open && jaw > OPEN_AT) {
+                s.open = true
+            } else if (s.open && jaw < CLOSED_AT) {
+                s.open = false
+                if (s.bites < BITES) {
+                    s.bites++
+                    crumble(f)
+                    if (s.bites == BITES) s.finishedAt = d.t
+                }
+            }
+            if (s.bites == BITES && d.t - s.finishedAt > REFILL_MS) {
+                s.bites = 0
+                s.eaten = 0f
+                s.bornAt = d.t
+            }
+            s.eaten += (s.bites.toFloat() / BITES - s.eaten) * min(1f, d.dt / 70f)
+        }
+        if (carrots.size > 4) carrots.entries.removeAll { d.t - it.value.seen > 3000 }
+        crumbs.step(d.dt, gravity = 900f, drag = 0.5f)
+    }
+
+    private fun crumble(f: Face) {
+        val lip = toPixels(f, f.mouth.x, (f["lipBottom"]?.y ?: f.mouth.y) + f.headSpan * 0.03f)
+        val scale = f.eyeDist / 90f
+        for (i in 0 until 12) {
+            crumbs.add(Particle(
+                lip.x + rnd(-14f, 14f) * scale, lip.y + rnd(-4f, 8f) * scale,
+                rnd(-150f, 150f) * scale, rnd(-220f, -40f) * scale,
+                rnd(0.55f, 0.95f), rnd(3f, 7f) * scale, crumbColors[rng.nextInt(crumbColors.size)], rnd(-8f, 8f),
+            ))
+        }
+    }
+
+    override fun overlay(d: Draw, faces: List<Face>) {
+        val c = d.c
+        for (p in crumbs.list) {
+            crumbPaint.color = p.color
+            crumbPaint.alpha = (255 * min(1f, p.fade * 2.5f)).toInt()
+            val save = c.save()
+            c.translate(p.x, p.y)
+            c.rotate(deg(p.rot))
+            c.drawRect(-p.size, -p.size * 0.7f, p.size, p.size * 0.7f, crumbPaint)
+            c.restoreToCount(save)
+        }
+    }
 
     override fun draw(d: Draw, f: Face) {
         eyes(d, f)
@@ -635,10 +712,16 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
         c.drawOval(p.rect(nx - rw * 0.32f, ny - rh * 0.42f, rw * 0.3f, rh * 0.2f), p.fill(rgba(255, 255, 255, 0.9f)))
     }
 
-    // Tip up at the lower lip, wide end down over the chin, leaves hanging below.
+    // Tip up at the lower lip, wide end down over the chin, leaves hanging below. Bites come off
+    // the tip end, and what's left slides up so the bitten edge stays at the lips.
     private fun carrot(d: Draw, f: Face, S: Float) {
         val c = d.c
         val p = d.pen
+        val st = carrots[f.id]
+        val eaten = st?.eaten ?: 0f
+        val leafAlpha = if (st != null && st.bites == BITES) 1f - (d.t - st.finishedAt).toFloat() / GONE_FADE_MS else 1f
+        if (leafAlpha <= 0f) return
+
         val open = f.bs("jawOpen")
         val lip = f["lipBottom"]?.y ?: f.mouth.y
         val chin = f["chin"]?.y ?: (f.mouth.y + 0.5f)
@@ -647,14 +730,21 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
         val len = max(S * 0.3f, (chin - lip) * 0.75f + S * 0.1f)
         val tipW = S * 0.04f
         val endW = S * 0.13f
+        val cut = len * eaten
+        // A fresh carrot pops in from the lips: overshoot, then settle.
+        val k = if (st == null || st.bornAt == 0L) 1f else ((d.t - st.bornAt) / 280f).coerceIn(0f, 1f)
+        val grow = max(0.01f, 1f + 2.70158f * (k - 1) * (k - 1) * (k - 1) + 1.70158f * (k - 1) * (k - 1))
 
         val save = c.save()
         c.translate(f.mouth.x, lip - S * 0.02f)
         c.rotate(deg(-0.16f + wiggle))
+        c.scale(grow, grow)
+        c.translate(0f, -cut)
 
         p.lift(0.04f)
         val leafLen = S * 0.2f
         val leaf = p.fill(LinearGradient(0f, 0f, 0f, leafLen, hex("#72d65c"), hex("#2e923c"), Shader.TileMode.CLAMP))
+        leaf.alpha = (255 * leafAlpha.coerceIn(0f, 1f)).toInt()
         for (i in -1..1) {
             val s = c.save()
             c.translate(0f, len - endW * 0.1f)
@@ -668,6 +758,29 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
             c.drawPath(p.path, leaf)
             c.restoreToCount(s)
         }
+        p.unlift()
+
+        // Only the leaves are left once the last bite has gone down.
+        if (eaten >= 0.98f) {
+            c.restoreToCount(save)
+            return
+        }
+
+        val clipped = c.save()
+        if (cut > 0f) {
+            // What a bite leaves: scallops dipping into the carrot.
+            val w = endW * 1.3f
+            biteEdge.reset()
+            biteEdge.moveTo(-w, len * 2)
+            biteEdge.lineTo(-w, cut)
+            for (i in 0 until 3) {
+                val x0 = -w + i * (2 * w / 3)
+                biteEdge.quadTo(x0 + w / 3, cut + S * 0.09f, x0 + 2 * w / 3, cut)
+            }
+            biteEdge.lineTo(w, len * 2)
+            biteEdge.close()
+            c.clipPath(biteEdge)
+        }
 
         p.newPath().apply {
             moveTo(-tipW, 0f)
@@ -677,10 +790,16 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
             quadTo(-endW * 0.9f, len * 0.55f, -tipW, 0f)
             close()
         }
+        p.lift(0.04f)
         c.drawPath(p.path, p.fill(LinearGradient(
             -endW, 0f, endW, 0f, intArrayOf(hex("#ffc47e"), hex("#f5872a"), hex("#c8520d")), floatArrayOf(0.1f, 0.5f, 1f), Shader.TileMode.CLAMP,
         )))
         p.unlift()
+        if (cut > 0f) {
+            // The paler inside shows along the bite.
+            c.clipPath(p.path)
+            c.drawPath(biteEdge, p.stroke(hex("#ffd8a6"), S * 0.035f))
+        }
 
         val ridge = p.stroke(rgba(160, 64, 8, 0.5f), 0.016f)
         ridge.strokeCap = Paint.Cap.ROUND
@@ -691,10 +810,11 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
             val side = if (i % 2 == 0) -1f else 1f
             c.drawLine(side * half * 0.95f, y, side * half * 0.3f, y + S * 0.012f, ridge)
         }
+        c.restoreToCount(clipped)
 
-        // Paws on either side, toes over the carrot's edge.
-        val py = len * 0.42f
-        val half = tipW + (endW - tipW) * 0.42f
+        // Paws on either side of what's left, toes over the carrot's edge.
+        val py = cut + (len - cut) * 0.42f
+        val half = tipW + (endW - tipW) * (py / len)
         for (side in intArrayOf(-1, 1)) {
             val pw = S * 0.065f
             val ph = S * 0.08f
