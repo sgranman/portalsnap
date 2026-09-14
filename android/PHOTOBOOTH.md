@@ -16,7 +16,7 @@ filters where that works, or a supplied image where a photographic look is the p
 |---|---|---|---|---|---|
 | 1 | Mirror | 1603104213652867 | none | shader | small |
 | 2 | Disco Dots | (screenshot 103638) | none or segment | shader | small |
-| 3 | Pop Silhouette | 946857547560491 | segment | mask + shader | small |
+| 3 | Pop Silhouette | 946857547560491 | segment | beat-switched looks: mask shaders + Canvas doodles + mask history | medium–large |
 | 4 | Monster / Cutie | 936589334645536 | mesh + blendshapes | Canvas doodles, switched by expression | small–medium |
 | 5 | Pixel Hearts | 483283294836303 | mesh + blendshapes | Canvas sprites + particles from an open mouth | medium |
 | 6 | Hamster | 589562750311569 | mesh | eye-enlarge warp patch + soft "3D" props | medium |
@@ -170,6 +170,48 @@ room behind turns flat red, with only a ghost of the room's texture left.
   person and a red wash over the darkened camera for the background, mixed at a soft edge.
 - **Questions:** did the colours cycle over time (red/yellow, then blue/pink…)? Did the gradient
   follow the body?
+
+**Reference video 946857547560491** (30s, looked at in frames at 4fps; the effect is described
+here, not the person). It's far more than a colour swap. It cuts between looks on the music's
+beat, each lasting 0.25–2.5s, in an order that doesn't repeat with the music's loop.
+
+- **Backgrounds:**
+  - Mostly a red grunge-paper texture, with a faint diagonal print and big ghosted shapes.
+  - For a stretch of about 6s (12–18s), a near-black grunge texture instead. It arrives through
+    a particle break-up and leaves through a red torn-paper brush wipe.
+- **Person looks** (all from the segmentation mask):
+  - **Natural cut-out:** the camera image with a soft dark edge.
+  - **Flat yellow silhouette:** with a dark drop shadow offset down and to the left.
+  - **Gradient silhouette:** yellow to orange, sometimes with a pale offset rim.
+  - **Grain-textured silhouette:** orange-brown, with a grunge or halftone fill.
+  - **Ghosted:** darkened into the red (multiply), features faintly visible. Sometimes a patch
+    of yellow halftone dots sits on the head.
+  - **Translucent yellow:** features show through.
+  - **Dark brown silhouette:** with a bright yellow offset rim.
+  - **Sticker:** the natural cut-out with a grey paper border offset behind it (mostly on the
+    dark background).
+- **Overlays and treatments:**
+  - **Hand-drawn white rings:** single, double or dashed, drawn on near the head.
+  - **White sweeping arcs** and scribbles.
+  - **Thin wiggly lines:** yellow-orange or white, tracing along the silhouette's edge.
+  - **Motion echoes:** trails of the last few frames, in orange/yellow or dark grey.
+  - **Face texture:** a glittery dissolve over the face.
+  - **Outlines:** fiery orange glow with flame flecks, or a thin cyan line.
+  - **Transitions:** the silhouette breaking into black particles, and red brush-stroke wipes.
+- **Music:** a loop of about 9.94s (438,453 samples at 44.1kHz), repeated three times in the
+  clip, pulsing about every 0.94s. Onsets in the first loop: 0.02, 0.27, 1.21, 2.10, 3.08, 4.02,
+  4.65, 5.28, 6.21, 7.15, 8.08, 9.05, 9.57, 9.80s. A clean-up (the middle value of the three
+  aligned repeats, a 50ms seam crossfade) is in the session's scratchpad and on the Portal at
+  `files/popart-loop.wav`. It's Meta's music, so it stays out of the repo. About half the
+  recording's level didn't repeat (voices or room), so its quality needs listening to.
+- **Build notes:**
+  - It's a sequence of "looks" switched on beats.
+  - The segmentation mask gives the silhouette and edge.
+  - A per-look shader covers fill, texture, multiply, offset shadow and rim.
+  - Canvas draws the rings, arcs and scribbles, animated as drawn-on strokes.
+  - A small history of mask frames gives the motion echoes.
+  - Grunge textures would be procedural noise.
+  - The music plays through `Mixer`, so it drives the beats and is baked into clips.
 
 ### 4. Monster / Cutie (one effect, two moods)
 Hand-drawn doodle face paint that changes with expression. Both frames come from the same
