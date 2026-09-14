@@ -23,7 +23,7 @@ val KEYS = listOf(
     "eyeR", "eyeL", "nose", "mouth", "earR", "earL",
     "headTop", "skullR", "skullL", "templeR", "templeL", "browR", "browL",
     "chin", "jawR", "jawL", "noseUnder", "nostrilR", "nostrilL",
-    "lipBottom", "mouthR", "mouthL",
+    "lipBottom", "mouthR", "mouthL", "eyeInR", "eyeInL",
 )
 
 class MPt(var x: Float, var y: Float)

@@ -109,11 +109,12 @@ class Draw(val pen: Pen) {
 
 /**
  * The frame, resampled through [map] (dst px -> src px: a,b,c,d,e,f) inside an ellipse.
- * [feather] is where the fade starts, as a fraction of the radius.
+ * [feather] is where the fade starts, as a fraction of the radius. A [bulge] above 0 ignores
+ * both and magnifies in place instead: 1 / (1 - bulge) at the centre, easing to none at the rim.
  */
 class Patch(
     val cx: Float, val cy: Float, val rx: Float, val ry: Float, val angle: Float,
-    val feather: Float, val map: FloatArray,
+    val feather: Float, val map: FloatArray, val bulge: Float = 0f,
 )
 
 abstract class Filter(
@@ -902,5 +903,5 @@ object Moon : Filter("moon", "Moon", "🌘", Mode.SEGMENT, voice = 1.3f) {
 }
 
 val FILTERS: List<Filter> = listOf(
-    Mirror, PopSilhouette, DiscoDots, MonsterCutie, PixelHearts,
+    Mirror, PopSilhouette, DiscoDots, MonsterCutie, PixelHearts, Hamster,
     Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Skydiver, Beach, Palace, Moon)

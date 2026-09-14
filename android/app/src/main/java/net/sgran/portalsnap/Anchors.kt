@@ -37,6 +37,8 @@ object Anchors {
         "browR" to 105, "browL" to 334, "chin" to 152, "jawR" to 172, "jawL" to 397,
         "noseUnder" to 2, "nostrilR" to 98, "nostrilL" to 327, "lipBottom" to 14,
         "mouthR" to 61, "mouthL" to 291,
+        // Inner eye corners, for the Hamster's eye lenses (the outer corners are eyeR/eyeL).
+        "eyeInR" to 133, "eyeInL" to 362,
     )
 
     /** How many faces each tier follows at once; see FACE_CAP in anchors.js. */

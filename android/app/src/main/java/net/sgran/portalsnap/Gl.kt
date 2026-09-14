@@ -231,6 +231,7 @@ object Shaders {
         uniform vec2 uRadii;
         uniform float uAngle;
         uniform float uFeather;
+        uniform float uBulge;
         uniform mat3 uMap;
         void main() {
             vec2 p = vec2(gl_FragCoord.x, uSize.y - gl_FragCoord.y);
@@ -238,6 +239,15 @@ object Shaders {
             float c = cos(uAngle), s = sin(uAngle);
             vec2 q = vec2(c * d.x + s * d.y, -s * d.x + c * d.y) / uRadii;
             float r = length(q);
+            if (uBulge > 0.0) {
+                // A lens that eases to no change at the rim, so it needs no feathered edge
+                // and leaves no ghost ring. Monotonic for any bulge below 1: nothing folds.
+                if (r >= 1.0) discard;
+                float k = 1.0 - r * r;
+                vec2 lens = uCentre + d * (1.0 - uBulge * k * k);
+                gl_FragColor = texture2D(uTexture, vec2(lens.x / uSize.x, 1.0 - lens.y / uSize.y));
+                return;
+            }
             float a = 1.0 - smoothstep(uFeather, 1.0, r);
             if (a <= 0.0) discard;
             vec3 src = uMap * vec3(p, 1.0);

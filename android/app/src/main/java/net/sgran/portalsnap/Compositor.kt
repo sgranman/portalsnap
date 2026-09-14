@@ -410,6 +410,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glUniform2f(pPatch.u("uRadii"), p.rx, p.ry)
             GLES20.glUniform1f(pPatch.u("uAngle"), p.angle)
             GLES20.glUniform1f(pPatch.u("uFeather"), p.feather)
+            GLES20.glUniform1f(pPatch.u("uBulge"), p.bulge)
             val m = p.map
             // Column-major: src = M * (x, y, 1).
             GLES20.glUniformMatrix3fv(pPatch.u("uMap"), 1, false, floatArrayOf(m[0], m[3], 0f, m[1], m[4], 0f, m[2], m[5], 1f), 0)

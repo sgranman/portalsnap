@@ -28,20 +28,23 @@ filters where that works, or a supplied image where a photographic look is the p
 
 ### Status (2026-09-14)
 
-Effects 1–5 are built (`PhotoBooth.kt`, the `FX_*` shaders in `Gl.kt`, `MicHub.kt`). They're
-the first five chips: Mirror, Pop Art, Disco, Monster, Hearts. All five render correctly on
-the test portrait, and a poke (`--es action poke` or a stage tap) flips Monster and Cutie and
-their voice pitch.
+Effects 1–6 are built (`PhotoBooth.kt`, the `FX_*` shaders in `Gl.kt`, `MicHub.kt`). They're
+the first six chips: Mirror, Pop Art, Disco, Monster, Hearts, Hamster.
 
-Not yet checked with a real person or real sound:
+Tested on the gen 1 Portal with a real person:
 
-- **The nod detector.** Head pitch comes from the facial transformation matrix; a nod is a
-  swing of more than 10° that comes back within 1.1s.
-- **Beat reaction in Disco and Pop Art.** Every test so far ran with the privacy button on,
-  which mutes the mic. Without beats, both fall back to idle timing: Disco bursts every 1.1s,
-  and Pop Art changes look every 2s.
-- **A recording with a mic-reactive filter.** The recorder and the effects share the mic
-  through `MicHub`.
+- **Monster / Cutie:** a nod flips between them, and the voice pitch follows. A nod is a head
+  pitch swing of more than 10° that comes back within 1.1s.
+- **Disco and Pop Art:** both react to music in the room. With no beats they fall back to idle
+  timing: Disco bursts every 1.1s, and Pop Art changes look every 2s.
+- **Recording:** works with a mic-reactive filter on.
+
+**Hamster** is so far checked only on the test portrait. The eyes use a new `bulge` lens patch
+(2.2x at the centre, easing to no change at the rim). The props are drawn with gradients. The
+two open questions above were answered by guessing, so check both against the videos:
+
+- **Nibbling:** yes. The carrot rides the lower lip and wiggles while the mouth is open.
+- **Cheek puff:** no warp yet. A pair of gentle `bulge` patches on the cheeks would add one.
 
 ## The effects
 
