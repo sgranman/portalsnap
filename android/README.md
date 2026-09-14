@@ -212,6 +212,9 @@ Each of these cost real time, so check here first:
 - **Bulk transfers stall over USB.** Through usbipd into WSL, small adb commands work but
   large file transfers hang. Use adb over Wi-Fi: run `adb tcpip 5555` once over USB, then
   `adb connect`. It lasts until the Portal reboots.
+- **`adb install` can hang over Wi-Fi.** A streamed `adb install -r` once sat for 30+ minutes
+  and never finished. `adb push app-debug.apk /data/local/tmp/psnap.apk`, then
+  `adb shell pm install -r /data/local/tmp/psnap.apk`, did the same install in about 3s.
 
 ## Morning checklist
 
