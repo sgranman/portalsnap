@@ -198,8 +198,10 @@ Each of these cost real time, so check here first:
   `SurfaceView` for the app, not two.
 - **Clips came out quiet.** The raw mic (`CAMCORDER` source) measured -23.9 LUFS on a real
   clip. The web app's clips were -12 to -16, because Chrome's `getUserMedia` has gain control
-  on by default. `Loudness.kt` is a block AGC with a silence gate and a soft limiter (the
-  Portal has no platform `NoiseSuppressor`). It was prototyped on that clip first: target
+  on by default. `Loudness.kt` is a block AGC with a silence gate and a soft limiter. The
+  Portal reports `aec=false agc=true ns=false` for the platform audio effects. With no echo
+  canceller, a clip has the app's own sounds twice: the clean copy `Mixer` adds, and a faint
+  one the mic hears from the speaker. It was prototyped on that clip first: target
   -16dB and a 0.8 knee gave -15.6 LUFS with peaks at 0dB.
 - **The privacy button mutes the mic silently.** `AudioRecord` still starts and every read
   returns a full block, but the samples peak at 5-6 out of 32767. `MicHub` checks the first 3s
