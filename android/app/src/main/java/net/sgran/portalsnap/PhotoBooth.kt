@@ -840,3 +840,212 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
         c.restoreToCount(save)
     }
 }
+
+/* ------------------------------ Peas in a Pod ------------------------------ */
+
+// Three peas in an open pod on a starry lime background, each pea wearing your face. Two
+// people take turns down the pod; three get one pea each. The peas bob out of step and wave
+// little leaf arms, and the top one has sprouts. The fast tier is enough: only the head box
+// is needed, and it keeps the faces at the camera's 30fps.
+object PeasInAPod : Filter("peas", "Peas", "🌱", Mode.FAST, voice = 1.25f) {
+    override val usesUnder = true
+    override val coversCamera = true
+
+    private const val PEAS = 3
+    private val outer = Path()
+    private val cavity = Path()
+    private val rim = Path()
+    private val star = Path()
+    private val pt = FloatArray(2)
+    private var builtFor = 0f
+
+    private fun radius(d: Draw) = d.h * 0.11f
+
+    private fun top(d: Draw) = d.h * 0.04f
+
+    private fun bottom(d: Draw) = d.h * 0.96f
+
+    // Into pt: pea i's centre this frame.
+    private fun peaCentre(d: Draw, i: Int) {
+        pt[0] = d.w / 2 + sin(d.t / 520f + i * 1.3f) * d.h * 0.006f
+        pt[1] = d.h * (0.28f + i * 0.22f) + sin(d.t / 380f + i * 2.1f) * d.h * 0.012f
+    }
+
+    private fun owner(i: Int, count: Int) = if (count <= 1) 0 else i % count
+
+    // The pod never moves, so its paths are built once. The rim is the pod minus its cavity,
+    // drawn over the peas so they sit inside.
+    private fun buildPod(d: Draw) {
+        if (builtFor == d.h) return
+        builtFor = d.h
+        val x = d.w / 2
+        val t = top(d)
+        val b = bottom(d)
+        val span = b - t
+        val bulge = radius(d) * 1.9f
+        fun lens(path: Path, cx: Float, top: Float, bottom: Float) {
+            path.reset()
+            path.moveTo(x, top)
+            path.cubicTo(x + cx, top + span * 0.1f, x + cx, bottom - span * 0.1f, x, bottom)
+            path.cubicTo(x - cx, bottom - span * 0.1f, x - cx, top + span * 0.1f, x, top)
+            path.close()
+        }
+        lens(outer, bulge, t, b)
+        lens(cavity, bulge * 0.8f, t + span * 0.03f, b - span * 0.03f)
+        rim.reset()
+        rim.op(outer, cavity, Path.Op.DIFFERENCE)
+    }
+
+    override fun scene(d: Draw, faces: List<Face>) {
+        buildPod(d)
+        val c = d.c
+        val p = d.pen
+        val w = d.w
+        val h = d.h
+        val x = w / 2
+        val R = radius(d)
+        c.drawRect(0f, 0f, w, h, p.fill(RadialGradient(x, h * 0.45f, w * 0.6f, hex("#cdf25e"), hex("#86cc2e"), Shader.TileMode.CLAMP)))
+        stars(d)
+
+        val b = bottom(d)
+        val s = c.save()
+        c.scale(1f, 0.22f, x, b)
+        c.drawCircle(x, b, R * 2.2f, p.fill(RadialGradient(x, b, R * 2.2f, rgba(30, 70, 10, 0.45f), rgba(30, 70, 10, 0f), Shader.TileMode.CLAMP)))
+        c.restoreToCount(s)
+
+        c.drawPath(outer, p.fill(LinearGradient(
+            x - R * 1.5f, 0f, x + R * 1.5f, 0f, intArrayOf(hex("#3f9a2c"), hex("#79c94c"), hex("#2f7d22")), floatArrayOf(0f, 0.4f, 1f), Shader.TileMode.CLAMP,
+        )))
+        c.drawPath(cavity, p.fill(LinearGradient(
+            x - R, 0f, x + R, 0f, intArrayOf(hex("#2a6e1d"), hex("#3f8f2b"), hex("#245f18")), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP,
+        )))
+        // Pea bodies under the faces, so each patch's soft edge fades into pea green.
+        for (i in 0 until PEAS) {
+            peaCentre(d, i)
+            c.drawCircle(pt[0], pt[1], R, p.fill(hex("#8fd65a")))
+        }
+    }
+
+    private fun stars(d: Draw) {
+        for (i in 0 until 26) {
+            val x = ((i * 7919 + 131) % 1000) / 1000f * d.w
+            val y = ((i * 4583 + 377) % 1000) / 1000f * d.h
+            if (abs(x - d.w / 2) < d.h * 0.26f) continue // keep the pod clear
+            val tw = 0.5f + 0.5f * sin(d.t / 420f + i * 1.7f)
+            val r = d.h * (0.012f + (i % 4) * 0.005f) * (0.6f + 0.4f * tw)
+            star.reset()
+            for (k in 0 until 8) {
+                val a = k * TAU / 8
+                val rr = if (k % 2 == 0) r else r * 0.3f
+                if (k == 0) star.moveTo(x + cos(a) * rr, y + sin(a) * rr) else star.lineTo(x + cos(a) * rr, y + sin(a) * rr)
+            }
+            star.close()
+            d.c.drawPath(star, d.pen.fill(rgba(255, 255, 255, 0.35f + 0.65f * tw)))
+        }
+    }
+
+    // The head box out of the camera, upright, with a little room round it. Centred a touch
+    // above the box's middle: at the box centre the eyes crowded the top of the pea.
+    override fun draw(d: Draw, f: Face) {
+        val R = radius(d)
+        val hb = headBox(f)
+        val sc = hb.halfH * 1.15f / R
+        val sy = hb.y - hb.halfH * 0.12f
+        for (i in 0 until PEAS) {
+            if (owner(i, f.count) != f.rank) continue
+            peaCentre(d, i)
+            val px = pt[0]
+            val py = pt[1]
+            d.patches += Patch(px, py, R * 0.97f, R * 0.97f, 0f, 0.86f, floatArrayOf(sc, 0f, hb.x - px * sc, 0f, sc, sy - py * sc))
+        }
+    }
+
+    override fun overlay(d: Draw, faces: List<Face>) {
+        if (faces.isEmpty()) return
+        val c = d.c
+        val p = d.pen
+        val R = radius(d)
+        val x0 = d.w / 2
+        for (i in 0 until PEAS) {
+            peaCentre(d, i)
+            val x = pt[0]
+            val y = pt[1]
+            // Green toward the rim, so a face reads as a pea rather than a photo in a circle.
+            c.drawCircle(x, y, R, p.fill(RadialGradient(
+                x, y, R, intArrayOf(rgba(143, 214, 90, 0f), rgba(120, 200, 70, 0.55f), hex("#5fae3a")), floatArrayOf(0.62f, 0.88f, 1f), Shader.TileMode.CLAMP,
+            )))
+            for (side in intArrayOf(-1, 1)) {
+                val bx = x + side * R * 0.46f
+                val by = y + R * 0.28f
+                val br = R * 0.2f
+                c.drawCircle(bx, by, br, p.fill(RadialGradient(bx, by, br, rgba(255, 105, 140, 0.55f), rgba(255, 105, 140, 0f), Shader.TileMode.CLAMP)))
+            }
+            // A shine out on the rim; over the face it read as a smudge on the forehead.
+            val save = c.save()
+            c.rotate(-40f, x, y)
+            c.drawOval(p.rect(x, y - R * 0.8f, R * 0.26f, R * 0.07f), p.fill(rgba(255, 255, 255, 0.3f)))
+            c.restoreToCount(save)
+        }
+
+        p.lift(d.h * 0.01f)
+        c.drawPath(rim, p.fill(LinearGradient(
+            x0 - R * 1.5f, 0f, x0 + R * 1.5f, 0f, intArrayOf(hex("#4aa834"), hex("#86d858"), hex("#3a8f28")), floatArrayOf(0f, 0.4f, 1f), Shader.TileMode.CLAMP,
+        )))
+        p.unlift()
+
+        for (i in 0 until PEAS) {
+            peaCentre(d, i)
+            arms(c, p, pt[0], pt[1], R, d.t, i)
+        }
+        peaCentre(d, 0)
+        sprouts(c, p, pt[0], pt[1], R, d.t)
+    }
+
+    private fun arms(c: Canvas, p: Pen, x: Float, y: Float, R: Float, t: Long, i: Int) {
+        for (side in intArrayOf(-1, 1)) {
+            val wave = sin(t / 260f + i * 1.9f + side) * 0.35f
+            val s = c.save()
+            c.translate(x + side * R * 0.92f, y + R * 0.25f)
+            c.scale(side.toFloat(), 1f)
+            c.rotate(deg(-0.6f + wave))
+            p.newPath().apply {
+                moveTo(0f, 0f)
+                quadTo(R * 0.25f, -R * 0.2f, R * 0.55f, -R * 0.05f)
+                quadTo(R * 0.28f, R * 0.12f, 0f, 0f)
+                close()
+            }
+            p.lift(R * 0.05f)
+            c.drawPath(p.path, p.fill(hex("#57b83a")))
+            p.unlift()
+            c.drawLine(R * 0.04f, 0f, R * 0.45f, -R * 0.06f, p.stroke(hex("#3a8a26"), R * 0.025f))
+            c.restoreToCount(s)
+        }
+    }
+
+    // Two leafy sprouts on the top pea, standing in for the original's antennae.
+    private fun sprouts(c: Canvas, p: Pen, x: Float, y: Float, R: Float, t: Long) {
+        for (side in intArrayOf(-1, 1)) {
+            val sway = sin(t / 330f + side) * R * 0.06f
+            val tx = x + side * R * 0.55f + sway
+            val ty = y - R * 1.45f
+            val stalk = p.stroke(hex("#3f9a2c"), R * 0.05f)
+            stalk.strokeCap = Paint.Cap.ROUND
+            p.newPath().apply {
+                moveTo(x + side * R * 0.3f, y - R * 0.9f)
+                quadTo(x + side * R * 0.2f, y - R * 1.3f, tx, ty)
+            }
+            c.drawPath(p.path, stalk)
+            val s = c.save()
+            c.translate(tx, ty)
+            c.rotate(deg(side * 0.9f))
+            p.newPath().apply {
+                moveTo(0f, 0f)
+                quadTo(R * 0.12f, -R * 0.2f, 0f, -R * 0.36f)
+                quadTo(-R * 0.12f, -R * 0.2f, 0f, 0f)
+                close()
+            }
+            c.drawPath(p.path, p.fill(hex("#6cc84a")))
+            c.restoreToCount(s)
+        }
+    }
+}

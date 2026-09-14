@@ -48,6 +48,17 @@ two open questions above were answered by guessing, so check both against the vi
   crumbs, three bites finish it, and a fresh one pops in 1.3s later.
 - **Cheek puff:** no warp yet. A pair of gentle `bulge` patches on the cheeks would add one.
 
+**Peas in a Pod** (`PeasInAPod`, the "Peas" chip) is also checked only on the test portrait.
+It's a full scene like Skydive: the camera is hidden, and each pea is a circular patch of the
+head box. It uses the fast tier rather than mesh, since only the head box is needed and faces
+then follow at 30fps. It renders at 30fps with a paint time of about 4ms. Its two open
+questions were also guessed:
+
+- **Bobbing:** yes, each pea bobs and sways on its own phase. There's no time offset, which
+  would need a history of camera frames.
+- **Two children:** the peas alternate top, middle, bottom between them. With three, each gets
+  one pea.
+
 ## The effects
 
 ### 1. Mirror
