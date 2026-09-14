@@ -1,0 +1,9 @@
+.gradle/
+.kotlin/
+build/
+local.properties
+*.iml
+.idea/
+
+# The test portrait is MediaPipe's test asset, fetched rather than committed.
+app/src/debug/assets/test/

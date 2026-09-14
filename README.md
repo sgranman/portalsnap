@@ -10,6 +10,11 @@ clips are 1280x720 H.264 with AAC audio, and the gallery gets them into a phone'
 roll. What is left is tuning, not features — see
 [Where this stands](#where-this-stands-and-what-to-do-next).
 
+**Native Android app:** Meta has since enabled ADB on Portals, so the same app now also exists
+as a sideloaded APK in [`android/`](android/README.md). It uses the same models, filters, server
+and album, without the browser's overhead: the fast tier runs at the camera's 30fps and
+recording costs the tracker nothing.
+
 ## Run it
 
 ```bash
