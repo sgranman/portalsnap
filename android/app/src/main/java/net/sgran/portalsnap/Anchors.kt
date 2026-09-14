@@ -2,6 +2,7 @@ package net.sgran.portalsnap
 
 import com.google.mediapipe.tasks.vision.facedetector.FaceDetectorResult
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
+import kotlin.math.asin
 import kotlin.math.hypot
 
 /** The three tracker tiers, and the frame size each is fed (the web app's measured sizes). */
@@ -14,7 +15,12 @@ enum class Mode(val inputW: Int, val inputH: Int) {
 class Pt(val x: Float, val y: Float)
 
 /** One face in normalized image coordinates: 0..1, y down, unmirrored. */
-class FaceAnchors(val points: Map<String, Pt>, val blendshapes: Map<String, Float>, val dense: Boolean)
+class FaceAnchors(
+    val points: Map<String, Pt>,
+    val blendshapes: Map<String, Float>,
+    val dense: Boolean,
+    val pitch: Float? = null,
+)
 
 /**
  * Port of public/anchors.js. The indices are copied rather than re-derived: they were
@@ -59,6 +65,7 @@ object Anchors {
     fun fromLandmarks(res: FaceLandmarkerResult, max: Int): List<FaceAnchors> {
         val out = ArrayList<FaceAnchors>()
         val shapes = res.faceBlendshapes().orElse(null)
+        val poses = res.facialTransformationMatrixes().orElse(null)
         res.faceLandmarks().forEachIndexed { i, lm ->
             if (MESH.values.any { it >= lm.size }) return@forEachIndexed
             val pts = LinkedHashMap<String, Pt>()
@@ -66,7 +73,9 @@ object Anchors {
             for ((k, idx) in MESH_EXTRA) if (idx < lm.size) pts[k] = Pt(lm[idx].x(), lm[idx].y())
             // Per face and parallel to the landmark list: face 1 reads index 1.
             val bs = shapes?.getOrNull(i)?.associate { it.categoryName() to it.score() } ?: emptyMap()
-            out += FaceAnchors(pts, bs, true)
+            // Forward-vector y of the head pose; layout-agnostic up to sign, which Nod ignores.
+            val pitch = poses?.getOrNull(i)?.let { m -> Math.toDegrees(asin(m[9].coerceIn(-1f, 1f).toDouble())).toFloat() }
+            out += FaceAnchors(pts, bs, true, pitch)
         }
         return capped(out, max)
     }

@@ -30,6 +30,8 @@ class MPt(var x: Float, var y: Float)
 
 class Track(val id: Int) {
     var target: FaceAnchors? = null
+    /** Head pitch in degrees, lightly smoothed; mesh tier only. */
+    var pitch: Float? = null
     var shown: HashMap<String, MPt>? = null
     val shownBlend = HashMap<String, Float>()
     val vel = HashMap<String, MPt>()
@@ -105,6 +107,7 @@ class Tracks {
         }
 
         t.target = face
+        face.pitch?.let { p -> t.pitch = t.pitch?.let { it + (p - it) * 0.6f } ?: p }
         val (cx, cy) = centre(face)
         t.cx = cx
         t.cy = cy
@@ -214,6 +217,8 @@ class Face(
     val blendshapes: Map<String, Float>,
     val dense: Boolean,
     private val extra: Map<String, Pt>,
+    /** Head pitch in degrees from MediaPipe's pose matrix; its sign is not relied on. */
+    val pitch: Float? = null,
 ) {
     var rank = 0
     var count = 1
@@ -233,7 +238,7 @@ class Face(
     val headTopY: Float = extra["headTop"]?.y ?: (-0.84f * abs(mouth.y))
 }
 
-fun buildFace(t: Track): Face {
+fun buildFace(t: Track, jawOverride: Float? = null): Face {
     val a = t.shown!!
     val w = FRAME_W.toFloat()
     val h = FRAME_H.toFloat()
@@ -270,6 +275,6 @@ fun buildFace(t: Track): Face {
     }
     return Face(
         t.id, cx, cy, angle, eyeDist, nose, mouth, earR, earL, earSpan, yaw,
-        HashMap(t.shownBlend), t.target?.dense == true, extra,
+        HashMap(t.shownBlend).also { b -> jawOverride?.let { b["jawOpen"] = it } }, t.target?.dense == true, extra, t.pitch,
     )
 }

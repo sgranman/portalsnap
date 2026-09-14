@@ -182,6 +182,8 @@ class Tracker(private val ctx: Context) {
                         .setRunningMode(RunningMode.VIDEO)
                         .setNumFaces(Anchors.faceCap(Mode.MESH))
                         .setOutputFaceBlendshapes(true)
+                        // Head pose, for the nod that switches Monster / Cutie.
+                        .setOutputFacialTransformationMatrixes(true)
                         .build(),
                 )
                 Mode.SEGMENT -> ImageSegmenter.createFromOptions(

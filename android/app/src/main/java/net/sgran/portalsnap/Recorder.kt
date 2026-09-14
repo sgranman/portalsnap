@@ -1,14 +1,11 @@
 package net.sgran.portalsnap
 
-import android.media.AudioFormat
-import android.media.AudioRecord
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
-import android.media.MediaRecorder
-import android.media.audiofx.NoiseSuppressor
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import java.io.File
@@ -17,11 +14,11 @@ import java.nio.ByteOrder
 import kotlin.concurrent.thread
 
 /**
- * A clip: H.264 from the compositor's frames, AAC from the mic through the pitch shifter,
- * into an mp4. The web app's biggest cost (canvas capture, +14ms a frame) does not exist
- * here — the encoder reads the composited texture straight off the GPU.
+ * A clip: H.264 from the compositor's frames, AAC from the shared mic through the loudness
+ * and pitch stages, into an mp4. The web app's biggest cost (canvas capture, +14ms a frame)
+ * does not exist here — the encoder reads the composited texture straight off the GPU.
  */
-class Recorder(private val file: File, wantAudio: Boolean) {
+class Recorder(private val file: File, private val mic: MicHub?) {
     val inputSurface: Surface
     @Volatile var voiceRatio = 1f
     @Volatile var hasAudio = false
@@ -29,11 +26,10 @@ class Recorder(private val file: File, wantAudio: Boolean) {
 
     private val video: MediaCodec
     private var audio: MediaCodec? = null
-    private var mic: AudioRecord? = null
-    private var noise: NoiseSuppressor? = null
     private val muxer = MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
     private val lock = Object()
+    private val audioLock = Object()
     private var videoTrack = -1
     private var audioTrack = -1
     private var muxing = false
@@ -42,10 +38,15 @@ class Recorder(private val file: File, wantAudio: Boolean) {
     private val startUs = System.nanoTime() / 1000
     @Volatile private var stopping = false
 
+    private val shifter = PitchShifter()
+    private val loudness = Loudness()
+    private val floats = FloatArray(MicHub.BLOCK)
+    private val bytes = ByteBuffer.allocate(MicHub.BLOCK * 2).order(ByteOrder.LITTLE_ENDIAN)
+    private var nextAudioPts = 0L
+
     private class Sample(val video: Boolean, val data: ByteArray, val pts: Long, val flags: Int)
 
     private val videoThread: Thread
-    private var audioThread: Thread? = null
 
     init {
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, FRAME_W, FRAME_H).apply {
@@ -57,9 +58,9 @@ class Recorder(private val file: File, wantAudio: Boolean) {
         val (codec, surface) = openVideo(format)
         video = codec
         inputSurface = surface
-        if (wantAudio) setupAudio()
+        if (mic != null && mic.acquire(USER)) setupAudio()
         videoThread = thread(name = "rec-video") { drain(video, true, blocking = true) }
-        if (hasAudio) audioThread = thread(name = "rec-audio") { audioLoop() }
+        if (hasAudio) mic?.sink = MicHub.Sink { s, n, pts -> onAudio(s, n, pts) }
     }
 
     // Hardware first, software as the last resort. On the gen 1 Portal every encoder —
@@ -97,97 +98,69 @@ class Recorder(private val file: File, wantAudio: Boolean) {
 
     private fun setupAudio() {
         try {
-            val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            val rec = AudioRecord(
-                MediaRecorder.AudioSource.CAMCORDER, RATE, AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT, maxOf(min, BLOCK * 8),
-            )
-            if (rec.state != AudioRecord.STATE_INITIALIZED) {
-                rec.release()
-                return
-            }
             val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
             codec.asEncoder(
-                MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, RATE, 1).apply {
+                MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, MicHub.RATE, 1).apply {
                     setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
                     setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BPS)
-                    setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, BLOCK * 4)
+                    setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MicHub.BLOCK * 4)
                 },
             )
             codec.start()
-            // Chrome also ran noise suppression on the mic; use the platform's where the
-            // Portal offers one, so the gain below lifts voices rather than the room.
-            if (NoiseSuppressor.isAvailable()) {
-                noise = runCatching { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } }.getOrNull()
-            }
-            Log.i(TAG, "audio: noise suppressor ${if (noise?.enabled == true) "on" else "unavailable"}")
-            mic = rec
             audio = codec
             hasAudio = true
         } catch (e: Exception) {
             // A missing voice must never cost a recording.
-            Log.w(TAG, "audio unavailable", e)
-            mic?.release()
-            mic = null
+            Log.w(TAG, "audio encoder unavailable", e)
             audio = null
             hasAudio = false
+            mic?.release(USER)
         }
     }
 
-    private fun audioLoop() {
-        val rec = mic ?: return
-        val codec = audio ?: return
-        val shifter = PitchShifter()
-        val loudness = Loudness()
-        val shorts = ShortArray(BLOCK)
-        val floats = FloatArray(BLOCK)
-        val bytes = ByteBuffer.allocate(BLOCK * 2).order(ByteOrder.LITTLE_ENDIAN)
-        rec.startRecording()
-        val t0 = System.nanoTime() / 1000
-        var frames = 0L
-        while (!stopping) {
-            val n = rec.read(shorts, 0, BLOCK)
-            if (n <= 0) continue
-            for (i in 0 until n) floats[i] = shorts[i] / 32768f
+    // Runs on the mic thread, one block at a time.
+    private fun onAudio(s: ShortArray, n: Int, pts: Long) {
+        synchronized(audioLock) {
+            val codec = audio ?: return
+            if (stopping) return
+            for (i in 0 until n) floats[i] = s[i] / 32768f
             // Gain first, as Chrome's capture-side AGC was, so the voice is shifted at level.
             loudness.process(floats, n)
             shifter.process(floats, n, voiceRatio)
             bytes.clear()
             for (i in 0 until n) bytes.putShort((floats[i] * 32767f).toInt().coerceIn(-32768, 32767).toShort())
             bytes.flip()
-            val pts = t0 + frames * 1_000_000L / RATE
-            frames += n
-            val ib = codec.dequeueInputBuffer(10_000)
+            val ib = codec.dequeueInputBuffer(5_000)
             if (ib >= 0) {
                 val inBuf = codec.getInputBuffer(ib)!!
                 inBuf.clear()
                 inBuf.put(bytes)
                 codec.queueInputBuffer(ib, 0, n * 2, pts, 0)
             }
+            nextAudioPts = pts + n * 1_000_000L / MicHub.RATE
             drain(codec, false, blocking = false)
         }
-        try {
-            rec.stop()
-        } catch (_: Exception) {
-        }
-        val ib = codec.dequeueInputBuffer(50_000)
-        if (ib >= 0) codec.queueInputBuffer(ib, 0, 0, t0 + frames * 1_000_000L / RATE, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-        drain(codec, false, blocking = true)
     }
 
-    // Blocking drains run to end of stream; non-blocking ones take what is ready.
+    // Blocking drains run to end of stream (or give up after a few quiet seconds);
+    // non-blocking ones take what is ready.
     private fun drain(codec: MediaCodec, isVideo: Boolean, blocking: Boolean) {
         val info = MediaCodec.BufferInfo()
+        var quietSince = SystemClock.uptimeMillis()
         while (true) {
             val idx = codec.dequeueOutputBuffer(info, if (blocking) 10_000 else 0)
             when {
-                idx == MediaCodec.INFO_TRY_AGAIN_LATER -> if (!blocking) return
+                idx == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    if (!blocking) return
+                    if (stopping && SystemClock.uptimeMillis() - quietSince > 3000) return
+                }
                 idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> synchronized(lock) {
                     val track = muxer.addTrack(codec.outputFormat)
                     if (isVideo) videoTrack = track else audioTrack = track
                     maybeStart()
                 }
                 idx >= 0 -> {
+                    quietSince = SystemClock.uptimeMillis()
                     val buf = codec.getOutputBuffer(idx)
                     val config = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
                     if (buf != null && info.size > 0 && !config) write(isVideo, buf, info)
@@ -243,8 +216,18 @@ class Recorder(private val file: File, wantAudio: Boolean) {
         } catch (e: Exception) {
             Log.w(TAG, "signalEndOfInputStream", e)
         }
+        if (audio != null) {
+            mic?.sink = null
+            synchronized(audioLock) {
+                audio?.let { codec ->
+                    val ib = codec.dequeueInputBuffer(50_000)
+                    if (ib >= 0) codec.queueInputBuffer(ib, 0, 0, nextAudioPts, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    drain(codec, false, blocking = true)
+                }
+            }
+            mic?.release(USER)
+        }
         videoThread.join(4000)
-        audioThread?.join(4000)
         var ok = false
         synchronized(lock) {
             try {
@@ -255,17 +238,12 @@ class Recorder(private val file: File, wantAudio: Boolean) {
             } catch (e: Exception) {
                 Log.w(TAG, "muxer stop", e)
             }
-            try {
-                muxer.release()
-            } catch (_: Exception) {
-            }
+            runCatching { muxer.release() }
         }
         runCatching { video.stop() }
         runCatching { video.release() }
         runCatching { audio?.stop() }
         runCatching { audio?.release() }
-        runCatching { noise?.release() }
-        runCatching { mic?.release() }
         inputSurface.release()
         return if (ok && file.length() > 0) file else null
     }
@@ -276,8 +254,7 @@ class Recorder(private val file: File, wantAudio: Boolean) {
     }
 
     private companion object {
-        const val RATE = 48000
-        const val BLOCK = 1024
+        const val USER = "recorder"
         // Native H.264 from the GPU is cheap, so this can sit above the web app's 2.5Mbps.
         const val VIDEO_BPS = 4_000_000
         const val AUDIO_BPS = 96_000

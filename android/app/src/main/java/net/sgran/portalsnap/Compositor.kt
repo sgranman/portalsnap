@@ -46,6 +46,9 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private lateinit var pTex: Program
     private lateinit var pPatch: Program
     private lateinit var pMask: Program
+    private lateinit var pMirror: Program
+    private lateinit var pPop: Program
+    private lateinit var pDisco: Program
     private lateinit var frame: Fbo
     private lateinit var comp: Fbo
     private lateinit var under: CanvasLayer
@@ -109,6 +112,9 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             pTex = Program(Shaders.VERTEX, Shaders.TEX)
             pPatch = Program(Shaders.VERTEX, Shaders.PATCH)
             pMask = Program(Shaders.VERTEX, Shaders.MASK)
+            pMirror = Program(Shaders.VERTEX, Shaders.FX_MIRROR)
+            pPop = Program(Shaders.VERTEX, Shaders.FX_POP)
+            pDisco = Program(Shaders.VERTEX, Shaders.FX_DISCO)
             frame = Fbo(FRAME_W, FRAME_H)
             comp = Fbo(FRAME_W, FRAME_H)
             under = CanvasLayer(handler)
@@ -365,7 +371,10 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
 
     private fun composite(plan: Plan) {
         comp.bind()
-        if (plan.base) {
+        val fx = plan.fx
+        if (fx != null) {
+            drawFx(fx)
+        } else if (plan.base) {
             GLES20.glDisable(GLES20.GL_BLEND)
             drawTexture(frame.tex, Program.IDENTITY, Program.IDENTITY)
         } else {
@@ -409,6 +418,45 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
 
         if (plan.over) drawLayer(over)
         GLES20.glDisable(GLES20.GL_BLEND)
+    }
+
+    // A frame shader standing in for the plain camera picture.
+    private fun drawFx(fx: FrameFx) {
+        GLES20.glDisable(GLES20.GL_BLEND)
+        val p = when (fx.kind) {
+            FrameFx.MIRROR -> pMirror
+            FrameFx.POP -> pPop
+            FrameFx.DISCO -> pDisco
+            else -> {
+                drawTexture(frame.tex, Program.IDENTITY, Program.IDENTITY)
+                return
+            }
+        }
+        p.use()
+        if (fx.kind == FrameFx.POP) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTex)
+            GLES20.glUniform1i(p.u("uMask"), 1)
+            GLES20.glUniform2f(p.u("uTexel"), 1.5f / maxOf(1, maskW), 1.5f / maxOf(1, maskH))
+            GLES20.glUniform3fv(p.u("uBg"), 1, fx.a, 0)
+            GLES20.glUniform3fv(p.u("uTop"), 1, fx.b, 0)
+            GLES20.glUniform3fv(p.u("uBottom"), 1, fx.c, 0)
+            GLES20.glUniform1f(p.u("uGhost"), fx.p0)
+            GLES20.glUniform1f(p.u("uFlash"), fx.p1)
+        }
+        if (fx.kind == FrameFx.DISCO) {
+            GLES20.glUniform2f(p.u("uSize"), FRAME_W.toFloat(), FRAME_H.toFloat())
+            GLES20.glUniform2f(p.u("uHead"), fx.x, fx.y)
+            GLES20.glUniform1f(p.u("uTime"), fx.p0)
+            GLES20.glUniform1f(p.u("uBeat"), fx.p1)
+            GLES20.glUniform1f(p.u("uLevel"), fx.p2)
+            GLES20.glUniform1f(p.u("uRing"), fx.b[0])
+            GLES20.glUniform3fv(p.u("uTint"), 1, fx.a, 0)
+        }
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, frame.tex)
+        GLES20.glUniform1i(p.u("uTexture"), 0)
+        p.drawQuad()
     }
 
     private fun drawLayer(layer: CanvasLayer) {

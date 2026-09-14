@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Debug
 import android.os.Handler
@@ -47,6 +48,8 @@ class MainActivity : Activity() {
     private lateinit var compositor: Compositor
     private lateinit var camera: CameraSource
     private lateinit var server: Server
+    private lateinit var mic: MicHub
+    private var music: MediaPlayer? = null
     private val ui = Handler(Looper.getMainLooper())
     private val exec = Executors.newFixedThreadPool(3)
 
@@ -97,6 +100,8 @@ class MainActivity : Activity() {
         compositor = Compositor(tracker, painter)
         camera = CameraSource(this)
         server = Server(this)
+        mic = MicHub()
+        painter.mic = mic
         rotOverride = getSharedPreferences("device", MODE_PRIVATE).getInt("rot", -1).takeIf { it >= 0 }
         buildUi()
 
@@ -130,11 +135,14 @@ class MainActivity : Activity() {
         resumed = true
         immersive()
         syncSource()
+        syncMic()
     }
 
     override fun onPause() {
         resumed = false
         if (recorder != null) stopRec()
+        mic.release("filter")
+        music?.pause()
         camera.close()
         openedCamera = false
         super.onPause()
@@ -152,6 +160,7 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         syncSource()
+        syncMic()
     }
 
     /* ------------------------------ Source ------------------------------ */
@@ -210,7 +219,11 @@ class MainActivity : Activity() {
         val root = FrameLayout(this).apply { setBackgroundColor(Palette.BG) }
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        val stage = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        val stage = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            // Some effects change on a tap (Monster / Cutie); the rest ignore it.
+            setOnClickListener { painter.active?.poke() }
+        }
         surface = SurfaceView(this)
         surface.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {}
@@ -294,7 +307,7 @@ class MainActivity : Activity() {
         val strip = LinearLayout(this)
         strip.addView(chip(null, "🚫", "None"))
         for (f in FILTERS) {
-            strip.addView(chip(f, if (f === Skydiver) emojiOr(f.emoji, "🎈") else f.emoji, f.name), LinearLayout.LayoutParams(dp(96), dp(96)).apply { leftMargin = dp(10) })
+            strip.addView(chip(f, emojiOr(f.emoji, EMOJI_FALLBACK[f.id] ?: "✨"), f.name), LinearLayout.LayoutParams(dp(96), dp(96)).apply { leftMargin = dp(10) })
         }
         styleChips(null)
         bar.addView(HorizontalScrollView(this).apply {
@@ -381,11 +394,35 @@ class MainActivity : Activity() {
     private fun selectFilter(f: Filter?) {
         styleChips(f)
         painter.active = f
+        syncMic()
         if (f == null || f.tier == tracker.mode || trackerBroken) return
         if (tracker.loadMs(f.tier) == null) {
             hint(if (f.tier == Mode.SEGMENT) "Off to the ${f.name}…" else "Getting ${f.name} ready…", 2500)
         }
         tracker.select(f.tier) { ok -> if (!ok) ui.post { hint("${f.name} is having a nap", 2500) } }
+    }
+
+    // The mic runs only while an effect listens to it; the recorder takes its own hold.
+    private fun syncMic() {
+        val wants = resumed && painter.active?.wantsMic == true &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (wants) mic.acquire("filter") else mic.release("filter")
+    }
+
+    // A track for the music-reactive effects, from adb for now:
+    // `--es music /sdcard/Android/data/net.sgran.portalsnap/files/song.mp3`, or `stop`.
+    private fun playMusic(path: String) {
+        music?.release()
+        music = null
+        if (path == "stop") return
+        music = runCatching {
+            MediaPlayer().apply {
+                setDataSource(path)
+                isLooping = true
+                setOnPreparedListener { it.start() }
+                prepareAsync()
+            }
+        }.onFailure { Log.w(TAG, "music $path", it) }.getOrNull()
     }
 
     /* ------------------------------ Capture ------------------------------ */
@@ -407,9 +444,9 @@ class MainActivity : Activity() {
     private fun startRec() {
         if (recorder != null || overlayUp() || !live()) return
         val file = File(cacheDir, "vid-${System.currentTimeMillis()}.mp4")
-        val mic = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val micOk = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val rec = try {
-            Recorder(file, mic)
+            Recorder(file, if (micOk) mic else null)
         } catch (e: Exception) {
             Log.e(TAG, "recorder", e)
             hint("Video recording isn't available here", 3000)
@@ -548,6 +585,9 @@ class MainActivity : Activity() {
         put("faces", painter.liveFaces)
         put("jitterPx", r1(painter.jitter.toDouble()))
         put("voice", r1(painter.voice.toDouble()))
+        put("micLevel", r1(mic.level.toDouble()))
+        put("beats", mic.beats)
+        put("micSilent", mic.silent)
         put("segPct", r1(compositor.segShare * 100.0))
         put("loadMs", JSONObject().apply { Mode.entries.forEach { m -> tracker.loadMs(m)?.let { put(m.name, it) } } })
         put("nativeHeapMB", Debug.getNativeHeapAllocatedSize() / 1_000_000)
@@ -578,6 +618,7 @@ class MainActivity : Activity() {
                     append("jit     %.1f px\n".format(painter.jitter))
                     append("faces   ${painter.liveFaces} / ${Anchors.faceCap(tracker.mode)}\n")
                     append("voice   %.2f\n".format(painter.voice))
+                    if (painter.active?.wantsMic == true || recorder != null) append("mic     %.2f  beats %d%s\n".format(mic.level, mic.beats, if (mic.silent) "  SILENT (privacy on?)" else ""))
                     if (tracker.mode == Mode.SEGMENT) append("seg     %.0f%% person\n".format(compositor.segShare * 100))
                     if (recorder != null) append("rec     %.1f fps\n".format(compositor.recRate.fps()))
                     tracker.lastError?.let { append("err     ${it.take(60)}") }
@@ -613,8 +654,11 @@ class MainActivity : Activity() {
         }
         i.getStringExtra("filter")?.let { id -> selectFilter(FILTERS.firstOrNull { it.id == id }) }
         if (i.hasExtra("hud")) hud.visibility = if (i.getBooleanExtra("hud", false)) View.VISIBLE else View.GONE
+        i.getStringExtra("music")?.let { playMusic(it) }
+        if (i.hasExtra("jaw")) painter.debugJaw = i.getFloatExtra("jaw", -1f).takeIf { it >= 0f }
         when (i.getStringExtra("action")) {
             "photo" -> takePhoto()
+            "poke" -> painter.active?.poke()
             "record" -> startRec()
             "stop" -> stopRec()
             "keep" -> keep()
@@ -716,5 +760,8 @@ class MainActivity : Activity() {
 
     private companion object {
         const val MAX_CLIP_MS = 30_000L
+
+        // Android 9's emoji font predates some filters' emoji.
+        val EMOJI_FALLBACK = mapOf("skydiver" to "🎈", "mirror" to "👯", "disco" to "✨")
     }
 }

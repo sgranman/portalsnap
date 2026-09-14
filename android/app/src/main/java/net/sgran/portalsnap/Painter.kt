@@ -54,6 +54,38 @@ class CanvasLayer(handler: Handler) {
     }
 }
 
+/**
+ * A full-frame shader that replaces the plain camera picture: Mirror, Pop Silhouette, Disco.
+ * Filled in by the filter each frame; the fields mean what that kind's shader says they mean.
+ */
+class FrameFx {
+    var kind = NONE
+    val a = FloatArray(3)
+    val b = FloatArray(3)
+    val c = FloatArray(3)
+    var x = 0f
+    var y = 0f
+    var p0 = 0f
+    var p1 = 0f
+    var p2 = 0f
+
+    fun reset() {
+        kind = NONE
+        x = 0f
+        y = 0f
+        p0 = 0f
+        p1 = 0f
+        p2 = 0f
+    }
+
+    companion object {
+        const val NONE = 0
+        const val MIRROR = 1
+        const val POP = 2
+        const val DISCO = 3
+    }
+}
+
 /** What the compositor has to do this frame. */
 class Plan {
     var composite = false
@@ -61,6 +93,7 @@ class Plan {
     var under = false
     var over = false
     var mask = false
+    var fx: FrameFx? = null
     var patches: List<Patch> = emptyList()
 
     fun reset() {
@@ -69,6 +102,7 @@ class Plan {
         under = false
         over = false
         mask = false
+        fx = null
         patches = emptyList()
     }
 }
@@ -79,6 +113,9 @@ class Plan {
  */
 class Painter {
     @Volatile var active: Filter? = null
+    @Volatile var mic: MicHub? = null
+    /** adb's `--ef jaw`: pretend the mouth is this open, for testing on a still portrait. */
+    @Volatile var debugJaw: Float? = null
     @Volatile var voice = 1f
         private set
     @Volatile var liveFaces = 0
@@ -91,6 +128,7 @@ class Painter {
     private val pen = Pen()
     private val draw = Draw(pen)
     private val plan = Plan()
+    private val fx = FrameFx()
     private var lastAt = 0L
     private var mode: Mode = Mode.FAST
 
@@ -116,25 +154,39 @@ class Painter {
                 return plan
             }
 
+            pen.reset()
+            draw.t = now
+            draw.dt = dt
+            draw.patches.clear()
+            val m = mic
+            draw.level = m?.level ?: 0f
+            draw.beat = m?.beatPulse(now) ?: 0f
+            draw.beats = m?.beats ?: 0
+            draw.sinceBeatMs = m?.sinceBeat(now) ?: 1e9f
+
             if (f.tier == Mode.SEGMENT) {
                 liveFaces = 0
                 if (!maskFresh) {
                     idle(under, over)
                     return plan
                 }
-                pen.reset()
-                draw.t = now
-                draw.patches.clear()
-                under.paint { c ->
-                    draw.c = c
-                    guarded(f) { f.backdrop(draw) }
+                guarded(f) { f.update(draw, emptyList()) }
+                if (f.usesUnder) {
+                    under.paint { c ->
+                        draw.c = c
+                        guarded(f) { f.backdrop(draw) }
+                    }
+                } else {
+                    under.clear()
                 }
+                if (f.usesFx) plan.fx = frameFx(f, emptyList())
                 over.clear()
                 voice = voiceOf(f, null)
                 plan.composite = true
                 plan.base = false
-                plan.under = true
-                plan.mask = true
+                plan.under = f.usesUnder
+                // A scene pastes the person over a backdrop; a frame shader reads the mask itself.
+                plan.mask = !f.usesFx
                 return plan
             }
 
@@ -142,23 +194,24 @@ class Painter {
             val live = tracks.live(now)
             liveFaces = live.size
             jitter = tracks.jitterPx()
-            if (live.isEmpty()) {
+            // Face filters rest with nobody in view; frame shaders keep playing.
+            if (live.isEmpty() && !f.usesFx) {
                 idle(under, over)
                 voice = voiceOf(f, null)
                 return plan
             }
 
-            val faces = live.map { buildFace(it) }
+            val faces = live.map { buildFace(it, debugJaw) }
             if (faces.size > 1) {
                 faces.sortedBy { it.cx }.forEachIndexed { i, face -> face.rank = i }
                 faces.forEach { it.count = faces.size }
             }
+            guarded(f) { f.update(draw, faces) }
             voice = voiceOf(f, faces.maxByOrNull { it.eyeDist })
+            if (f.usesFx) plan.fx = frameFx(f, faces)
 
-            pen.reset()
-            draw.t = now
-            draw.patches.clear()
-            if (f.usesUnder) {
+            val underNow = f.usesUnder && faces.isNotEmpty()
+            if (underNow) {
                 under.paint { c ->
                     draw.c = c
                     guarded(f) {
@@ -172,7 +225,10 @@ class Painter {
             if (f.usesOver) {
                 over.paint { c ->
                     draw.c = c
-                    guarded(f) { faces.forEach { f.draw(draw, it) } }
+                    guarded(f) {
+                        faces.forEach { f.draw(draw, it) }
+                        f.overlay(draw, faces)
+                    }
                 }
             } else {
                 // Patch-only filters still run draw() for their patches, on a throwaway.
@@ -182,13 +238,19 @@ class Painter {
 
             plan.composite = true
             plan.base = !f.coversCamera
-            plan.under = f.usesUnder
+            plan.under = underNow
             plan.over = f.usesOver
             plan.patches = ArrayList(draw.patches)
             return plan
         } finally {
             paintMs.add((SystemClock.elapsedRealtimeNanos() - t0) / 1e6)
         }
+    }
+
+    private fun frameFx(f: Filter, faces: List<Face>): FrameFx? {
+        fx.reset()
+        guarded(f) { f.fx(draw, faces, fx) }
+        return if (fx.kind == FrameFx.NONE) null else fx
     }
 
     private fun idle(under: CanvasLayer, over: CanvasLayer) {

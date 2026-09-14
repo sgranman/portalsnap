@@ -22,15 +22,15 @@ import kotlin.math.sin
 // sampled the video (Big Head, the skydiver's face, the backgrounds) become GPU patches,
 // because a Canvas cannot read the camera texture.
 
-private const val TAU = (PI * 2).toFloat()
+internal const val TAU = (PI * 2).toFloat()
 
-private fun deg(rad: Float) = rad * (180f / PI.toFloat())
+internal fun deg(rad: Float) = rad * (180f / PI.toFloat())
 
-private fun rgba(r: Int, g: Int, b: Int, a: Float) = Color.argb((a * 255).toInt(), r, g, b)
+internal fun rgba(r: Int, g: Int, b: Int, a: Float) = Color.argb((a * 255).toInt(), r, g, b)
 
-private fun hex(s: String) = Color.parseColor(s)
+internal fun hex(s: String) = Color.parseColor(s)
 
-private fun sinT(t: Long, div: Float) = sin(t / div)
+internal fun sinT(t: Long, div: Float) = sin(t / div)
 
 /** Canvas 2D's state as the filters use it: one fill, one stroke, one shadow. */
 class Pen {
@@ -95,6 +95,13 @@ class Pen {
 class Draw(val pen: Pen) {
     lateinit var c: Canvas
     var t = 0L
+    /** Milliseconds since the last painted frame. */
+    var dt = 16f
+    /** The shared mic: level 0..1, a beat pulse that decays from 1, and a running beat count. */
+    var level = 0f
+    var beat = 0f
+    var beats = 0
+    var sinceBeatMs = 1e9f
     val w = FRAME_W.toFloat()
     val h = FRAME_H.toFloat()
     val patches = ArrayList<Patch>()
@@ -136,6 +143,23 @@ abstract class Filter(
 
     /** Segment tier: the place the person is pasted into. */
     open fun backdrop(d: Draw) {}
+
+    /** Reacts to the room's sound through the shared mic. */
+    open val wantsMic = false
+
+    /** Replaces the camera picture with a full-frame shader; see FrameFx. */
+    open val usesFx = false
+
+    open fun fx(d: Draw, faces: List<Face>, fx: FrameFx) {}
+
+    /** Once per frame, before drawing: state, particles, triggers. */
+    open fun update(d: Draw, faces: List<Face>) {}
+
+    /** Over layer, once, after every face: particles that belong to the frame. */
+    open fun overlay(d: Draw, faces: List<Face>) {}
+
+    /** A tap on the picture, or adb's `--es action poke`. */
+    open fun poke() {}
 }
 
 fun voiceOf(f: Filter?, face: Face?): Float {
@@ -149,7 +173,7 @@ fun voiceOf(f: Filter?, face: Face?): Float {
 
 /* ------------------------------ helpers ------------------------------ */
 
-private inline fun inFaceSpace(c: Canvas, f: Face, block: () -> Unit) {
+internal inline fun inFaceSpace(c: Canvas, f: Face, block: () -> Unit) {
     val save = c.save()
     c.translate(f.cx, f.cy)
     c.rotate(deg(f.angle))
@@ -163,15 +187,15 @@ private inline fun inFaceSpace(c: Canvas, f: Face, block: () -> Unit) {
     }
 }
 
-private fun toPixels(f: Face, x: Float, y: Float): Pt {
+internal fun toPixels(f: Face, x: Float, y: Float): Pt {
     val c = cos(f.angle)
     val s = sin(f.angle)
     return Pt(f.cx + (x * c - y * s) * f.eyeDist, f.cy + (x * s + y * c) * f.eyeDist)
 }
 
-private class HeadBox(val x: Float, val y: Float, val halfW: Float, val halfH: Float)
+internal class HeadBox(val x: Float, val y: Float, val halfW: Float, val halfH: Float)
 
-private fun headBox(f: Face): HeadBox {
+internal fun headBox(f: Face): HeadBox {
     val topY = f["headTop"]?.y ?: -0.63f
     val botY = f["chin"]?.y ?: 1.36f
     val centre = toPixels(f, 0f, (topY + botY) / 2)
@@ -179,7 +203,7 @@ private fun headBox(f: Face): HeadBox {
 }
 
 // Where an animal ear attaches: mostly the hairline's height, mostly the temple's width.
-private fun earPoints(f: Face, pull: Float): List<Pt> {
+internal fun earPoints(f: Face, pull: Float): List<Pt> {
     val skullR = f["skullR"]
     val skullL = f["skullL"]
     val templeR = f["templeR"]
@@ -191,7 +215,7 @@ private fun earPoints(f: Face, pull: Float): List<Pt> {
 }
 
 // Once per ear, origin on the ear and +x outward, so one drawing works mirrored.
-private inline fun perEar(c: Canvas, f: Face, pull: Float, block: () -> Unit) {
+internal inline fun perEar(c: Canvas, f: Face, pull: Float, block: () -> Unit) {
     for (ear in earPoints(f, pull)) {
         val out = if (ear.x < 0) -1f else 1f
         val save = c.save()
@@ -877,4 +901,6 @@ object Moon : Filter("moon", "Moon", "🌘", Mode.SEGMENT, voice = 1.3f) {
     }
 }
 
-val FILTERS: List<Filter> = listOf(Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Skydiver, Beach, Palace, Moon)
+val FILTERS: List<Filter> = listOf(
+    Mirror, PopSilhouette, DiscoDots, MonsterCutie, PixelHearts,
+    Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Skydiver, Beach, Palace, Moon)

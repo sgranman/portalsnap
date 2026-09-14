@@ -26,6 +26,23 @@ filters where that works, or a supplied image where a photographic look is the p
 | 10 | Bike Ride | 3745986732290546 | fast / mesh | moving scene + rider body + face in helmet | medium–large |
 | 11 | Freefall | 897386285564659 | fast | photoreal-style skydiver, with a camera that pulls away | large |
 
+### Status (2026-09-14)
+
+Effects 1–5 are built (`PhotoBooth.kt`, the `FX_*` shaders in `Gl.kt`, `MicHub.kt`). They're
+the first five chips: Mirror, Pop Art, Disco, Monster, Hearts. All five render correctly on
+the test portrait, and a poke (`--es action poke` or a stage tap) flips Monster and Cutie and
+their voice pitch.
+
+Not yet checked with a real person or real sound:
+
+- **The nod detector.** Head pitch comes from the facial transformation matrix; a nod is a
+  swing of more than 10° that comes back within 1.1s.
+- **Beat reaction in Disco and Pop Art.** Every test so far ran with the privacy button on,
+  which mutes the mic. Without beats, both fall back to idle timing: Disco bursts every 1.1s,
+  and Pop Art changes look every 2s.
+- **A recording with a mic-reactive filter.** The recorder and the effects share the mic
+  through `MicHub`.
+
 ## The effects
 
 ### 1. Mirror

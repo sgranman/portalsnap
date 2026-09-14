@@ -149,7 +149,10 @@ A="adb -s 192.168.1.77:5555 shell am start -n net.sgran.portalsnap/.MainActivity
 $A --ei faces 1 --es filter dog --ez hud true   # test portrait instead of the camera (debug builds)
 $A --ei faces 2 --es filter skydiver            # two portraits
 $A --ei faces 0                                 # back to the camera
-$A --es action photo|record|stop|keep|again|album|pair|close
+$A --es action photo|record|stop|keep|again|album|pair|close|poke
+$A --es filter monster --es action poke         # poke = a stage tap (Monster/Cutie flips)
+$A --es music /sdcard/Android/data/net.sgran.portalsnap/files/beat120.wav   # play a track for Disco / Pop Art; "stop" stops
+$A --ef jaw 0.8                                 # force jawOpen on test faces (Hearts, Monster's mouth); negative clears
 $A --es server https://portalsnap.example.net   # set the server
 $A --ei rot 180                                 # override camera rotation
 $A --ez bench true                              # the bench above; results in files/bench-*.json and logcat PSNAP_BENCH
@@ -193,9 +196,16 @@ Each of these cost real time, so check here first:
   `SurfaceView` for the app, not two.
 - **Clips came out quiet.** The raw mic (`CAMCORDER` source) measured -23.9 LUFS on a real
   clip. The web app's clips were -12 to -16, because Chrome's `getUserMedia` has gain control
-  on by default. `Loudness.kt` is a block AGC with a silence gate and a soft limiter, plus the
-  platform `NoiseSuppressor` where one exists. It was prototyped on that clip first: target
+  on by default. `Loudness.kt` is a block AGC with a silence gate and a soft limiter (the
+  Portal has no platform `NoiseSuppressor`). It was prototyped on that clip first: target
   -16dB and a 0.8 knee gave -15.6 LUFS with peaks at 0dB.
+- **The privacy button mutes the mic silently.** `AudioRecord` still starts and every read
+  returns a full block, but the samples peak at 5-6 out of 32767. `MicHub` checks the first 3s
+  and logs `mic reads but is silent`. The music-reactive effects (Disco, Pop Art) then fall back
+  to their idle timing.
+- **One AudioRecord at a time.** Android 9 hands the mic to a single client, and both the
+  beat-reactive filters and the recorder want it. `MicHub` owns the one `AudioRecord` and feeds
+  every block to both.
 - **No parachute emoji.** Android 9's emoji font has no 🪂, so the Skydive chip falls back to 🎈.
 - **Bulk transfers stall over USB.** Through usbipd into WSL, small adb commands work but
   large file transfers hang. Use adb over Wi-Fi: run `adb tcpip 5555` once over USB, then

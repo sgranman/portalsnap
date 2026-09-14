@@ -267,4 +267,82 @@ object Shaders {
             gl_FragColor = texture2D(uTexture, vUv) * a;
         }
     """
+
+    // Photo Booth's mirror: the half of the frame that is on the child's left in the
+    // (mirrored) preview, reflected onto the other half.
+    const val FX_MIRROR = """
+        precision mediump float;
+        varying vec2 vUv;
+        uniform sampler2D uTexture;
+        void main() {
+            vec2 uv = vUv;
+            if (uv.x < 0.5) uv.x = 1.0 - uv.x;
+            gl_FragColor = texture2D(uTexture, uv);
+        }
+    """
+
+    // Pop silhouette: the person a flat gradient, the room a flat colour with a ghost of
+    // its own texture left in, feathered at the mask edge like MASK.
+    const val FX_POP = """
+        precision mediump float;
+        varying vec2 vUv;
+        uniform sampler2D uTexture;
+        uniform sampler2D uMask;
+        uniform vec2 uTexel;
+        uniform vec3 uBg;
+        uniform vec3 uTop;
+        uniform vec3 uBottom;
+        uniform float uGhost;
+        uniform float uFlash;
+        void main() {
+            vec2 m = vec2(vUv.x, 1.0 - vUv.y);
+            float a = 0.0;
+            for (int i = -1; i <= 1; i++) {
+                for (int j = -1; j <= 1; j++) {
+                    a += texture2D(uMask, m + vec2(float(i), float(j)) * uTexel).a;
+                }
+            }
+            a /= 9.0;
+            vec3 cam = texture2D(uTexture, vUv).rgb;
+            float lum = dot(cam, vec3(0.299, 0.587, 0.114));
+            vec3 bg = uBg * (1.0 - uGhost + uGhost * lum * 1.7);
+            float g = clamp(m.y * 0.75 + vUv.x * 0.25, 0.0, 1.0);
+            vec3 person = mix(uTop, uBottom, g) * (0.94 + 0.12 * lum);
+            gl_FragColor = vec4(mix(bg, person, a) + uFlash, 1.0);
+        }
+    """
+
+    // Disco: a purple wash, and an LED dot grid that twinkles, brightens near the head and
+    // rings outward from it on each beat.
+    const val FX_DISCO = """
+        precision highp float;
+        varying vec2 vUv;
+        uniform sampler2D uTexture;
+        uniform vec2 uSize;
+        uniform vec2 uHead;
+        uniform float uTime;
+        uniform float uBeat;
+        uniform float uLevel;
+        uniform float uRing;
+        uniform vec3 uTint;
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        void main() {
+            vec3 cam = texture2D(uTexture, vUv).rgb;
+            float lum = dot(cam, vec3(0.299, 0.587, 0.114));
+            vec3 col = mix(cam, lum * uTint * 1.5, 0.6);
+            vec2 px = vec2(vUv.x, 1.0 - vUv.y) * uSize;
+            float cell = uSize.y / 30.0;
+            vec2 id = floor(px / cell);
+            float d = length(fract(px / cell) - 0.5);
+            float r = hash(id);
+            float twinkle = 0.5 + 0.5 * sin(uTime * (1.2 + 3.5 * r) + r * 40.0);
+            float dist = length(px - uHead) / uSize.y;
+            float ring = exp(-pow((dist - uRing) * 9.0, 2.0)) * (0.35 + uBeat);
+            float near = exp(-dist * 2.2);
+            float bright = 0.15 + 0.5 * twinkle * (0.45 + 0.55 * uLevel) + 0.8 * ring + 0.6 * uBeat * near;
+            float dotMask = smoothstep(0.34, 0.2, d);
+            vec3 dotCol = mix(uTint * 1.3, vec3(1.0, 0.9, 1.0), r * 0.6);
+            gl_FragColor = vec4(col + dotCol * dotMask * bright * 0.8, 1.0);
+        }
+    """
 }
