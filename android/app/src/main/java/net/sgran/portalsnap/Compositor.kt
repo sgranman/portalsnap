@@ -61,6 +61,10 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private var small: Fbo? = null
     private var smallBuf: ByteBuffer? = null
     private var lastOut: Fbo? = null
+    // Built on first use. If it ever throws (a shader the driver rejects), 3D stays off rather
+    // than failing every frame after it.
+    private var glassRenderer: GlassRenderer? = null
+    private var glassFailed = false
 
     private var camTex = 0
     private var camSt: SurfaceTexture? = null
@@ -122,6 +126,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             pDisco = Program(Shaders.VERTEX, Shaders.FX_DISCO)
             frame = Fbo(FRAME_W, FRAME_H)
             comp = Fbo(FRAME_W, FRAME_H)
+            comp.attachDepth()
             under = CanvasLayer(handler)
             over = CanvasLayer(handler)
             maskTex = genTexture(GLES20.GL_TEXTURE_2D)
@@ -436,6 +441,20 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             // Column-major: src = M * (x, y, 1).
             GLES20.glUniformMatrix3fv(pPatch.u("uMap"), 1, false, floatArrayOf(m[0], m[3], 0f, m[1], m[4], 0f, m[2], m[5], 1f), 0)
             pPatch.drawQuad()
+        }
+
+        if (plan.glasses.isNotEmpty() && !glassFailed) {
+            try {
+                val r = glassRenderer ?: GlassRenderer().also { glassRenderer = it }
+                r.draw(plan.glasses, frame.tex)
+            } catch (e: Throwable) {
+                glassFailed = true
+                Log.e(TAG, "3D glass pass failed; turning it off", e)
+                GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+                GLES20.glDepthMask(true)
+                GLES20.glEnable(GLES20.GL_BLEND)
+                GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+            }
         }
 
         if (plan.over) drawLayer(over)

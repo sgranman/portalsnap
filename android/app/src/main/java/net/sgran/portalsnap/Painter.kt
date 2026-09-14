@@ -95,6 +95,7 @@ class Plan {
     var mask = false
     var fx: FrameFx? = null
     var patches: List<Patch> = emptyList()
+    var glasses: List<Glass3D> = emptyList()
 
     fun reset() {
         composite = false
@@ -104,6 +105,7 @@ class Plan {
         mask = false
         fx = null
         patches = emptyList()
+        glasses = emptyList()
     }
 }
 
@@ -158,6 +160,7 @@ class Painter {
             draw.t = now
             draw.dt = dt
             draw.patches.clear()
+            draw.glasses.clear()
             val m = mic
             draw.level = m?.level ?: 0f
             draw.beat = m?.beatPulse(now) ?: 0f
@@ -260,6 +263,7 @@ class Painter {
             plan.under = underNow
             plan.over = f.usesOver
             plan.patches = ArrayList(draw.patches)
+            plan.glasses = ArrayList(draw.glasses)
             return plan
         } finally {
             paintMs.add((SystemClock.elapsedRealtimeNanos() - t0) / 1e6)

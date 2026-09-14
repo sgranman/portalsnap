@@ -113,6 +113,35 @@ Polish pass after the user's review:
 - **Straw:** longer, and showing only above the lemonade.
 - **Lemon:** a realistic slice with a waxy rind, a pith ring, ten translucent segments with
   juice streaks, a pale centre, and a gloss.
+
+**Rebuilt in real 3D** (`Glass3D.kt`), after the user pointed out that the layered 2D version was
+cheating in ways that showed: tilted flat cards, a rim ellipse tuned by hand that drifted from
+the tilt, and draw order standing in for depth. It now works like this:
+
+- **The pass:** a GLES 3 pass inside the composite, between the face patches and the over layer,
+  into the composite framebuffer with a depth buffer. `View3D` is a perspective camera whose
+  z = 0 plane lands exactly on frame pixels, so 3D lines up with the 2D layers.
+- **Meshes:**
+  - **Glass:** a revolved outline with a real wall, a rounded lip and a thick rounded base.
+  - **Liquid:** a volume, cut in the shader by the surface plane. The inside of the far wall
+    under the cut is shaded as the surface, at the depth where the view ray actually crosses the
+    plane, so ice and straw meet it correctly.
+  - **Others:** rounded-box ice cubes, a straw tube and a lemon disc.
+- **Face on the liquid:** each point on the liquid looks up the face by its angle around the
+  glass as seen from the eye, through `sin`, so the features sit magnified in the middle and the
+  face smears to the silhouette. It's muted, cast pink, lightly blurred and rippled.
+- **Glass and ice shading:** see-through, brightening toward the edges, reflecting a small
+  studio: a warm room, a bright backdrop behind that gives pale edges, and a tall soft light
+  for a side streak. The ice reflects the face (mirrored) by its reflection direction, with a
+  glint.
+- **Pose:** from the head. Roll comes from the eye line, the turn from yaw, and the nod from the
+  pose matrix (tipping the head forward tips the glass's top toward you), on a 24° base tip.
+- **Surface:** tips with the glass and leans with its acceleration. A level-in-the-world surface
+  was tried, and it hides itself whenever the glass sits above the camera's eye line.
+- **Kept from before:** the spring, sloshing, clinks and bubbles. Bubbles are placed on the
+  liquid's front in 3D and drawn flat over the pass.
+- **Fallback:** if the pass throws (for example a shader the driver rejects), it logs once and
+  turns 3D off rather than failing every frame.
 - **Arms:** bendy arms with mitten hands. On each pea one arm waves and the other swings.
 
 ## The effects

@@ -145,6 +145,18 @@ class Fbo(val w: Int, val h: Int) {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
     }
 
+    /** Adds a depth buffer, for 3D passes drawn into this framebuffer. */
+    fun attachDepth() {
+        val ids = IntArray(1)
+        GLES20.glGenRenderbuffers(1, ids, 0)
+        GLES20.glBindRenderbuffer(GLES20.GL_RENDERBUFFER, ids[0])
+        GLES20.glRenderbufferStorage(GLES20.GL_RENDERBUFFER, GLES30.GL_DEPTH_COMPONENT24, w, h)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo)
+        GLES20.glFramebufferRenderbuffer(GLES20.GL_FRAMEBUFFER, GLES20.GL_DEPTH_ATTACHMENT, GLES20.GL_RENDERBUFFER, ids[0])
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        GLES20.glBindRenderbuffer(GLES20.GL_RENDERBUFFER, 0)
+    }
+
     fun bind() {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo)
         GLES20.glViewport(0, 0, w, h)

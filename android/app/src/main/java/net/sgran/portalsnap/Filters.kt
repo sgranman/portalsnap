@@ -105,6 +105,8 @@ class Draw(val pen: Pen) {
     val w = FRAME_W.toFloat()
     val h = FRAME_H.toFloat()
     val patches = ArrayList<Patch>()
+    /** Real 3D glasses, drawn after the patches and before the over layer. */
+    val glasses = ArrayList<Glass3D>()
 }
 
 /**
