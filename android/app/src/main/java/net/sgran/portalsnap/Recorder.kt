@@ -15,7 +15,7 @@ import kotlin.concurrent.thread
 
 /**
  * A clip: H.264 from the compositor's frames, AAC from the shared mic through the loudness
- * and pitch stages, into an mp4. The web app's biggest cost (canvas capture, +14ms a frame)
+ * and pitch stages with the app's own sounds (Mixer) added on top, into an mp4. The web app's biggest cost (canvas capture, +14ms a frame)
  * does not exist here — the encoder reads the composited texture straight off the GPU.
  */
 class Recorder(private val file: File, private val mic: MicHub?) {
@@ -127,8 +127,11 @@ class Recorder(private val file: File, private val mic: MicHub?) {
             // Gain first, as Chrome's capture-side AGC was, so the voice is shifted at level.
             loudness.process(floats, n)
             shifter.process(floats, n, voiceRatio)
+            // The app's own sounds go in after the voice effect, at their own pitch, read at the
+            // mic's capture time.
+            Mixer.mixInto(floats, n, pts * 1000)
             bytes.clear()
-            for (i in 0 until n) bytes.putShort((floats[i] * 32767f).toInt().coerceIn(-32768, 32767).toShort())
+            for (i in 0 until n) bytes.putShort((Mixer.softClip(floats[i]) * 32767f).toInt().coerceIn(-32768, 32767).toShort())
             bytes.flip()
             val ib = codec.dequeueInputBuffer(5_000)
             if (ib >= 0) {

@@ -9,7 +9,6 @@ import android.graphics.Color
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Debug
 import android.os.Handler
@@ -49,7 +48,8 @@ class MainActivity : Activity() {
     private lateinit var camera: CameraSource
     private lateinit var server: Server
     private lateinit var mic: MicHub
-    private var music: MediaPlayer? = null
+    @Volatile private var musicVoice = 0
+    @Volatile private var musicToken = 0
     private val ui = Handler(Looper.getMainLooper())
     private val exec = Executors.newFixedThreadPool(3)
 
@@ -102,7 +102,7 @@ class MainActivity : Activity() {
         server = Server(this)
         mic = MicHub()
         painter.mic = mic
-        Sfx.init(this)
+        Sfx.init()
         rotOverride = getSharedPreferences("device", MODE_PRIVATE).getInt("rot", -1).takeIf { it >= 0 }
         buildUi()
 
@@ -137,15 +137,15 @@ class MainActivity : Activity() {
         immersive()
         syncSource()
         syncMic()
-        Sfx.resume()
     }
 
     override fun onPause() {
         resumed = false
         if (recorder != null) stopRec()
         mic.release("filter")
-        music?.pause()
-        Sfx.pause()
+        musicToken++
+        musicVoice = 0
+        Mixer.stopAll()
         ui.removeCallbacks(retryCamera)
         camera.close()
         openedCamera = false
@@ -153,7 +153,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        Sfx.release()
+        Mixer.shutdown()
         super.onDestroy()
     }
 
@@ -431,18 +431,18 @@ class MainActivity : Activity() {
 
     // A track for the music-reactive effects, from adb for now:
     // `--es music /sdcard/Android/data/net.sgran.portalsnap/files/song.mp3`, or `stop`.
+    // It's decoded into Mixer, so it's baked into recordings along with the sound effects.
     private fun playMusic(path: String) {
-        music?.release()
-        music = null
+        val token = ++musicToken
+        Mixer.stop(musicVoice)
+        musicVoice = 0
         if (path == "stop") return
-        music = runCatching {
-            MediaPlayer().apply {
-                setDataSource(path)
-                isLooping = true
-                setOnPreparedListener { it.start() }
-                prepareAsync()
-            }
-        }.onFailure { Log.w(TAG, "music $path", it) }.getOrNull()
+        Thread {
+            val clip = Mixer.decode(path) ?: return@Thread
+            Log.i(TAG, "music ${clip.pcm.size / clip.rate}s at ${clip.rate}Hz")
+            // A stop (or another track) that arrived while decoding wins.
+            if (token == musicToken) musicVoice = Mixer.play(clip, 0.8f, loop = true)
+        }.start()
     }
 
     /* ------------------------------ Capture ------------------------------ */

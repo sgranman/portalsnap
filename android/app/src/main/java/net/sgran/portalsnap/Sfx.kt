@@ -1,12 +1,5 @@
 package net.sgran.portalsnap
 
-import android.content.Context
-import android.media.AudioAttributes
-import android.media.SoundPool
-import android.util.Log
-import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.Random
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
@@ -19,76 +12,28 @@ import kotlin.math.pow
 import kotlin.math.sin
 
 /**
- * Short sound effects for the filters. They're synthesized on first launch rather than shipped
- * as files, so there's nothing to license and nothing to fetch. They play through a SoundPool,
- * so they can overlap and each play can be pitched a little differently.
- *
- * They go to the speaker only. A recording picks them up through the mic, like any other sound
- * in the room.
+ * Short sound effects for the filters. They're synthesized when the app starts rather than
+ * shipped as files, so there's nothing to license and nothing to fetch. They play through
+ * [Mixer], which also bakes them into recordings.
  */
 object Sfx {
     private const val RATE = 44100
-    // Bump when a recipe changes, so the cached WAVs are rebuilt.
-    private const val VERSION = 1
+    private val clips = ConcurrentHashMap<String, Mixer.Clip>()
+    @Volatile private var started = false
 
-    @Volatile private var pool: SoundPool? = null
-    private val ids = ConcurrentHashMap<String, Int>()
-    private val ready = ConcurrentHashMap.newKeySet<Int>()
-
-    @Synchronized
-    fun init(ctx: Context) {
-        if (pool != null) return
-        val p = SoundPool.Builder()
-            .setMaxStreams(4)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_GAME)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build(),
-            )
-            .build()
-        p.setOnLoadCompleteListener { _, id, status -> if (status == 0) ready += id }
-        pool = p
-        val dir = ctx.cacheDir
+    fun init() {
+        if (started) return
+        started = true
         thread(name = "sfx") {
-            val recipes = linkedMapOf<String, () -> ShortArray>(
-                "creak1" to { creak(11L, 0.55f, 390f) },
-                "creak2" to { creak(23L, 0.5f, 450f) },
-            )
-            for ((name, make) in recipes) {
-                try {
-                    val f = File(dir, "sfx-$name-v$VERSION.wav")
-                    if (!f.exists()) writeWav(f, make())
-                    ids[name] = p.load(f.path, 1)
-                } catch (e: Exception) {
-                    Log.w(TAG, "sfx $name", e)
-                }
-            }
+            clips["creak1"] = Mixer.Clip(creak(11L, 0.55f, 390f), RATE)
+            clips["creak2"] = Mixer.Clip(creak(23L, 0.5f, 450f), RATE)
         }
     }
 
-    /** Silently does nothing until the sound has loaded. */
+    /** Silently does nothing until the sound is ready. */
     fun play(name: String, volume: Float = 1f, rate: Float = 1f) {
-        val p = pool ?: return
-        val id = ids[name] ?: return
-        if (id !in ready) return
-        p.play(id, volume, volume, 1, 0, rate.coerceIn(0.5f, 2f))
-    }
-
-    fun pause() {
-        pool?.autoPause()
-    }
-
-    fun resume() {
-        pool?.autoResume()
-    }
-
-    @Synchronized
-    fun release() {
-        pool?.release()
-        pool = null
-        ids.clear()
-        ready.clear()
+        val clip = clips[name] ?: return
+        Mixer.play(clip, volume, rate.coerceIn(0.5f, 2f))
     }
 
     // A wooden creak is stick-slip: a quick train of tiny impacts, each ringing the wood's few
@@ -122,17 +67,5 @@ object Sfx {
         var peak = 1e-6f
         for (v in out) peak = max(peak, abs(v))
         return ShortArray(n) { (out[it] / peak * 0.8f * 32767f).toInt().toShort() }
-    }
-
-    private fun writeWav(f: File, pcm: ShortArray) {
-        val bytes = pcm.size * 2
-        val buf = ByteBuffer.allocate(44 + bytes).order(ByteOrder.LITTLE_ENDIAN)
-        buf.put("RIFF".toByteArray()).putInt(36 + bytes).put("WAVE".toByteArray())
-        buf.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(RATE).putInt(RATE * 2).putShort(2).putShort(16)
-        buf.put("data".toByteArray()).putInt(bytes)
-        for (s in pcm) buf.putShort(s)
-        val tmp = File(f.path + ".tmp")
-        tmp.writeBytes(buf.array())
-        tmp.renameTo(f)
     }
 }

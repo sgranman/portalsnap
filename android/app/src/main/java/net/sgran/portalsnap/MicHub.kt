@@ -91,11 +91,13 @@ class MicHub {
 
     private fun loop(rec: AudioRecord) {
         val buf = ShortArray(BLOCK)
+        val mix = FloatArray(BLOCK)
         val history = FloatArray(HISTORY)
         var filled = 0
         var head = 0
         try {
             rec.startRecording()
+            Log.i(TAG, "mic effects: aec=${android.media.audiofx.AcousticEchoCanceler.isAvailable()} agc=${android.media.audiofx.AutomaticGainControl.isAvailable()} ns=${android.media.audiofx.NoiseSuppressor.isAvailable()}")
             val t0Us = System.nanoTime() / 1000
             var frames = 0L
             var peak = 0
@@ -119,9 +121,13 @@ class MicHub {
                 frames += n
                 sink?.onBlock(buf, n, pts)
 
+                // Beats come from the room plus what the app itself is playing, heard directly,
+                // so the Portal's own music drives Disco even where the mic barely hears it.
+                java.util.Arrays.fill(mix, 0, n, 0f)
+                Mixer.mixInto(mix, n, pts * 1000)
                 var sum = 0.0
                 for (i in 0 until n) {
-                    val s = buf[i] / 32768.0
+                    val s = buf[i] / 32768.0 + mix[i]
                     sum += s * s
                 }
                 val energy = (sum / n).toFloat()

@@ -63,8 +63,13 @@ Additions the user asked for:
 
 - **Rocking:** the pod rocks ±6° like a cradle on a 1.8s swing, about a pivot below the frame.
   The face patches follow the rotation, and the shadow slides under the base.
-- **Creak:** a wooden creak plays at each end of the swing. It's synthesized in `Sfx.kt` and
-  plays through the speaker only while someone is in view.
+- **Creak:** a wooden creak plays at each end of the swing, only while someone is in view.
+  It's synthesized in `Sfx.kt`.
+
+Every app sound, effects and music alike, plays through `Mixer.kt`. The mixer feeds the speaker
+and also adds the same samples to recordings after the voice effect, matched to the mic's
+capture times. So clips carry the sounds cleanly and at their own pitch, instead of the faint
+copy the mic hears in the room. Beat detection hears the mix directly too.
 - **Arms:** bendy arms with mitten hands. On each pea one arm waves and the other swings.
 
 ## The effects
