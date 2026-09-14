@@ -143,6 +143,7 @@ class MainActivity : Activity() {
         if (recorder != null) stopRec()
         mic.release("filter")
         music?.pause()
+        ui.removeCallbacks(retryCamera)
         camera.close()
         openedCamera = false
         super.onPause()
@@ -185,16 +186,27 @@ class MainActivity : Activity() {
                 compositor.sourceW = o.size.width
                 compositor.sourceH = o.size.height
                 applyRotation()
+                if (loadMsg.text.startsWith(CAMERA_PROBLEM)) loadMsg.text = ""
             }
             Log.i(TAG, "camera ${o.id} ${o.size} sensor=${o.sensorOrientation} fps=${o.fps}")
         }, { err ->
             Log.e(TAG, err)
             ui.post {
                 openedCamera = false
-                loadMsg.text = "Camera problem: $err"
+                // Error 3 is the Portal's privacy button: it lets the camera open, sends no
+                // frames, then kills the session. Keep retrying so the preview comes back
+                // by itself when the button is pressed again.
+                val msg = if (err.endsWith("error 3")) "$CAMERA_PROBLEM — is the privacy button on?" else "$CAMERA_PROBLEM: $err"
+                loadMsg.text = msg
+                // Past the loading screen the last frame just freezes, so say why over it.
+                if (loader.visibility != View.VISIBLE) hint(msg, CAMERA_RETRY_MS + 1000)
+                ui.removeCallbacks(retryCamera)
+                if (resumed) ui.postDelayed(retryCamera, CAMERA_RETRY_MS)
             }
         })
     }
+
+    private val retryCamera = Runnable { syncSource() }
 
     // The camera service already turns the buffer by the sensor's mounting (it arrives in the
     // SurfaceTexture matrix — see Compositor.readCameraTransform), so all that is left is to
@@ -760,6 +772,8 @@ class MainActivity : Activity() {
 
     private companion object {
         const val MAX_CLIP_MS = 30_000L
+        const val CAMERA_PROBLEM = "Camera problem"
+        const val CAMERA_RETRY_MS = 3000L
 
         // Android 9's emoji font predates some filters' emoji.
         val EMOJI_FALLBACK = mapOf("skydiver" to "🎈", "mirror" to "👯", "disco" to "✨")

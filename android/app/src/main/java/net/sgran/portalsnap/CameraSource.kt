@@ -70,6 +70,7 @@ class CameraSource(ctx: Context) {
                     override fun onDisconnected(cam: CameraDevice) {
                         cam.close()
                         if (device === cam) device = null
+                        onError("camera $id: disconnected")
                     }
 
                     override fun onError(cam: CameraDevice, error: Int) {

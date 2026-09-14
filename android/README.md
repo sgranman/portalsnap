@@ -171,7 +171,9 @@ Each of these cost real time, so check here first:
 - **The privacy button.** With the top-edge camera/mic button on (red), the camera opens and
   the green LED lights, but no frame arrives. After ~10s the Portal kills the client with
   `CameraDevice` error 3 and logs `LedPolicy violation: Led (1) Preview (0)` in
-  `dumpsys media.camera`.
+  `dumpsys media.camera`. Nothing tells the app when the button goes off again, so
+  `MainActivity` retries the camera every 3s after any error. A hint over the frozen frame
+  asks whether the privacy button is on.
 - **Camera rotation.** The camera service already turns camera 0's buffers by the sensor's
   90°: the SurfaceTexture matrix arrives as `[0 -1; 1 0]`, with no mirror. The panel is
   portrait-native and the app runs at `ROTATION_270`. The correct extra rotation is therefore
