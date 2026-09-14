@@ -50,6 +50,10 @@ class MainActivity : Activity() {
     private lateinit var mic: MicHub
     @Volatile private var musicVoice = 0
     @Volatile private var musicToken = 0
+    // The selected filter's own soundtrack (Filter.music).
+    private var soundtrackVoice = 0
+    private var soundtrackName: String? = null
+    private val soundtracks = HashMap<String, Mixer.Clip>()
     private val ui = Handler(Looper.getMainLooper())
     private val exec = Executors.newFixedThreadPool(3)
 
@@ -137,6 +141,7 @@ class MainActivity : Activity() {
         immersive()
         syncSource()
         syncMic()
+        syncSoundtrack()
     }
 
     override fun onPause() {
@@ -146,6 +151,10 @@ class MainActivity : Activity() {
         musicToken++
         musicVoice = 0
         Mixer.stopAll()
+        // stopAll ended the soundtrack too; forget it so resuming starts it again.
+        soundtrackName = null
+        soundtrackVoice = 0
+        Soundtrack.startedNs = 0L
         ui.removeCallbacks(retryCamera)
         camera.close()
         openedCamera = false
@@ -415,6 +424,7 @@ class MainActivity : Activity() {
         styleChips(f)
         painter.active = f
         syncMic()
+        syncSoundtrack()
         if (f == null || f.tier == tracker.mode || trackerBroken) return
         if (tracker.loadMs(f.tier) == null) {
             hint(if (f.tier == Mode.SEGMENT) "Off to the ${f.name}…" else "Getting ${f.name} ready…", 2500)
@@ -427,6 +437,31 @@ class MainActivity : Activity() {
         val wants = resumed && painter.active?.wantsMic == true &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (wants) mic.acquire("filter") else mic.release("filter")
+    }
+
+    // The selected filter's soundtrack, looped through Mixer while the app is in front: heard,
+    // baked into clips, and (through Soundtrack.startedNs) the clock its cuts follow.
+    private fun syncSoundtrack() {
+        val want = if (resumed) painter.active?.music else null
+        if (want == soundtrackName) return
+        Mixer.stop(soundtrackVoice)
+        soundtrackVoice = 0
+        Soundtrack.startedNs = 0L
+        soundtrackName = want
+        if (want == null) return
+        Thread {
+            val clip = synchronized(soundtracks) { soundtracks[want] }
+                ?: runCatching { assets.open(want).use { Mixer.wav(it.readBytes()) } }
+                    .onFailure { Log.w(TAG, "soundtrack $want", it) }.getOrNull()
+                    ?.also { c -> synchronized(soundtracks) { soundtracks[want] = c } }
+            if (clip == null) return@Thread
+            ui.post {
+                // Another filter, or a pause, that arrived while loading wins.
+                if (soundtrackName != want || !resumed) return@post
+                soundtrackVoice = Mixer.play(clip, 0.75f, loop = true)
+                Soundtrack.startedNs = System.nanoTime()
+            }
+        }.start()
     }
 
     // A track for the music-reactive effects, from adb for now:

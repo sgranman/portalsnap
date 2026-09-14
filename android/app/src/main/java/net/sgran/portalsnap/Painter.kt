@@ -60,6 +60,8 @@ class CanvasLayer(handler: Handler) {
  */
 class FrameFx {
     var kind = NONE
+    /** Sixteen more parameters for effects that need them (POP_ART). */
+    val q = FloatArray(16)
     val a = FloatArray(3)
     val b = FloatArray(3)
     val c = FloatArray(3)
@@ -83,6 +85,7 @@ class FrameFx {
         const val MIRROR = 1
         const val POP = 2
         const val DISCO = 3
+        const val POP_ART = 4
     }
 }
 
@@ -134,6 +137,13 @@ class Painter {
     private var lastAt = 0L
     private var mode: Mode = Mode.FAST
 
+    /** The segmenter's latest mask, 1 for person and 0 for not, for filters that read its shape. */
+    fun onMask(mask: ByteArray, w: Int, h: Int) {
+        draw.mask = mask
+        draw.maskW = w
+        draw.maskH = h
+    }
+
     fun onFaces(faces: List<FaceAnchors>, forMode: Mode, now: Long) {
         if (forMode != mode) {
             mode = forMode
@@ -183,11 +193,19 @@ class Painter {
                     under.clear()
                 }
                 if (f.usesFx) plan.fx = frameFx(f, emptyList())
-                over.clear()
+                if (f.usesOver) {
+                    over.paint { c ->
+                        draw.c = c
+                        guarded(f) { f.overlay(draw, emptyList()) }
+                    }
+                } else {
+                    over.clear()
+                }
                 voice = voiceOf(f, null)
                 plan.composite = true
                 plan.base = false
                 plan.under = f.usesUnder
+                plan.over = f.usesOver
                 // A scene pastes the person over a backdrop; a frame shader reads the mask itself.
                 plan.mask = !f.usesFx
                 return plan

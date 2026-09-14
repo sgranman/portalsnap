@@ -90,45 +90,7 @@ object Mirror : Filter("mirror", "Mirror", "🪞", Mode.FAST) {
 
 /* ---------------------------- Pop Silhouette ---------------------------- */
 
-// The person as a flat gradient silhouette on a flat colour, stepping through looks on the
-// beat — or on a slow clock when nothing is playing.
-object PopSilhouette : Filter("pop", "Pop Art", "🎨", Mode.SEGMENT) {
-    override val usesOver = false
-    override val usesFx = true
-    override val wantsMic = true
-
-    // background, person top, person bottom
-    private val looks = arrayOf(
-        arrayOf(rgb("#b3263a"), rgb("#d9602e"), rgb("#f2b632")),
-        arrayOf(rgb("#16807f"), rgb("#ff5c9a"), rgb("#8e4cf0")),
-        arrayOf(rgb("#f5c518"), rgb("#2f5bea"), rgb("#33d1ff")),
-        arrayOf(rgb("#3b1e6e"), rgb("#9be34a"), rgb("#22b573")),
-    )
-    private var look = 0
-    private var seenBeats = -1
-    private var lastSwitch = 0L
-
-    override fun fx(d: Draw, faces: List<Face>, fx: FrameFx) {
-        if (d.beats != seenBeats) {
-            if (seenBeats >= 0 && d.t - lastSwitch > 350) next(d.t)
-            seenBeats = d.beats
-        } else if (d.sinceBeatMs > 2500 && d.t - lastSwitch > 2000) {
-            next(d.t)
-        }
-        val l = looks[look]
-        fx.kind = FrameFx.POP
-        l[0].copyInto(fx.a)
-        l[1].copyInto(fx.b)
-        l[2].copyInto(fx.c)
-        fx.p0 = 0.18f // ghost of the room in the background
-        fx.p1 = d.beat * 0.35f // flash on the beat
-    }
-
-    private fun next(now: Long) {
-        look = (look + 1) % looks.size
-        lastSwitch = now
-    }
-}
+// Rebuilt from its reference video in PopArt.kt.
 
 /* ------------------------------ Disco Dots ------------------------------ */
 

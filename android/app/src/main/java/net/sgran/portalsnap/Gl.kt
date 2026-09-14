@@ -362,6 +362,193 @@ object Shaders {
 
     // Pop silhouette: the person a flat gradient, the room a flat colour with a ghost of
     // its own texture left in, feathered at the mask edge like MASK.
+    // Pop Art (PopArt.kt): a person look over a grunge ground, chosen per beat. The mask is the
+    // segmenter's (1 = person), the echoes are the same mask 90ms apart, newest first. Grounds and
+    // grain are procedural. Frame pixel p has y down; uv is the mask's (and the frame's) 0..1.
+    const val FX_POP_ART = """
+        precision highp float;
+        varying vec2 vUv;
+        uniform sampler2D uTexture;
+        uniform sampler2D uMask;
+        uniform sampler2D uEcho0;
+        uniform sampler2D uEcho1;
+        uniform sampler2D uEcho2;
+        uniform vec2 uMaskTexel;
+        uniform vec2 uSize;
+        uniform float uLook;
+        uniform float uBg;
+        uniform float uTrans;
+        uniform float uTransP;
+        uniform float uOutline;
+        uniform float uEchoOn;
+        uniform vec3 uEchoColor;
+        uniform vec3 uHead;
+        uniform float uDissolve;
+        uniform float uHalftone;
+        uniform float uTime;
+        uniform float uFlash;
+
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+        float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+        }
+
+        float fbm(vec2 p) {
+            float v = 0.0;
+            float a = 0.5;
+            for (int i = 0; i < 4; i++) {
+                v += a * noise(p);
+                p = p * 2.03 + 17.0;
+                a *= 0.5;
+            }
+            return v;
+        }
+
+        // The mask is 256x144 under a 1280x720 frame: blur across its pixels, then pull the edge
+        // back to a clean line, so silhouettes aren't staircases.
+        float soft(sampler2D t, vec2 uv) {
+            vec2 d = uMaskTexel * 1.2;
+            float a = texture2D(t, uv).a * 4.0
+                + (texture2D(t, uv + vec2(d.x, 0.0)).a + texture2D(t, uv - vec2(d.x, 0.0)).a
+                + texture2D(t, uv + vec2(0.0, d.y)).a + texture2D(t, uv - vec2(0.0, d.y)).a) * 2.0
+                + texture2D(t, uv + d).a + texture2D(t, uv - d).a
+                + texture2D(t, uv + vec2(d.x, -d.y)).a + texture2D(t, uv + vec2(-d.x, d.y)).a;
+            return smoothstep(0.3, 0.7, a / 16.0);
+        }
+
+        // Red grunge paper: blotchy, grainy, a faint diagonal print, big ghosted shapes.
+        vec3 redGround(vec2 p) {
+            vec3 c = vec3(0.72, 0.15, 0.19) * (0.86 + 0.2 * fbm(p / 180.0));
+            float print = smoothstep(0.55, 0.72, fbm(p / 90.0 + 7.0)) * (0.5 + 0.5 * sin((p.x + p.y) / 12.0));
+            c *= 1.0 - 0.03 * print;
+            c *= 1.0 - 0.12 * smoothstep(0.55, 0.75, fbm(p / 420.0 + 3.1));
+            return c + (hash(floor(p / 2.0)) - 0.5) * 0.035;
+        }
+
+        vec3 darkGround(vec2 p) {
+            vec3 c = vec3(0.115, 0.11, 0.125) * (0.75 + 0.5 * fbm(p / 160.0));
+            return c + (hash(floor(p / 2.0)) - 0.5) * 0.03;
+        }
+
+        // 0 red, 1 dark: held, or mid-transition.
+        float darkness(vec2 p) {
+            if (uTrans > 0.5 && uTrans < 1.5) {
+                // The red breaking up: dark spreads in ragged patches, scattering fine specks
+                // ahead of it, until the red is gone.
+                float patchy = fbm(p / 70.0);
+                float specks = hash(floor(p / 3.0));
+                return step(patchy * 0.6 + specks * 0.4, uTransP * 1.1);
+            }
+            if (uTrans > 1.5) {
+                // A torn red brush wipe sweeping across the dark, row by row.
+                float row = floor(p.y / 64.0);
+                float lag = hash(vec2(row, 3.0)) * 0.35;
+                float torn = (fbm(vec2(p.x / 40.0, p.y / 10.0)) - 0.5) * 0.14;
+                float front = uTransP * 1.45 - lag - p.x / uSize.x + torn;
+                return 1.0 - step(0.0, front);
+            }
+            return uBg;
+        }
+
+        void main() {
+            vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+            vec2 p = uv * uSize;
+            vec2 px = 1.0 / uSize;
+            vec3 cam = texture2D(uTexture, vUv).rgb;
+            float lum = dot(cam, vec3(0.299, 0.587, 0.114));
+            float m = soft(uMask, uv);
+            float dk = darkness(p);
+            vec3 col = mix(redGround(p), darkGround(p), dk);
+            vec3 groundTone = mix(vec3(0.72, 0.15, 0.19), vec3(0.3, 0.3, 0.34), dk);
+
+            // Motion echoes: where the person was a moment ago.
+            if (uEchoOn > 0.5) {
+                col = mix(col, uEchoColor * 0.8, soft(uEcho2, uv) * 0.4);
+                col = mix(col, uEchoColor * 0.9, soft(uEcho1, uv) * 0.55);
+                col = mix(col, uEchoColor, soft(uEcho0, uv) * 0.7);
+            }
+
+            float look = uLook;
+            bool natural = look < 0.5;
+            bool flatYellow = look > 0.5 && look < 1.5; // not "flat": a reserved word
+            bool gradient = look > 1.5 && look < 2.5;
+            bool textured = look > 2.5 && look < 3.5;
+            bool ghost = look > 3.5 && look < 4.5;
+            bool sheer = look > 4.5 && look < 5.5;
+            bool brown = look > 5.5 && look < 6.5;
+            bool sticker = look > 6.5;
+
+            // Behind the person: drop shadows, rims, the sticker's paper border.
+            if (natural || flatYellow || textured) {
+                float sh = soft(uMask, uv + vec2(10.0, -10.0) * px);
+                col = mix(col, vec3(0.14, 0.04, 0.05), sh * (natural ? 0.4 : 0.85));
+            }
+            if (gradient) col = mix(col, vec3(1.0, 0.9, 0.72), soft(uMask, uv + vec2(-7.0, 7.0) * px) * 0.85);
+            if (brown) col = mix(col, vec3(0.97, 0.78, 0.1), soft(uMask, uv + vec2(-13.0, -3.0) * px));
+            if (sticker) {
+                vec2 o = uv + vec2(-12.0, -9.0) * px;
+                float b = texture2D(uMask, o).a;
+                b = max(b, texture2D(uMask, o + vec2(8.0, 0.0) * px).a);
+                b = max(b, texture2D(uMask, o - vec2(8.0, 0.0) * px).a);
+                b = max(b, texture2D(uMask, o + vec2(0.0, 8.0) * px).a);
+                b = max(b, texture2D(uMask, o - vec2(0.0, 8.0) * px).a);
+                b = max(b, texture2D(uMask, o + vec2(6.0, 6.0) * px).a);
+                b = max(b, texture2D(uMask, o - vec2(6.0, 6.0) * px).a);
+                b = max(b, texture2D(uMask, o + vec2(6.0, -6.0) * px).a);
+                b = max(b, texture2D(uMask, o - vec2(6.0, -6.0) * px).a);
+                col = mix(col, vec3(0.62, 0.62, 0.64) * (0.92 + 0.16 * hash(floor(p / 3.0))), b);
+            }
+
+            vec3 person = cam;
+            if (flatYellow) person = vec3(0.95, 0.75, 0.16);
+            if (gradient) person = mix(vec3(0.98, 0.8, 0.28), vec3(0.91, 0.45, 0.16), clamp(uv.y * 1.2 + 0.05, 0.0, 1.0));
+            if (textured) person = mix(vec3(0.4, 0.21, 0.08), vec3(0.85, 0.53, 0.18), fbm(p / 24.0)) * (0.85 + 0.25 * hash(floor(p / 3.0)));
+            // Sunk into the ground: its colour, darkened, with just the features' light and shade.
+            if (ghost) person = groundTone * (0.3 + 0.6 * lum);
+            if (sheer) person = vec3(0.97, 0.78, 0.2) * (0.7 + 0.45 * lum);
+            if (brown) person = vec3(0.29, 0.15, 0.09);
+
+            if (uHead.z > 0.0) {
+                float inHead = 1.0 - smoothstep(uHead.z * 0.8, uHead.z, length(p - uHead.xy));
+                if (uDissolve > 0.5) {
+                    vec2 cell = floor(p / 3.0);
+                    float speck = step(0.6, hash(cell + floor(uTime * 12.0)));
+                    vec3 glitter = mix(person * 0.5, vec3(1.0, 0.96, 0.88), hash(cell + 7.0));
+                    person = mix(person, glitter, speck * inHead * 0.8);
+                }
+                if (uHalftone > 0.5) {
+                    vec2 cell = mod(p, 10.0) - 5.0;
+                    float r = 3.8 * (0.5 + 0.5 * fbm(p / 30.0));
+                    float dotted = step(length(cell), r) * inHead * step(p.y, uHead.y);
+                    person = mix(person, vec3(0.96, 0.8, 0.15), dotted);
+                }
+            }
+
+            if (uOutline > 0.5) {
+                float d1 = max(max(texture2D(uMask, uv + vec2(5.0, 0.0) * px).a, texture2D(uMask, uv - vec2(5.0, 0.0) * px).a),
+                    max(texture2D(uMask, uv + vec2(0.0, 5.0) * px).a, texture2D(uMask, uv - vec2(0.0, 5.0) * px).a));
+                float band = clamp(d1 - m, 0.0, 1.0);
+                if (uOutline < 1.5) {
+                    // Fire: a hot band, with flames licking up off it.
+                    float d2 = max(max(texture2D(uMask, uv + vec2(14.0, 0.0) * px).a, texture2D(uMask, uv - vec2(14.0, 0.0) * px).a),
+                        texture2D(uMask, uv + vec2(0.0, 16.0) * px).a);
+                    float lick = fbm(vec2(p.x / 12.0, p.y / 12.0 + uTime * 3.0));
+                    float heat = clamp(max(band, (d2 - m) * lick * 1.4), 0.0, 1.0);
+                    col = mix(col, mix(vec3(1.0, 0.4, 0.04), vec3(1.0, 0.92, 0.4), lick), heat);
+                } else {
+                    col = mix(col, vec3(0.25, 0.82, 1.0), band);
+                }
+            }
+
+            col = mix(col, person, m);
+            gl_FragColor = vec4(col + uFlash, 1.0);
+        }
+    """
+
     const val FX_POP = """
         precision mediump float;
         varying vec2 vUv;

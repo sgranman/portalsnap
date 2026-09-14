@@ -54,6 +54,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private lateinit var pMirror: Program
     private lateinit var pPop: Program
     private lateinit var pDisco: Program
+    private lateinit var pPopArt: Program
     private lateinit var frame: Fbo
     private lateinit var comp: Fbo
     private lateinit var under: CanvasLayer
@@ -90,6 +91,11 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private var maskH = 0
     private var maskAt = 0L
     private var maskBuf: ByteBuffer? = null
+    // The same mask as a moment ago, three times over, for motion echoes: refreshed every 90ms.
+    private val echoTex = IntArray(3)
+    private val echoAt = LongArray(3)
+    private var echoLast = 0L
+    private var personMask = ByteArray(0)
 
     private var photo: ((ByteArray?) -> Unit)? = null
 
@@ -124,12 +130,14 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             pMirror = Program(Shaders.VERTEX, Shaders.FX_MIRROR)
             pPop = Program(Shaders.VERTEX, Shaders.FX_POP)
             pDisco = Program(Shaders.VERTEX, Shaders.FX_DISCO)
+            pPopArt = Program(Shaders.VERTEX, Shaders.FX_POP_ART)
             frame = Fbo(FRAME_W, FRAME_H)
             comp = Fbo(FRAME_W, FRAME_H)
             comp.attachDepth()
             under = CanvasLayer(handler)
             over = CanvasLayer(handler)
             maskTex = genTexture(GLES20.GL_TEXTURE_2D)
+            for (i in echoTex.indices) echoTex[i] = genTexture(GLES20.GL_TEXTURE_2D)
 
             camTex = genOesTexture()
             val st = SurfaceTexture(camTex)
@@ -468,6 +476,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             FrameFx.MIRROR -> pMirror
             FrameFx.POP -> pPop
             FrameFx.DISCO -> pDisco
+            FrameFx.POP_ART -> pPopArt
             else -> {
                 drawTexture(frame.tex, Program.IDENTITY, Program.IDENTITY)
                 return
@@ -493,6 +502,34 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glUniform1f(p.u("uLevel"), fx.p2)
             GLES20.glUniform1f(p.u("uRing"), fx.b[0])
             GLES20.glUniform3fv(p.u("uTint"), 1, fx.a, 0)
+        }
+        if (fx.kind == FrameFx.POP_ART) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTex)
+            GLES20.glUniform1i(p.u("uMask"), 1)
+            // Echo textures newest first.
+            val order = echoTex.indices.sortedByDescending { echoAt[it] }
+            val names = arrayOf("uEcho0", "uEcho1", "uEcho2")
+            for ((k, i) in order.withIndex()) {
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE2 + k)
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, echoTex[i])
+                GLES20.glUniform1i(p.u(names[k]), 2 + k)
+            }
+            GLES20.glUniform2f(p.u("uMaskTexel"), 1f / maxOf(1, maskW), 1f / maxOf(1, maskH))
+            GLES20.glUniform2f(p.u("uSize"), FRAME_W.toFloat(), FRAME_H.toFloat())
+            val q = fx.q
+            GLES20.glUniform1f(p.u("uLook"), q[0])
+            GLES20.glUniform1f(p.u("uBg"), q[1])
+            GLES20.glUniform1f(p.u("uTrans"), q[2])
+            GLES20.glUniform1f(p.u("uTransP"), q[3])
+            GLES20.glUniform1f(p.u("uOutline"), q[4])
+            GLES20.glUniform1f(p.u("uEchoOn"), q[5])
+            GLES20.glUniform3f(p.u("uEchoColor"), q[6], q[7], q[8])
+            GLES20.glUniform3f(p.u("uHead"), q[9], q[10], q[11])
+            GLES20.glUniform1f(p.u("uDissolve"), q[12])
+            GLES20.glUniform1f(p.u("uHalftone"), q[13])
+            GLES20.glUniform1f(p.u("uTime"), q[14])
+            GLES20.glUniform1f(p.u("uFlash"), q[15])
         }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, frame.tex)
@@ -569,19 +606,32 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             maskBuf = buf
         }
         buf!!.clear()
+        if (personMask.size != w * h) personMask = ByteArray(w * h)
         var person = 0
         for (i in 0 until w * h) {
             if (bytes[i] != bg) {
                 buf.put(255.toByte())
+                personMask[i] = 1
                 person++
             } else {
                 buf.put(0)
+                personMask[i] = 0
             }
         }
         buf.flip()
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTex)
         GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
         GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_ALPHA, w, h, 0, GLES20.GL_ALPHA, GLES20.GL_UNSIGNED_BYTE, buf)
+        if (now - echoLast >= 90) {
+            var oldest = 0
+            for (i in 1 until echoTex.size) if (echoAt[i] < echoAt[oldest]) oldest = i
+            buf.position(0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, echoTex[oldest])
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_ALPHA, w, h, 0, GLES20.GL_ALPHA, GLES20.GL_UNSIGNED_BYTE, buf)
+            echoAt[oldest] = now
+            echoLast = now
+        }
+        painter.onMask(personMask, w, h)
         maskW = w
         maskH = h
         maskAt = now

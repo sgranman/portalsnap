@@ -213,6 +213,25 @@ beat, each lasting 0.25–2.5s, in an order that doesn't repeat with the music's
   - Grunge textures would be procedural noise.
   - The music plays through `Mixer`, so it drives the beats and is baked into clips.
 
+**Built** (`PopArt.kt` plus the `FX_POP_ART` shader), all three passes. It runs at 30fps with
+frames taking about 5ms, and so far is checked on the test portrait only.
+
+- **Soundtrack:** the user cleared the extracted loop with a copyright checker, so it's shipped
+  in `assets/music/popart-loop.wav`. `Filter.music` loops it through `Mixer` while the filter
+  is selected and the app is in front. `Soundtrack.startedNs` gives the loop's clock, so cuts
+  land on the loop's measured onsets. Without it, cuts follow mic beats, then a steady clock.
+- **Director:** each strong beat may move to a new look (weighted, never the same twice).
+  After about 10–15 beats on red it breaks up to dark for 6 beats, then brush-wipes back. It
+  also rolls extras: an outline, echoes, the dissolve, the halftone cap, arcs and scribbles. Any
+  beat may draw a ring.
+- **Shader:** all eight looks, both grungy grounds, shadows and rims, the sticker border, motion
+  echoes from three 90ms-apart mask textures, the glitter dissolve and halftone cap placed on
+  the head, fire and cyan outlines, and both transitions. The mask gets a wide blur and a
+  smoothstep, so the low-resolution edges come out clean.
+- **Canvas:** rings, sweeping arcs and edge scribbles. They're placed from the silhouette's
+  upper outline and head, read from a 0/1 copy of the mask that the compositor hands the
+  Painter. Segment-tier filters can now draw an overlay.
+
 ### 4. Monster / Cutie (one effect, two moods)
 Hand-drawn doodle face paint that changes with expression. Both frames come from the same
 video, 1s and 4s in.

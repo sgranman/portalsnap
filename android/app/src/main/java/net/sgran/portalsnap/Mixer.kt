@@ -7,6 +7,7 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.util.Log
+import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Arrays
 import java.util.concurrent.atomic.AtomicInteger
@@ -195,6 +196,39 @@ object Mixer {
             runCatching { track.stop() }
             track.release()
         }
+    }
+
+    /** A 16-bit PCM WAV (mono or more channels, mixed down) as one mono clip, or null. */
+    fun wav(bytes: ByteArray): Clip? {
+        if (bytes.size < 44) return null
+        val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        if (String(bytes, 0, 4, Charsets.US_ASCII) != "RIFF" || String(bytes, 8, 4, Charsets.US_ASCII) != "WAVE") return null
+        var pos = 12
+        var channels = 0
+        var rate = 0
+        var bits = 0
+        while (pos + 8 <= bytes.size) {
+            val id = String(bytes, pos, 4, Charsets.US_ASCII)
+            val len = b.getInt(pos + 4)
+            val body = pos + 8
+            if (id == "fmt ") {
+                channels = b.getShort(body + 2).toInt()
+                rate = b.getInt(body + 4)
+                bits = b.getShort(body + 14).toInt()
+            } else if (id == "data") {
+                if (bits != 16 || channels < 1 || rate <= 0) return null
+                val frames = minOf(len, bytes.size - body) / (2 * channels)
+                val pcm = ShortArray(frames)
+                for (f in 0 until frames) {
+                    var s = 0
+                    for (ch in 0 until channels) s += b.getShort(body + (f * channels + ch) * 2)
+                    pcm[f] = (s / channels).toShort()
+                }
+                return Clip(pcm, rate)
+            }
+            pos = body + len + (len and 1)
+        }
+        return null
     }
 
     /** A whole audio file as one mono clip, capped at five minutes, or null. */
