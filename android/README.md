@@ -25,8 +25,9 @@ and a 32-bit 2GB tab. Native removes all four.
 - **Real faces:** everything was checked against a test portrait fed through the pipeline in
   place of the camera, so all the tracking checks came from a still photo. Nobody has sat in
   front of the real camera yet.
-- **Camera orientation:** rotation 0 looks upright on an empty room, but hasn't been confirmed
-  with a face.
+- **Camera orientation (now fixed):** the first build was sideways. The empty-room check had
+  looked plausible. Rotation 90 was confirmed with a face on 2026-09-14 and is now computed
+  rather than hardcoded; see the quirk below.
 - **Mustache:** "Fancy" on the fast tier sat slightly low and tilted on the drifting test
   image. That may be lag or may be real.
 
@@ -150,6 +151,13 @@ Each of these cost real time, so check here first:
   the green LED lights, but no frame arrives. After ~10s the Portal kills the client with
   `CameraDevice` error 3 and logs `LedPolicy violation: Led (1) Preview (0)` in
   `dumpsys media.camera`.
+- **Camera rotation.** The camera service already turns camera 0's buffers by the sensor's
+  90°: the SurfaceTexture matrix arrives as `[0 -1; 1 0]`, with no mirror. The panel is
+  portrait-native and the app runs at `ROTATION_270`. The correct extra rotation is therefore
+  `(360 - display) % 360` = 90, not sensor + display. `Compositor` reads the quarter turn and
+  any mirror off the matrix itself, so the crop stays right either way. If another Portal
+  comes out sideways, `--ei rot N` fixes it and is remembered per device; `--ei rot -1`
+  clears it.
 - **Only camera 0.** `cameraIdList` shows apps only camera 0, Meta's 1280x720 "smart camera"
   that crops and pans in hardware. Camera 1 (the 4056x3040 sensor) needs `CAMERA_PRIV`.
 - **The GPU segmenter aborts the process.** `ImageSegmenter` with a category mask on the GPU

@@ -97,6 +97,7 @@ class MainActivity : Activity() {
         compositor = Compositor(tracker, painter)
         camera = CameraSource(this)
         server = Server(this)
+        rotOverride = getSharedPreferences("device", MODE_PRIVATE).getInt("rot", -1).takeIf { it >= 0 }
         buildUi()
 
         compositor.start(this) { st -> ui.post { cameraTexture = st; syncSource() } }
@@ -186,17 +187,21 @@ class MainActivity : Activity() {
         })
     }
 
-    // Front camera: sensor mounting plus the screen's turn. Rot 0 on the gen 1 Portal.
+    // The camera service already turns the buffer by the sensor's mounting (it arrives in the
+    // SurfaceTexture matrix — see Compositor.readCameraTransform), so all that is left is to
+    // undo the screen's own turn. The gen 1 Portal's panel is portrait-native and runs at
+    // ROTATION_270, which makes this 90 — measured on the device, not reasoned: the old
+    // sensor+display formula gave 0 and a sideways picture.
     @Suppress("DEPRECATION")
     private fun applyRotation() {
-        val o = opened ?: return
+        if (opened == null) return
         val display = when (windowManager.defaultDisplay.rotation) {
             Surface.ROTATION_90 -> 90
             Surface.ROTATION_180 -> 180
             Surface.ROTATION_270 -> 270
             else -> 0
         }
-        compositor.rotation = rotOverride ?: ((o.sensorOrientation + display) % 360)
+        compositor.rotation = rotOverride ?: ((360 - display) % 360)
     }
 
     /* -------------------------------- UI -------------------------------- */
@@ -525,6 +530,8 @@ class MainActivity : Activity() {
 
     private fun snapshot(): JSONObject = JSONObject().apply {
         put("source", if (testFaces > 0) "test$testFaces" else "camera")
+        put("rot", compositor.rotation)
+        put("rotOverride", rotOverride ?: -1)
         put("filter", painter.active?.id ?: "none")
         put("mode", tracker.mode.name)
         put("delegate", tracker.delegate)
@@ -592,8 +599,12 @@ class MainActivity : Activity() {
     private fun applyIntent(i: Intent?) {
         i ?: return
         i.getStringExtra("server")?.let { server.base = it }
+        // Kept per device: a rotation fixed once from adb should survive the next launch.
+        // `--ei rot -1` goes back to the computed value.
         if (i.hasExtra("rot")) {
-            rotOverride = ((i.getIntExtra("rot", 0) % 360) + 360) % 360
+            val r = i.getIntExtra("rot", -1)
+            rotOverride = if (r < 0) null else ((r % 360) + 360) % 360
+            getSharedPreferences("device", MODE_PRIVATE).edit().putInt("rot", r).apply()
             applyRotation()
         }
         if (i.hasExtra("faces")) {

@@ -265,11 +265,13 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         val st = camSt ?: return
         st.updateTexImage()
         st.getTransformMatrix(camMatrix)
+        readCameraTransform()
         val (cx, cy) = cover(FRAME_W, FRAME_H)
         GlMatrix.setIdentityM(user, 0)
         GlMatrix.translateM(user, 0, 0.5f, 0.5f, 0f)
         GlMatrix.rotateM(user, 0, rotation.toFloat(), 0f, 0f, 1f)
-        GlMatrix.scaleM(user, 0, cx, cy, 1f)
+        // Undo the camera service's front-camera mirror, so the frame is the room as it is.
+        GlMatrix.scaleM(user, 0, if (stFlip) -cx else cx, cy, 1f)
         GlMatrix.translateM(user, 0, -0.5f, -0.5f, 0f)
         GlMatrix.multiplyMM(texM, 0, camMatrix, 0, user, 0)
         GLES20.glDisable(GLES20.GL_BLEND)
@@ -280,9 +282,32 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         pOes.drawQuad(Program.IDENTITY, texM)
     }
 
-    // Crop factors that fill a target from the upright picture.
+    // The camera service tags front-camera buffers with a transform: the sensor's quarter
+    // turn and a horizontal flip (CameraUtils::getRotationTransform). SurfaceTexture folds
+    // that into the matrix, so the texture is already turned and mirrored before our own
+    // rotation applies. Read both off the matrix rather than assuming either.
+    private var stSwap = false
+    private var stFlip = false
+    private var stLogged = ""
+
+    private fun readCameraTransform() {
+        val m00 = camMatrix[0]
+        val m10 = camMatrix[1]
+        val m01 = camMatrix[4]
+        val m11 = camMatrix[5]
+        stSwap = kotlin.math.abs(m00) < 0.5f && kotlin.math.abs(m11) < 0.5f
+        stFlip = m00 * m11 - m01 * m10 < 0
+        val summary = "swap=$stSwap flip=$stFlip m=[%.1f %.1f %.1f %.1f]".format(m00, m01, m10, m11)
+        if (summary != stLogged) {
+            stLogged = summary
+            Log.i(TAG, "camera transform $summary rotation=$rotation")
+        }
+    }
+
+    // Crop factors that fill a target from the upright picture: the buffer's own
+    // dimensions, swapped once for each quarter turn (the transform's and ours).
     private fun cover(outW: Int, outH: Int): Pair<Float, Float> {
-        val upright = rotation % 180 == 0
+        val upright = stSwap == (rotation % 180 != 0)
         val upW = if (upright) sourceW else sourceH
         val upH = if (upright) sourceH else sourceW
         val target = outW.toFloat() / outH
