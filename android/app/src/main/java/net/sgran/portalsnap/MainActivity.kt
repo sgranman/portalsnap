@@ -102,6 +102,7 @@ class MainActivity : Activity() {
         server = Server(this)
         mic = MicHub()
         painter.mic = mic
+        Sfx.init(this)
         rotOverride = getSharedPreferences("device", MODE_PRIVATE).getInt("rot", -1).takeIf { it >= 0 }
         buildUi()
 
@@ -136,6 +137,7 @@ class MainActivity : Activity() {
         immersive()
         syncSource()
         syncMic()
+        Sfx.resume()
     }
 
     override fun onPause() {
@@ -143,10 +145,16 @@ class MainActivity : Activity() {
         if (recorder != null) stopRec()
         mic.release("filter")
         music?.pause()
+        Sfx.pause()
         ui.removeCallbacks(retryCamera)
         camera.close()
         openedCamera = false
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        Sfx.release()
+        super.onDestroy()
     }
 
     @Deprecated("Deprecated in Java")

@@ -844,9 +844,10 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
 /* ------------------------------ Peas in a Pod ------------------------------ */
 
 // Three peas in an open pod on a starry lime background, each pea wearing your face. Two
-// people take turns down the pod; three get one pea each. The peas bob out of step and wave
-// little leaf arms, and the top one has sprouts. The fast tier is enough: only the head box
-// is needed, and it keeps the faces at the camera's 30fps.
+// people take turns down the pod; three get one pea each. The pod rocks like a cradle and
+// creaks at each end of the swing; the peas bob out of step and wave bendy arms, and the top
+// one has sprouts. The fast tier is enough: only the head box is needed, and it keeps the
+// faces at the camera's 30fps.
 object PeasInAPod : Filter("peas", "Peas", "🌱", Mode.FAST, voice = 1.25f) {
     override val usesUnder = true
     override val coversCamera = true
@@ -872,6 +873,33 @@ object PeasInAPod : Filter("peas", "Peas", "🌱", Mode.FAST, voice = 1.25f) {
     }
 
     private fun owner(i: Int, count: Int) = if (count <= 1) 0 else i % count
+
+    private const val ROCK_DEG = 6f
+    private const val ROCK_MS = 1800L // there and back
+    private var swingSign = 0
+
+    // The phase from t modulo the period: uptime in a Float is only good to ~8ms.
+    private fun rockPhase(d: Draw) = (d.t % ROCK_MS).toFloat() / ROCK_MS * TAU
+
+    /** The pod's tilt this frame in degrees, clockwise positive like Canvas.rotate. */
+    private fun rock(d: Draw) = sin(rockPhase(d)) * ROCK_DEG
+
+    // It rocks about a point below the frame, like a cradle on runners, so the base sways too.
+    private fun pivotY(d: Draw) = d.h * 1.1f
+
+    // A creak at each end of the swing, as the pod turns back. Only with someone in view, so
+    // an empty room doesn't creak forever.
+    override fun update(d: Draw, faces: List<Face>) {
+        if (faces.isEmpty()) {
+            swingSign = 0
+            return
+        }
+        val sign = if (cos(rockPhase(d)) >= 0f) 1 else -1
+        if (swingSign != 0 && sign != swingSign) {
+            Sfx.play(if (sign > 0) "creak1" else "creak2", 0.7f, 0.92f + rng.nextFloat() * 0.16f)
+        }
+        swingSign = sign
+    }
 
     // The pod never moves, so its paths are built once. The rim is the pod minus its cavity,
     // drawn over the peas so they sit inside.
@@ -907,12 +935,17 @@ object PeasInAPod : Filter("peas", "Peas", "🌱", Mode.FAST, voice = 1.25f) {
         c.drawRect(0f, 0f, w, h, p.fill(RadialGradient(x, h * 0.45f, w * 0.6f, hex("#cdf25e"), hex("#86cc2e"), Shader.TileMode.CLAMP)))
         stars(d)
 
+        // The shadow stays on the ground and slides under the rocking base.
         val b = bottom(d)
+        val tilt = rock(d)
+        val baseX = x - (b - pivotY(d)) * sin(Math.toRadians(tilt.toDouble()).toFloat())
         val s = c.save()
-        c.scale(1f, 0.22f, x, b)
-        c.drawCircle(x, b, R * 2.2f, p.fill(RadialGradient(x, b, R * 2.2f, rgba(30, 70, 10, 0.45f), rgba(30, 70, 10, 0f), Shader.TileMode.CLAMP)))
+        c.scale(1f, 0.22f, baseX, b)
+        c.drawCircle(baseX, b, R * 2.2f, p.fill(RadialGradient(baseX, b, R * 2.2f, rgba(30, 70, 10, 0.45f), rgba(30, 70, 10, 0f), Shader.TileMode.CLAMP)))
         c.restoreToCount(s)
 
+        val pod = c.save()
+        c.rotate(tilt, x, pivotY(d))
         c.drawPath(outer, p.fill(LinearGradient(
             x - R * 1.5f, 0f, x + R * 1.5f, 0f, intArrayOf(hex("#3f9a2c"), hex("#79c94c"), hex("#2f7d22")), floatArrayOf(0f, 0.4f, 1f), Shader.TileMode.CLAMP,
         )))
@@ -924,6 +957,7 @@ object PeasInAPod : Filter("peas", "Peas", "🌱", Mode.FAST, voice = 1.25f) {
             peaCentre(d, i)
             c.drawCircle(pt[0], pt[1], R, p.fill(hex("#8fd65a")))
         }
+        c.restoreToCount(pod)
     }
 
     private fun stars(d: Draw) {
@@ -951,12 +985,27 @@ object PeasInAPod : Filter("peas", "Peas", "🌱", Mode.FAST, voice = 1.25f) {
         val hb = headBox(f)
         val sc = hb.halfH * 1.15f / R
         val sy = hb.y - hb.halfH * 0.12f
+        // Patches live in frame space, so rock each pea's centre about the pivot, and map
+        // through the inverse turn so the face tilts with its pea.
+        val th = Math.toRadians(rock(d).toDouble()).toFloat()
+        val cs = cos(th)
+        val sn = sin(th)
+        val pvx = d.w / 2
+        val pvy = pivotY(d)
         for (i in 0 until PEAS) {
             if (owner(i, f.count) != f.rank) continue
             peaCentre(d, i)
             val px = pt[0]
             val py = pt[1]
-            d.patches += Patch(px, py, R * 0.97f, R * 0.97f, 0f, 0.86f, floatArrayOf(sc, 0f, hb.x - px * sc, 0f, sc, sy - py * sc))
+            val wx = pvx + (px - pvx) * cs - (py - pvy) * sn
+            val wy = pvy + (px - pvx) * sn + (py - pvy) * cs
+            d.patches += Patch(
+                wx, wy, R * 0.97f, R * 0.97f, th, 0.86f,
+                floatArrayOf(
+                    sc * cs, sc * sn, hb.x + sc * (pvx - cs * pvx - sn * pvy - px),
+                    -sc * sn, sc * cs, sy + sc * (pvy + sn * pvx - cs * pvy - py),
+                ),
+            )
         }
     }
 
@@ -966,6 +1015,9 @@ object PeasInAPod : Filter("peas", "Peas", "🌱", Mode.FAST, voice = 1.25f) {
         val p = d.pen
         val R = radius(d)
         val x0 = d.w / 2
+        val tilt = rock(d)
+        val pod = c.save()
+        c.rotate(tilt, x0, pivotY(d))
         for (i in 0 until PEAS) {
             peaCentre(d, i)
             val x = pt[0]
@@ -993,31 +1045,47 @@ object PeasInAPod : Filter("peas", "Peas", "🌱", Mode.FAST, voice = 1.25f) {
         )))
         p.unlift()
 
+        val tiltRad = Math.toRadians(tilt.toDouble()).toFloat()
         for (i in 0 until PEAS) {
             peaCentre(d, i)
-            arms(c, p, pt[0], pt[1], R, d.t, i)
+            arms(c, p, pt[0], pt[1], R, d.t, i, tiltRad)
         }
         peaCentre(d, 0)
         sprouts(c, p, pt[0], pt[1], R, d.t)
+        c.restoreToCount(pod)
     }
 
-    private fun arms(c: Canvas, p: Pen, x: Float, y: Float, R: Float, t: Long, i: Int) {
+    // Bendy green arms with mitten hands. On each pea one arm waves hello and the other swings
+    // loose, alternating down the pod, and both lean against the rock as if holding on.
+    private fun arms(c: Canvas, p: Pen, x: Float, y: Float, R: Float, t: Long, i: Int, tilt: Float) {
+        val dark = hex("#2f7d22")
+        val light = hex("#74cf50")
         for (side in intArrayOf(-1, 1)) {
-            val wave = sin(t / 260f + i * 1.9f + side) * 0.35f
+            val waving = (i + (if (side < 0) 0 else 1)) % 2 == 0
+            val swing = sin((t % 100_000L) / (if (waving) 140f else 320f) + i * 1.7f + side)
+            // 0 points straight out and negative raises the arm, mirrored per side below.
+            val raise = if (waving) -1.1f + swing * 0.45f else 0.45f + swing * 0.3f
+            val bend = if (waving) -0.35f - swing * 0.2f else 0.25f + swing * 0.1f
+            val L = R * 0.8f
             val s = c.save()
-            c.translate(x + side * R * 0.92f, y + R * 0.25f)
+            c.translate(x + side * R * 0.88f, y + R * 0.2f)
             c.scale(side.toFloat(), 1f)
-            c.rotate(deg(-0.6f + wave))
+            c.rotate(deg(raise - side * tilt * 1.5f))
             p.newPath().apply {
                 moveTo(0f, 0f)
-                quadTo(R * 0.25f, -R * 0.2f, R * 0.55f, -R * 0.05f)
-                quadTo(R * 0.28f, R * 0.12f, 0f, 0f)
-                close()
+                quadTo(L * 0.5f, L * bend, L, 0f)
             }
-            p.lift(R * 0.05f)
-            c.drawPath(p.path, p.fill(hex("#57b83a")))
+            // Outline pass with the shadow, then the light fill over it.
+            val arm = p.stroke(dark, R * 0.17f)
+            arm.strokeCap = Paint.Cap.ROUND
+            p.lift(R * 0.04f)
+            c.drawPath(p.path, arm)
+            c.drawCircle(L, 0f, R * 0.15f, p.fill(dark))
+            c.drawCircle(L - R * 0.05f, -R * 0.13f, R * 0.075f, p.fill(dark))
             p.unlift()
-            c.drawLine(R * 0.04f, 0f, R * 0.45f, -R * 0.06f, p.stroke(hex("#3a8a26"), R * 0.025f))
+            c.drawPath(p.path, p.stroke(light, R * 0.09f))
+            c.drawCircle(L, 0f, R * 0.105f, p.fill(light))
+            c.drawCircle(L - R * 0.05f, -R * 0.13f, R * 0.04f, p.fill(light))
             c.restoreToCount(s)
         }
     }

@@ -59,6 +59,14 @@ questions were also guessed:
 - **Two children:** the peas alternate top, middle, bottom between them. With three, each gets
   one pea.
 
+Additions the user asked for:
+
+- **Rocking:** the pod rocks ±6° like a cradle on a 1.8s swing, about a pivot below the frame.
+  The face patches follow the rotation, and the shadow slides under the base.
+- **Creak:** a wooden creak plays at each end of the swing. It's synthesized in `Sfx.kt` and
+  plays through the speaker only while someone is in view.
+- **Arms:** bendy arms with mitten hands. On each pea one arm waves and the other swings.
+
 ## The effects
 
 ### 1. Mirror
