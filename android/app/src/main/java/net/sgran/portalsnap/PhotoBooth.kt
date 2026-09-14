@@ -2,6 +2,7 @@ package net.sgran.portalsnap
 
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
@@ -1115,5 +1116,293 @@ object PeasInAPod : Filter("peas", "Peas", "🌱", Mode.FAST, voice = 1.25f) {
             c.drawPath(p.path, p.fill(hex("#6cc84a")))
             c.restoreToCount(s)
         }
+    }
+}
+
+/* -------------------------------- Lemonade -------------------------------- */
+
+// Your face seen through a glass of pink lemonade: tinted, softly blurred, rippling a little and
+// stretched to the glass. The glass floats on a coral-to-pink ground, drifts after you and tilts
+// with your head, with ice, a striped straw and a lemon slice. Pucker (or open wide) to blow
+// bubbles through the straw, with a bloop for each burst.
+object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f) {
+    override val usesUnder = true
+    override val coversCamera = true
+
+    // Glass units: x in top half-widths, y in half-heights, both from the glass's centre.
+    private const val SURFACE_Y = -0.8f
+    // Up the right-hand side, so neither the straw nor its bubbles cross the face.
+    private const val STRAW_FOOT_X = 0.5f
+    private const val STRAW_FOOT_Y = 0.72f
+
+    private class Bubble(var x: Float, var y: Float, val r: Float, val vy: Float, val phase: Float)
+
+    private class State {
+        val bubbles = ArrayList<Bubble>()
+        var fizzDebt = 0f
+        var blowDebt = 0f
+        var nextBloop = 0L
+        var seen = 0L
+    }
+
+    private class Glass(val x: Float, val y: Float, val w: Float, val h: Float, val angle: Float)
+
+    private val states = HashMap<Int, State>()
+    private val interior = Path()
+    private val outer = Path()
+    private val walls = Path()
+    private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    // One glass per person, side by side for two, each following its head a little.
+    private fun glass(d: Draw, f: Face): Glass {
+        val n = f.count
+        val scale = if (n == 1) 1f else 0.78f
+        val slot = d.w * (f.rank + 1) / (n + 1)
+        val x = slot + (f.cx / d.w - 0.5f) * d.w * (0.14f / n)
+        val bob = sin((d.t % 100_000L) / 700f + f.rank * 2f) * d.h * 0.012f
+        val y = d.h * 0.53f + (f.cy / d.h - 0.5f) * d.h * 0.08f + bob
+        return Glass(x, y, d.h * 0.23f * scale, d.h * 0.33f * scale, f.angle.coerceIn(-0.5f, 0.5f))
+    }
+
+    private fun buildGlass(g: Glass) {
+        val W = g.w
+        val H = g.h
+        val r = W * 0.12f
+        fun tumbler(path: Path, top: Float, bottom: Float, wt: Float, wb: Float) {
+            path.reset()
+            path.moveTo(-wt, top)
+            path.lineTo(wt, top)
+            path.lineTo(wb, bottom - r)
+            path.quadTo(wb, bottom, wb - r, bottom)
+            path.lineTo(-wb + r, bottom)
+            path.quadTo(-wb, bottom, -wb, bottom - r)
+            path.close()
+        }
+        // The interior matches the patch shader's tumbler mask exactly.
+        tumbler(interior, -H, H, W, W * 0.8f)
+        val t = W * 0.07f
+        tumbler(outer, -H - t * 0.2f, H + t * 2.2f, W + t, W * 0.8f + t)
+        walls.reset()
+        walls.op(outer, interior, Path.Op.DIFFERENCE)
+    }
+
+    override fun scene(d: Draw, faces: List<Face>) {
+        d.c.drawRect(0f, 0f, d.w, d.h, d.pen.fill(LinearGradient(0f, 0f, 0f, d.h, hex("#ff8a6b"), hex("#ff6fae"), Shader.TileMode.CLAMP)))
+    }
+
+    override fun update(d: Draw, faces: List<Face>) {
+        val dt = d.dt / 1000f
+        for (f in faces) {
+            val s = states.getOrPut(f.id) { State() }
+            s.seen = d.t
+            // A gentle fizz from the bottom all the time.
+            s.fizzDebt += dt * 3f
+            while (s.fizzDebt >= 1f) {
+                s.fizzDebt -= 1f
+                s.bubbles += Bubble(rnd(-0.6f, 0.6f), 0.95f, rnd(0.015f, 0.035f), rnd(0.25f, 0.45f), rnd(0f, TAU))
+            }
+            val blowing = f.bs("mouthPucker") > 0.45f || f.bs("mouthFunnel") > 0.35f || f.bs("jawOpen") > 0.5f
+            if (blowing) {
+                s.blowDebt += dt * 28f
+                while (s.blowDebt >= 1f) {
+                    s.blowDebt -= 1f
+                    s.bubbles += Bubble(STRAW_FOOT_X + rnd(-0.06f, 0.06f), STRAW_FOOT_Y, rnd(0.03f, 0.08f), rnd(0.9f, 1.5f), rnd(0f, TAU))
+                }
+                if (d.t >= s.nextBloop) {
+                    s.nextBloop = d.t + 110 + rng.nextInt(60)
+                    Sfx.play("bloop", 0.45f, rnd(0.8f, 1.5f))
+                }
+            } else {
+                s.blowDebt = 0f
+            }
+            val it = s.bubbles.iterator()
+            while (it.hasNext()) {
+                val b = it.next()
+                b.y -= b.vy * dt * 2f
+                b.x += sin((d.t % 100_000L) / 180f + b.phase) * dt * 0.08f
+                if (b.y < SURFACE_Y) it.remove()
+            }
+            if (s.bubbles.size > 160) s.bubbles.subList(0, s.bubbles.size - 160).clear()
+        }
+        if (states.size > 4) states.entries.removeAll { d.t - it.value.seen > 3000 }
+    }
+
+    override fun under(d: Draw, f: Face) {
+        val c = d.c
+        val p = d.pen
+        val g = glass(d, f)
+        buildGlass(g)
+        // A soft shadow on the ground, which doesn't tilt.
+        val sy = g.y + g.h * 1.25f
+        val s = c.save()
+        c.scale(1f, 0.18f, g.x, sy)
+        c.drawCircle(g.x, sy, g.w * 1.1f, p.fill(RadialGradient(g.x, sy, g.w * 1.1f, rgba(120, 30, 60, 0.3f), rgba(120, 30, 60, 0f), Shader.TileMode.CLAMP)))
+        c.restoreToCount(s)
+        // The lemonade behind the face, so the patch's soft edge fades into pink, not ground.
+        val s2 = c.save()
+        c.translate(g.x, g.y)
+        c.rotate(deg(g.angle))
+        c.drawPath(interior, p.fill(LinearGradient(0f, -g.h, 0f, g.h, hex("#ffb3cf"), hex("#f56a9c"), Shader.TileMode.CLAMP)))
+        c.restoreToCount(s2)
+    }
+
+    override fun draw(d: Draw, f: Face) {
+        val c = d.c
+        val p = d.pen
+        val g = glass(d, f)
+        buildGlass(g)
+        val st = states.getOrPut(f.id) { State() }
+
+        // The head box into the glass, stretched to fill it and upright relative to the glass:
+        // src = head centre + R(head) * S * R(-glass) * (dst - glass centre).
+        val hb = headBox(f)
+        val sx = hb.halfW * 0.95f / (g.w * 0.9f)
+        val sy = hb.halfH * 0.92f / g.h
+        val ca = cos(f.angle)
+        val sa = sin(f.angle)
+        val cg = cos(g.angle)
+        val sg = sin(g.angle)
+        val m00 = ca * sx * cg + sa * sy * sg
+        val m01 = ca * sx * sg - sa * sy * cg
+        val m10 = sa * sx * cg - ca * sy * sg
+        val m11 = sa * sx * sg + ca * sy * cg
+        d.patches += Patch(
+            g.x, g.y, g.w, g.h, g.angle, 0.94f,
+            floatArrayOf(m00, m01, hb.x - (m00 * g.x + m01 * g.y), m10, m11, hb.y - (m10 * g.x + m11 * g.y)),
+            shape = Patch.GLASS, tint = rgba(255, 110, 170, 0.7f), blur = 2.5f, wave = 2.5f,
+            phase = (d.t % 100_000L) / 1000f * 3f,
+        )
+
+        val W = g.w
+        val H = g.h
+        val save = c.save()
+        c.translate(g.x, g.y)
+        c.rotate(deg(g.angle))
+        val inside = c.save()
+        c.clipPath(interior)
+        ice(c, p, W, H, d.t)
+        straw(c, p, W, H, submerged = true)
+        bubbles(c, st, W, H)
+        surface(c, p, W, H, g.angle, d.t)
+        c.restoreToCount(inside)
+        glassFront(c, p, W, H)
+        val above = c.save()
+        c.clipRect(-W * 3, -H * 3, W * 3, -H)
+        straw(c, p, W, H, submerged = false)
+        c.restoreToCount(above)
+        lemon(c, p, W, H)
+        c.restoreToCount(save)
+    }
+
+    private fun ice(c: Canvas, p: Pen, W: Float, H: Float, t: Long) {
+        // x, y, half-size (in W), turn. Floating high at the surface: any lower and they sit
+        // over the eyes.
+        val cubes = arrayOf(
+            floatArrayOf(-0.42f, -0.76f, 0.2f, 0.3f),
+            floatArrayOf(0.22f, -0.8f, 0.19f, -0.4f),
+            floatArrayOf(-0.1f, -0.7f, 0.16f, 0.9f),
+        )
+        for ((k, cube) in cubes.withIndex()) {
+            val bob = sin((t % 100_000L) / 600f + k * 2.1f)
+            val s = c.save()
+            c.translate(cube[0] * W, cube[1] * H + bob * H * 0.015f)
+            c.rotate(deg(cube[3] + bob * 0.08f))
+            val a = cube[2] * W
+            c.drawRoundRect(p.rect(0f, 0f, a, a), a * 0.35f, a * 0.35f, p.fill(rgba(255, 255, 255, 0.28f)))
+            c.drawRoundRect(p.rect(0f, 0f, a, a), a * 0.35f, a * 0.35f, p.stroke(rgba(255, 255, 255, 0.75f), a * 0.08f))
+            c.drawRoundRect(p.rect(-a * 0.35f, -a * 0.4f, a * 0.3f, a * 0.12f), a * 0.1f, a * 0.1f, p.fill(rgba(255, 255, 255, 0.6f)))
+            c.restoreToCount(s)
+        }
+    }
+
+    // White with pink stripes; fainter where it's under the lemonade.
+    private fun straw(c: Canvas, p: Pen, W: Float, H: Float, submerged: Boolean) {
+        val width = W * 0.1f
+        p.newPath().apply {
+            moveTo(STRAW_FOOT_X * W, STRAW_FOOT_Y * H)
+            lineTo(0.78f * W, -1.45f * H)
+        }
+        val body = p.stroke(if (submerged) rgba(255, 255, 255, 0.45f) else Color.WHITE, width)
+        body.strokeCap = Paint.Cap.BUTT
+        c.drawPath(p.path, body)
+        val stripes = p.stroke(if (submerged) rgba(255, 60, 130, 0.45f) else hex("#ff3d82"), width)
+        stripes.pathEffect = DashPathEffect(floatArrayOf(width * 0.9f, width * 0.9f), 0f)
+        c.drawPath(p.path, stripes)
+        stripes.pathEffect = null
+    }
+
+    private fun bubbles(c: Canvas, s: State, W: Float, H: Float) {
+        for (b in s.bubbles) {
+            val x = b.x * W
+            val y = b.y * H
+            val r = b.r * H
+            bubblePaint.style = Paint.Style.FILL
+            bubblePaint.color = rgba(255, 255, 255, 0.22f)
+            c.drawCircle(x, y, r, bubblePaint)
+            bubblePaint.style = Paint.Style.STROKE
+            bubblePaint.strokeWidth = r * 0.22f
+            bubblePaint.color = rgba(255, 255, 255, 0.75f)
+            c.drawCircle(x, y, r, bubblePaint)
+            bubblePaint.style = Paint.Style.FILL
+            bubblePaint.color = rgba(255, 255, 255, 0.85f)
+            c.drawCircle(x - r * 0.35f, y - r * 0.35f, r * 0.25f, bubblePaint)
+        }
+    }
+
+    // The top of the lemonade stays nearly level while the glass tilts, and sloshes a little.
+    // Above it the glass is paler: air, not lemonade.
+    private fun surface(c: Canvas, p: Pen, W: Float, H: Float, angle: Float, t: Long) {
+        val halfW = W * 1.15f
+        val slosh = sin((t % 100_000L) / 400f) * 0.04f
+        val s = c.save()
+        c.translate(0f, SURFACE_Y * H)
+        c.rotate(deg(-angle * 0.85f + slosh))
+        c.drawRect(-halfW, -H * 0.6f, halfW, 0f, p.fill(rgba(255, 240, 246, 0.55f)))
+        c.drawOval(p.rect(0f, 0f, halfW, W * 0.07f), p.fill(rgba(255, 200, 225, 0.55f)))
+        c.drawOval(p.rect(0f, 0f, halfW, W * 0.07f), p.stroke(rgba(255, 255, 255, 0.7f), W * 0.012f))
+        c.restoreToCount(s)
+    }
+
+    private fun glassFront(c: Canvas, p: Pen, W: Float, H: Float) {
+        c.drawPath(walls, p.fill(rgba(255, 255, 255, 0.3f)))
+        c.drawPath(outer, p.stroke(rgba(255, 255, 255, 0.85f), W * 0.02f))
+        c.drawPath(interior, p.stroke(rgba(255, 255, 255, 0.35f), W * 0.012f))
+        // Tall highlights down the left wall.
+        p.newPath().apply {
+            moveTo(-0.9f * W, -0.85f * H)
+            lineTo(-0.8f * W, -0.85f * H)
+            lineTo(-0.66f * W, 0.6f * H)
+            lineTo(-0.74f * W, 0.6f * H)
+            close()
+        }
+        c.drawPath(p.path, p.fill(rgba(255, 255, 255, 0.35f)))
+        p.newPath().apply {
+            moveTo(-0.72f * W, -0.8f * H)
+            lineTo(-0.68f * W, -0.8f * H)
+            lineTo(-0.56f * W, 0.3f * H)
+            lineTo(-0.6f * W, 0.3f * H)
+            close()
+        }
+        c.drawPath(p.path, p.fill(rgba(255, 255, 255, 0.2f)))
+        // The rim, and a thick glass base.
+        c.drawOval(p.rect(0f, -H, W * 1.035f, W * 0.13f), p.stroke(rgba(255, 255, 255, 0.85f), W * 0.025f))
+        c.drawRoundRect(p.rect(0f, H + W * 0.08f, W * 0.87f, W * 0.08f), W * 0.06f, W * 0.06f, p.fill(rgba(255, 255, 255, 0.35f)))
+    }
+
+    // A slice on the left rim, clear of the straw.
+    private fun lemon(c: Canvas, p: Pen, W: Float, H: Float) {
+        val x = -0.78f * W
+        val y = -H - W * 0.05f
+        val R = W * 0.3f
+        p.lift(W * 0.03f)
+        c.drawCircle(x, y, R, p.fill(hex("#ffd23f")))
+        p.unlift()
+        c.drawCircle(x, y, R * 0.86f, p.fill(hex("#fff3b0")))
+        val seg = p.stroke(hex("#f5c02e"), R * 0.06f)
+        for (k in 0 until 8) {
+            val a = k * TAU / 8
+            c.drawLine(x, y, x + cos(a) * R * 0.8f, y + sin(a) * R * 0.8f, seg)
+        }
+        c.drawCircle(x, y, R * 0.12f, p.fill(hex("#fff3b0")))
     }
 }

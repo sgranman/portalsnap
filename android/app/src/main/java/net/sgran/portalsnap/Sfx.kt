@@ -27,6 +27,7 @@ object Sfx {
         thread(name = "sfx") {
             clips["creak1"] = Mixer.Clip(creak(11L, 0.55f, 390f), RATE)
             clips["creak2"] = Mixer.Clip(creak(23L, 0.5f, 450f), RATE)
+            clips["bloop"] = Mixer.Clip(bloop(), RATE)
         }
     }
 
@@ -34,6 +35,21 @@ object Sfx {
     fun play(name: String, volume: Float = 1f, rate: Float = 1f) {
         val clip = clips[name] ?: return
         Mixer.play(clip, volume, rate.coerceIn(0.5f, 2f))
+    }
+
+    // A bubble's bloop: a sine that sweeps up as the bubble's cavity shrinks, with a quick
+    // attack and decay.
+    private fun bloop(): ShortArray {
+        val seconds = 0.09f
+        val n = (RATE * seconds).toInt()
+        var phase = 0.0
+        return ShortArray(n) { i ->
+            val t = i.toFloat() / RATE
+            val hz = 260f + 900f * (t / seconds).pow(0.6f)
+            phase += 2 * PI * hz / RATE
+            val env = min(1f, t / 0.004f) * exp(-t / 0.03f)
+            (sin(phase) * env * 0.7f * 32767f).toInt().toShort()
+        }
     }
 
     // A wooden creak is stick-slip: a quick train of tiny impacts, each ringing the wood's few

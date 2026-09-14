@@ -233,6 +233,14 @@ object Shaders {
         uniform float uFeather;
         uniform float uBulge;
         uniform mat3 uMap;
+        uniform float uShape;
+        uniform vec4 uTint;
+        uniform float uBlur;
+        uniform float uWave;
+        uniform float uPhase;
+        vec4 frameAt(vec2 s) {
+            return texture2D(uTexture, vec2(s.x / uSize.x, 1.0 - s.y / uSize.y));
+        }
         void main() {
             vec2 p = vec2(gl_FragCoord.x, uSize.y - gl_FragCoord.y);
             vec2 d = p - uCentre;
@@ -248,10 +256,33 @@ object Shaders {
                 gl_FragColor = texture2D(uTexture, vec2(lens.x / uSize.x, 1.0 - lens.y / uSize.y));
                 return;
             }
-            float a = 1.0 - smoothstep(uFeather, 1.0, r);
+            float a;
+            if (uShape > 0.5) {
+                // A tumbler: full width at the top, 0.8 of it at the bottom, soft-edged.
+                float halfW = mix(1.0, 0.8, (q.y + 1.0) * 0.5);
+                float soft = 1.0 - uFeather;
+                a = smoothstep(0.0, soft, halfW - abs(q.x)) * smoothstep(0.0, soft, 1.0 - abs(q.y));
+            } else {
+                a = 1.0 - smoothstep(uFeather, 1.0, r);
+            }
             if (a <= 0.0) discard;
             vec3 src = uMap * vec3(p, 1.0);
-            gl_FragColor = texture2D(uTexture, vec2(src.x / uSize.x, 1.0 - src.y / uSize.y)) * a;
+            // Seen through liquid: a slow ripple, a soft blur, and a colour cast.
+            if (uWave > 0.0) src.x += sin(src.y * 0.045 + uPhase) * uWave;
+            vec4 col;
+            if (uBlur > 0.0) {
+                vec2 o = vec2(uBlur, 0.0);
+                vec2 v = vec2(0.0, uBlur);
+                vec2 d1 = vec2(uBlur * 0.7, uBlur * 0.7);
+                vec2 d2 = vec2(uBlur * 0.7, -uBlur * 0.7);
+                col = frameAt(src.xy) * 0.2
+                    + (frameAt(src.xy + o) + frameAt(src.xy - o) + frameAt(src.xy + v) + frameAt(src.xy - v)) * 0.125
+                    + (frameAt(src.xy + d1) + frameAt(src.xy - d1) + frameAt(src.xy + d2) + frameAt(src.xy - d2)) * 0.075;
+            } else {
+                col = frameAt(src.xy);
+            }
+            if (uTint.a > 0.0) col.rgb = mix(col.rgb, col.rgb * uTint.rgb + uTint.rgb * 0.22, uTint.a);
+            gl_FragColor = col * a;
         }
     """
 

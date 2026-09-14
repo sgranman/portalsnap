@@ -411,6 +411,15 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glUniform1f(pPatch.u("uAngle"), p.angle)
             GLES20.glUniform1f(pPatch.u("uFeather"), p.feather)
             GLES20.glUniform1f(pPatch.u("uBulge"), p.bulge)
+            GLES20.glUniform1f(pPatch.u("uShape"), p.shape.toFloat())
+            val tint = p.tint
+            GLES20.glUniform4f(
+                pPatch.u("uTint"),
+                ((tint shr 16) and 255) / 255f, ((tint shr 8) and 255) / 255f, (tint and 255) / 255f, ((tint ushr 24) and 255) / 255f,
+            )
+            GLES20.glUniform1f(pPatch.u("uBlur"), p.blur)
+            GLES20.glUniform1f(pPatch.u("uWave"), p.wave)
+            GLES20.glUniform1f(pPatch.u("uPhase"), p.phase)
             val m = p.map
             // Column-major: src = M * (x, y, 1).
             GLES20.glUniformMatrix3fv(pPatch.u("uMap"), 1, false, floatArrayOf(m[0], m[3], 0f, m[1], m[4], 0f, m[2], m[5], 1f), 0)

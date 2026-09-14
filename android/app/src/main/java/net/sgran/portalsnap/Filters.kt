@@ -111,11 +111,21 @@ class Draw(val pen: Pen) {
  * The frame, resampled through [map] (dst px -> src px: a,b,c,d,e,f) inside an ellipse.
  * [feather] is where the fade starts, as a fraction of the radius. A [bulge] above 0 ignores
  * both and magnifies in place instead: 1 / (1 - bulge) at the centre, easing to none at the rim.
+ *
+ * [shape] swaps the ellipse for a tumbler (top width rx, bottom 0.8 rx). [tint] is an ARGB
+ * colour cast whose alpha is its strength; [blur] is a radius in frame px; [wave] ripples the
+ * picture sideways by that many px, moved along by [phase].
  */
 class Patch(
     val cx: Float, val cy: Float, val rx: Float, val ry: Float, val angle: Float,
     val feather: Float, val map: FloatArray, val bulge: Float = 0f,
-)
+    val shape: Int = ELLIPSE, val tint: Int = 0, val blur: Float = 0f, val wave: Float = 0f, val phase: Float = 0f,
+) {
+    companion object {
+        const val ELLIPSE = 0
+        const val GLASS = 1
+    }
+}
 
 abstract class Filter(
     val id: String,
@@ -903,5 +913,5 @@ object Moon : Filter("moon", "Moon", "🌘", Mode.SEGMENT, voice = 1.3f) {
 }
 
 val FILTERS: List<Filter> = listOf(
-    Mirror, PopSilhouette, DiscoDots, MonsterCutie, PixelHearts, Hamster, PeasInAPod,
+    Mirror, PopSilhouette, DiscoDots, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod,
     Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Skydiver, Beach, Palace, Moon)

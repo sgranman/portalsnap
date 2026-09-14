@@ -70,6 +70,20 @@ Every app sound, effects and music alike, plays through `Mixer.kt`. The mixer fe
 and also adds the same samples to recordings after the voice effect, matched to the mic's
 capture times. So clips carry the sounds cleanly and at their own pitch, instead of the faint
 copy the mic hears in the room. Beat detection hears the mix directly too.
+
+**Lemonade** is checked only on the test portrait. It runs at 30fps with frames taking about
+3.6ms. It's a full scene: one glass per person (side by side for two) that drifts after the head
+and tilts with it. The face is a patch using new `Patch` options:
+
+- `shape = GLASS`: a tumbler mask
+- `tint`: a pink cast
+- `blur`: a 2.5px nine-tap blur
+- `wave`: a slow ripple
+
+Over the face go the ice, a straw up the right side, the lemon on the left rim, and a liquid
+surface that stays nearly level. Its open question was guessed: yes, it reacts to the mouth.
+A pucker, a funnel or a wide-open jaw blows a stream of bubbles out of the straw's foot, with a
+synthesized bloop (baked into clips). A gentle fizz rises all the time.
 - **Arms:** bendy arms with mitten hands. On each pea one arm waves and the other swings.
 
 ## The effects
