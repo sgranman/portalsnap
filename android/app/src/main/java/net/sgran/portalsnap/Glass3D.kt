@@ -512,14 +512,17 @@ object Shaders3D {
             vec3 r = reflect(-v, n);
             vec3 col = vec3(0.84, 0.91, 0.98);
             if (uHasFace > 0.5) {
-                // The face in front of the ice, caught in it: looked up by where the reflection
-                // points, mirrored as a reflection is.
-                vec2 s = clamp(r.xy / max(-r.z, 0.25), -1.0, 1.0);
-                vec3 face = frameAt(facePixel(vec2(-s.x, s.y) * 1.2));
-                col = mix(col, face, 0.65);
+                // A tiny mirrored face on each side of the cube. From this far away a flat side
+                // reflects a single direction (which made one flat colour), so the picture is laid
+                // across the side itself, in the cube's own coordinates on that side.
+                vec3 an = abs(vLocalNormal);
+                vec2 uv = (an.z >= an.x && an.z >= an.y) ? vLocal.xy : ((an.x >= an.y) ? vLocal.zy : vLocal.xz);
+                vec2 s = clamp(uv * 0.9, -1.0, 1.0);
+                vec3 face = frameAt(facePixel(vec2(-s.x, s.y)));
+                col = mix(col, face * 1.05 + 0.04, 0.55 * (1.0 - fresnel * 0.6));
             }
             float glint = pow(max(dot(r, normalize(vec3(-0.5, -0.7, -0.6))), 0.0), 60.0);
-            float a = clamp(0.45 + fresnel * 0.5, 0.0, 1.0);
+            float a = clamp(0.62 + fresnel * 0.35, 0.0, 1.0);
             outColor = vec4(col * a + vec3(glint), min(1.0, a + glint));
         }
     """.trimIndent()

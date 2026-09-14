@@ -121,7 +121,9 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
             s.pitchBase += (p - s.pitchBase) * min(1f, dt * 0.3f)
             pitch = (p - s.pitchBase) * 1.2f
         }
-        spring(s, tx, ty, roll, f.yaw * 30f, pitch, W, dt)
+        // Turned against the head's yaw: the screen is a mirror, so this turns the glass the way
+        // you see yourself turn.
+        spring(s, tx, ty, roll, -f.yaw * 30f, pitch, W, dt)
     }
 
     // On a spring, so it swings in after its target and overshoots a little.
