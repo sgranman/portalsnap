@@ -627,7 +627,10 @@ class MainActivity : Activity() {
                 closeReview()
             }
         }
-        if (i.getBooleanExtra("bench", false)) ui.postDelayed({ runBench() }, 1000)
+        if (i.getBooleanExtra("bench", false)) {
+            val onCamera = i.getBooleanExtra("benchCamera", false)
+            ui.postDelayed({ runBench(onCamera) }, 1000)
+        }
     }
 
     /* ------------------------------ Bench ------------------------------- */
@@ -637,11 +640,21 @@ class MainActivity : Activity() {
     // recdiag.html's idea, on the test portrait so it needs nobody in front of the camera:
     // each row changes one thing. Warm-up discarded, then measured. Results to logcat
     // (PSNAP_BENCH) and to files/bench-*.json.
-    private fun runBench() {
+    // `--ez benchCamera true` runs every row on the live camera instead, for when somebody is
+    // sitting in front of it: the numbers that matter, with a real face and real lighting.
+    private fun runBench(onCamera: Boolean = false) {
         if (benchRunning) return
         benchRunning = true
-        val source = if (compositor.hasTestImage) 1 else 0
-        val phases = listOf(
+        val source = if (compositor.hasTestImage && !onCamera) 1 else 0
+        val phases = if (onCamera) listOf(
+            Phase("A camera: tracker only (fast)", 0, null, false),
+            Phase("B camera: shades (fast)", 0, "shades", false),
+            Phase("D camera: puppy (mesh)", 0, "dog", false),
+            Phase("F camera: skydive (fast)", 0, "skydiver", false),
+            Phase("G camera: beach (segment)", 0, "beach", false),
+            Phase("H camera: puppy while recording", 0, "dog", true),
+            Phase("I camera: beach while recording", 0, "beach", true),
+        ) else listOf(
             Phase("A tracker only, no filter", source, null, false),
             Phase("B shades, 1 face (fast)", source, "shades", false),
             Phase("C shades, 2 faces (fast)", source * 2, "shades", false),

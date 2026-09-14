@@ -65,6 +65,24 @@ Rows A, J and K of that bench file have their tier mislabelled: "no filter" kept
 tier was last loaded. The bench now selects the fast tier explicitly. K ran the mesh with
 nobody in front of the real camera, and 10.6ms is what the mesh costs with no face to landmark.
 
+**Live camera, one real face** (`bench/2026-09-14-gen1-portal-camera.json`, from
+`--ez bench true --ez benchCamera true`, one person at a desk in daylight):
+
+| | tier | `infer` p50 | p95 | detect | camera | recording |
+|---|---|---|---|---|---|---|
+| tracker only | fast, GPU | 10.8 ms | 14.8 | 29.8 fps | 30.0 | |
+| Cool (shades) | fast, GPU | **12.9 ms** | 20.9 | **29.2 fps** | 29.5 | |
+| Puppy | mesh, GPU | 41.0 ms | 55.9 | 16.4 fps | 30.0 | |
+| Skydive | fast, GPU | 11.8 ms | 17.7 | 29.4 fps | 30.0 | |
+| Beach | segment, CPU | 22.3 ms | 33.1 | 26.0 fps | 29.5 | |
+| Puppy **while recording** | mesh, GPU | 36.3 ms | 47.4 | 17.4 fps | 30.0 | **29.5 fps** |
+| Beach **while recording** | segment, CPU | 19.8 ms | 25.2 | 28.2 fps | 29.5 | **30 fps** |
+
+These match the test portrait to within a couple of milliseconds, so the portrait is a fair
+stand-in. The tracker's frame grab is 1.3–1.5ms. The screen renders at the camera's 30fps in
+every row. The "faces 0" on the tracker-only row is an instrument quirk: faces are counted by
+the painter, which only runs with a filter on.
+
 Model load, once per launch, on a background thread so detection never waits on it: fast
 3.0s, mesh 5.0s, segment 0.05s. Models stay loaded, so switching filters is instant after the
 first time.
