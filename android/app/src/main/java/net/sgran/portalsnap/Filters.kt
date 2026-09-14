@@ -125,6 +125,8 @@ class Patch(
     val local: FloatArray? = null,
     /** Below 1, whatever was drawn under the patch shows through it. */
     val opacity: Float = 1f,
+    /** GLASS only: how far the front of the liquid's surface dips below its top edge, in half-heights. */
+    val surface: Float = 0f,
 ) {
     companion object {
         const val ELLIPSE = 0

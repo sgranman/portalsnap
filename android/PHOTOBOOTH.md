@@ -91,18 +91,26 @@ details above:
 
 Polish pass after the user's review:
 
-- **Losing tracking:** the glass no longer drops back to the camera. The new
-  `Filter.keepsScene` has the Painter keep drawing the scene and overlay with no faces. The
-  last glass settles to the middle, empty of the face, still sloshing and fizzing, and picks
-  the face back up when tracking returns.
-- **Face:** it's zoomed out, so the head sits in the glass with the room around it rather than
-  skin from rim to rim. The lens is weaker (0.72), and the face patch is 80% opaque
-  (`Patch.opacity`), so the lemonade and the straw show through.
-- **Ice:** real 3D blocks. Eight corners are projected through the glass pose at their own
-  depths, with clear faces drawn far to near, lit from above. A shine streak and a glint sit on
-  the top face, and a tiny mirrored face patch sits in the nearest side.
-- **Straw:** longer, visible under the lemonade, and offset where it enters the liquid, the way
-  a straw in a drink looks bent.
+- **Losing tracking:** it no longer drops back to the camera. The new `Filter.keepsScene` has
+  the Painter keep drawing the scene with no faces. The user's second review settled it: the
+  glass disappears and only the background stays.
+- **Face (second review):** the lemonade is made of the head. The patch samples just the
+  features, centred a little under the eye line, and the shader maps glass units through
+  `sin(g·π/2)`. So the features sit magnified in the middle and the face smears out to every
+  edge (the slope is 0 at the rim), with no room showing. The patch is opaque, so the straw
+  doesn't show under the liquid.
+- **Liquid surface:** an opaque lid. The face mask's top follows the lid's front arc
+  (`Patch.surface`), so the face never shows above the lemonade when the glass tips toward the
+  camera. The lid is drawn on the under layer, which lets the ice's face reflections show over
+  it.
+- **Glass front:** stronger reflections, meaning a broad soft band with a crisp streak on the
+  left, a fainter band on the right, and a sheen along the bottom.
+- **Ice:** real 3D blocks with soft rounded corners (`CornerPathEffect`). Eight corners are
+  projected through the glass pose at their own depths, with clear faces drawn far to near, lit
+  from above. A shine streak and a glint sit on the top face, and a mirrored face patch sits in
+  the nearest side. They aren't clipped, because a clip in the middle plane sliced their tops
+  off when the glass tipped.
+- **Straw:** longer, and showing only above the lemonade.
 - **Lemon:** a realistic slice with a waxy rind, a pith ring, ten translucent segments with
   juice streaks, a pale centre, and a gloss.
 - **Arms:** bendy arms with mitten hands. On each pea one arm waves and the other swings.

@@ -429,6 +429,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glUniform1f(pPatch.u("uWave"), p.wave)
             GLES20.glUniform1f(pPatch.u("uPhase"), p.phase)
             GLES20.glUniform1f(pPatch.u("uOpacity"), p.opacity)
+            GLES20.glUniform1f(pPatch.u("uSurface"), p.surface)
             val l = p.local ?: IDENTITY_3X3
             GLES20.glUniformMatrix3fv(pPatch.u("uLocal"), 1, false, floatArrayOf(l[0], l[3], l[6], l[1], l[4], l[7], l[2], l[5], l[8]), 0)
             val m = p.map

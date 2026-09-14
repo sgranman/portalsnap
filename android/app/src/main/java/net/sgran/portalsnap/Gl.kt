@@ -240,6 +240,7 @@ object Shaders {
         uniform float uPhase;
         uniform mat3 uLocal;
         uniform float uOpacity;
+        uniform float uSurface;
         vec4 frameAt(vec2 s) {
             return texture2D(uTexture, vec2(s.x / uSize.x, 1.0 - s.y / uSize.y));
         }
@@ -270,11 +271,17 @@ object Shaders {
                 // corners (0.38 across, 0.26 up; Lemonade.kt draws the same shape), soft-edged.
                 float halfW = mix(1.0, 0.85, (g.y + 1.0) * 0.5);
                 float soft = 1.0 - uFeather;
-                a = smoothstep(0.0, soft, halfW - abs(g.x)) * smoothstep(0.0, soft, 1.0 - abs(g.y));
+                // The top follows the front edge of the liquid's surface, an ellipse seen from a
+                // little above (uSurface is its depth in half-heights), so the face never shows
+                // above the lemonade.
+                float top = -1.0 + uSurface * sqrt(max(0.0, 1.0 - g.x * g.x));
+                a = smoothstep(0.0, soft, halfW - abs(g.x)) * smoothstep(0.0, soft, g.y - top) * smoothstep(0.0, soft, 1.0 - g.y);
                 vec2 corner = vec2((abs(g.x) - (halfW - 0.38)) / 0.38, (g.y - 0.74) / 0.26);
                 if (corner.x > 0.0 && corner.y > 0.0) a *= 1.0 - smoothstep(1.0 - soft * 3.0, 1.0, length(corner));
-                // A cylinder of liquid is a lens: it magnifies the middle and squeezes the sides.
-                g.x = g.x * (0.72 + 0.28 * g.x * g.x);
+                // The face fills the glass: the features sit in the middle, magnified, and the
+                // head stretches out to every edge (the slope of sin reaches 0 there), so the edges
+                // are smeared skin rather than the room behind.
+                g = sin(clamp(g, -1.0, 1.0) * 1.5707963);
                 src = uMap * vec3(g, 1.0);
             } else {
                 a = 1.0 - smoothstep(uFeather, 1.0, r);

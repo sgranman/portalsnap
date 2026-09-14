@@ -2,6 +2,7 @@ package net.sgran.portalsnap
 
 import android.graphics.Camera
 import android.graphics.Canvas
+import android.graphics.CornerPathEffect
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
@@ -17,12 +18,12 @@ import kotlin.math.sin
 // Photo Booth effect 8: your face seen through a glass of pink lemonade. The glass is drawn in
 // 3D. It chases your head around the screen on a spring, turns and tips with your head, and
 // leans against its own motion. Its contents sit at different depths, so they shift against
-// each other as it turns. Through the liquid your head shows tinted, blurred, rippling and a
-// little stretched, with the room around it, and the straw shows through too. The ice cubes
-// are real little 3D blocks with a shine and a tiny reflection of your face; they float free,
-// slosh as the glass moves and clink off the wall and each other. Pucker (or open wide) to
-// blow bubbles up the straw with a bloop. When tracking drops, the glass stays, empties of
-// the face and settles in the middle. Every sound is baked into clips.
+// each other as it turns. The lemonade is made of your head: your features float in the middle
+// and your face stretches out to fill the glass to its edges, tinted and rippling, capped by the
+// liquid's surface. The ice cubes are soft-cornered 3D blocks with a shine and a reflection of
+// your face; they float free, slosh as the glass moves and clink off the wall and each other.
+// Pucker (or open wide) to blow bubbles up the straw with a bloop. When tracking drops, the
+// glass goes and only the background stays. Every sound is baked into clips.
 //
 // The glass follows the original's look (reference video 919589313478329): thick clear walls
 // with a bright outer edge, a fainter inner edge and a sheen down each side; a rounded lip all
@@ -46,8 +47,6 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
     private const val STRAW_TOP_Y = -1.95f
     // How far out an ice cube's edge can reach in the round glass.
     private const val WALL = 0.95f
-    // The face is seen through the lemonade, not painted on it.
-    private const val FACE_OPACITY = 0.8f
 
     private class Bubble(var x: Float, var y: Float, val r: Float, val vy: Float, val phase: Float)
 
@@ -80,8 +79,6 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
     }
 
     private val states = HashMap<Int, State>()
-    // The glass that stays up when nobody is in view: the last main one seen.
-    private var resting: State? = null
     // Far enough back that the depth layers separate without the near ones ballooning.
     private val camera = Camera().apply { setLocation(0f, 0f, -16f) }
     private val layer = Matrix()
@@ -100,6 +97,7 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
     private val lipInner = Path()
     private val lip = Path()
     private val poly = Path()
+    private val lidPath = Path()
     private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val corners = FloatArray(16) // an ice cube's 8 projected corners, x y
     private val cornerZ = FloatArray(8)
@@ -131,29 +129,19 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
     override fun update(d: Draw, faces: List<Face>) {
         val dt = min(d.dt, 50f) / 1000f
         if (faces.isEmpty()) {
-            // Nobody in view: the last glass empties of the face and settles back to the middle.
+            // Nobody in view: the glass goes, and only the background stays up.
             states.clear()
-            val W = glassW(d, 1)
-            val H = glassH(d, 1)
-            val s = resting ?: State(d.w / 2, d.h * 0.55f).also { resting = it }
-            spring(s, d.w / 2, d.h * 0.55f, (-s.vx * 0.0006f).coerceIn(-0.6f, 0.6f), 0f, 0f, W, dt)
-            slosh(d, s, W, dt)
-            fizz(d, null, s, dt)
             return
         }
         for (f in faces) {
             val W = glassW(d, f.count)
             val H = glassH(d, f.count)
-            // Coming back, the resting glass is picked up again rather than a new one popping in.
-            val s = states.getOrPut(f.id) {
-                resting?.takeIf { r -> states.values.none { it === r } } ?: State(f.cx, f.cy)
-            }
+            val s = states.getOrPut(f.id) { State(f.cx, f.cy) }
             s.seen = d.t
             move(d, f, s, W, H, dt)
             slosh(d, s, W, dt)
             fizz(d, f, s, dt)
         }
-        faces.maxByOrNull { it.eyeDist }?.let { resting = states[it.id] }
         if (states.size > 4) states.entries.removeAll { d.t - it.value.seen > 3000 }
     }
 
@@ -370,8 +358,8 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
 
     /* ------------------------------ drawing ------------------------------ */
 
-    // A warm glow that wanders slowly over a pink-to-orange ground. With nobody in view the
-    // resting glass is drawn here and in overlay(), since there's no face to draw it for.
+    // A warm glow that wanders slowly over a pink-to-orange ground. It stays up on its own
+    // while nobody is in view (keepsScene).
     override fun scene(d: Draw, faces: List<Face>) {
         val c = d.c
         val p = d.pen
@@ -380,7 +368,6 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
         val gx = d.w * (0.5f + 0.35f * sin(t / 4100f))
         val gy = d.h * (0.5f + 0.3f * cos(t / 5300f))
         c.drawRect(0f, 0f, d.w, d.h, p.fill(RadialGradient(gx, gy, d.w * 0.55f, rgba(255, 176, 60, 0.85f), rgba(255, 176, 60, 0f), Shader.TileMode.CLAMP)))
-        if (faces.isEmpty()) resting?.let { underGlass(d, it, glassW(d, 1), glassH(d, 1)) }
     }
 
     override fun under(d: Draw, f: Face) {
@@ -391,10 +378,6 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
     override fun draw(d: Draw, f: Face) {
         val s = states[f.id] ?: return
         overGlass(d, s, glassW(d, f.count), glassH(d, f.count), f)
-    }
-
-    override fun overlay(d: Draw, faces: List<Face>) {
-        if (faces.isEmpty()) resting?.let { overGlass(d, it, glassW(d, 1), glassH(d, 1), null) }
     }
 
     private fun underGlass(d: Draw, s: State, W: Float, H: Float) {
@@ -411,10 +394,13 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
         inPlane(c, s, W * 0.45f) {
             c.drawPath(cavity, p.fill(LinearGradient(0f, -H, 0f, H, rgba(214, 150, 168, 0.9f), rgba(160, 96, 118, 0.9f), Shader.TileMode.CLAMP)))
         }
-        // The lemonade at the face's plane: all there is in an empty glass, and what the face
-        // is seen through otherwise.
+        // The lemonade at the face's plane, under the face's soft edge, and its surface. The
+        // surface can live down here because the face stops at its front edge; that leaves the
+        // ice's face reflections (patches, drawn above this layer) free to show on top of it.
+        val e = sin(Math.toRadians((16f + s.pitch).toDouble()).toFloat()).coerceIn(0.05f, 0.5f)
         inPlane(c, s, 0f) {
             c.drawPath(liquid, p.fill(LinearGradient(0f, -H, 0f, H, hex("#cf97a8"), hex("#9e6377"), Shader.TileMode.CLAMP)))
+            liquidTop(c, p, s, W, H, e, d.t)
         }
     }
 
@@ -423,18 +409,15 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
         val p = d.pen
         build(W, H)
         pose(s, 0f, layer)
-        cavityOnScreen.set(cavity)
-        cavityOnScreen.transform(layer)
-        val hb = f?.let { headBox(it) }
-        if (f != null && hb != null) facePatch(d, s, W, H, f, hb)
-
         val e = sin(Math.toRadians((16f + s.pitch).toDouble()).toFloat()).coerceIn(0.05f, 0.5f)
+        if (f != null) facePatch(d, s, W, H, f, e)
+
         val cubes = s.cubes.sortedByDescending { it.z }
 
         // Far to near: the straw at the back, ice behind the face (dimmed by the lemonade), the
         // liquid plane, ice in front, the glass, then the near-side highlight.
-        straw(c, p, s, W, H)
-        for (cube in cubes) if (cube.z > 0f) iceCube(d, s, cube, W, H, hb, 0.6f)
+        straw(c, p, s, W, H, e)
+        for (cube in cubes) if (cube.z > 0f) iceCube(d, s, cube, W, H, f, 0.6f)
         inPlane(c, s, 0f) {
             val inside = c.save()
             c.clipPath(liquid)
@@ -444,9 +427,8 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
             c.drawRect(-W * 1.2f, H * 0.55f, W * 1.2f, H * 1.05f, p.fill(LinearGradient(0f, H * 0.55f, 0f, H, rgba(90, 45, 60, 0f), rgba(90, 45, 60, 0.4f), Shader.TileMode.CLAMP)))
             c.drawOval(p.rect(0f, H * 0.97f, TAPER * W * 0.92f, TAPER * W * 0.92f * e), p.fill(rgba(255, 228, 236, 0.35f)))
             c.restoreToCount(inside)
-            liquidTop(c, p, s, W, H, e, d.t)
         }
-        for (cube in cubes) if (cube.z <= 0f) iceCube(d, s, cube, W, H, hb, 1f)
+        for (cube in cubes) if (cube.z <= 0f) iceCube(d, s, cube, W, H, f, 1f)
         inPlane(c, s, 0f) {
             glass(c, p, W, H)
             lemon(c, p, W, H)
@@ -457,29 +439,34 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
 
     // The face lives on the glass's middle plane. `local` takes a frame pixel back through that
     // plane into glass units; `map` then takes glass units to the camera, centred on the head.
-    private fun facePatch(d: Draw, s: State, W: Float, H: Float, f: Face, hb: HeadBox) {
+    private fun facePatch(d: Draw, s: State, W: Float, H: Float, f: Face, e: Float) {
         layer.invert(inverse) // layer holds the middle plane's pose here
         inverse.postScale(1f / W, 1f / H)
         inverse.getValues(values)
-        // Zoomed out, so the head sits in the middle with some of the room around it rather
-        // than skin from rim to rim.
-        val kx = hb.halfW * 2.3f
-        val ky = hb.halfH * 1.45f
+        // Just the features: the glass's edges reach the cheeks, brow and chin, which the
+        // shader's stretch smears out to the rim. Nothing past the skin, so no room shows.
+        val centre = features(f)
+        val kx = f.eyeDist * 0.7f
+        val ky = f.eyeDist * 0.85f
         val ca = cos(f.angle)
         val sa = sin(f.angle)
         d.patches += Patch(
             s.x, s.y, W, H, 0f, 0.94f,
-            floatArrayOf(ca * kx, -sa * ky, hb.x, sa * kx, ca * ky, hb.y),
-            shape = Patch.GLASS, tint = rgba(190, 110, 130, 0.9f), blur = 4f, wave = 2.5f,
-            phase = (d.t % 100_000L) / 1000f * 3f, local = values.copyOf(), opacity = FACE_OPACITY,
+            floatArrayOf(ca * kx, -sa * ky, centre.x, sa * kx, ca * ky, centre.y),
+            shape = Patch.GLASS, tint = rgba(190, 110, 130, 0.85f), blur = 2f, wave = 2.5f,
+            phase = (d.t % 100_000L) / 1000f * 3f, local = values.copyOf(),
+            surface = W * e / H,
         )
     }
+
+    // The middle of the features: centred on the eye line, a little under halfway to the mouth.
+    private fun features(f: Face) = toPixels(f, 0f, f.mouth.y * 0.45f)
 
     // A real little block of ice: eight corners turned by its spin and a tilt that shows its
     // top, each projected through the glass's pose at its own depth. Its faces are clear and
     // drawn far to near, so the back ones show through the front; the top catches the light,
     // with a streak and a glint. The nearest side carries a tiny mirrored reflection of the face.
-    private fun iceCube(d: Draw, s: State, cube: Cube, W: Float, H: Float, hb: HeadBox?, alpha: Float) {
+    private fun iceCube(d: Draw, s: State, cube: Cube, W: Float, H: Float, f: Face?, alpha: Float) {
         val c = d.c
         val p = d.pen
         // Big enough for the shine and the reflection to read at Portal distance.
@@ -527,8 +514,9 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
             }
         }
 
-        val save = c.save()
-        c.clipPath(cavityOnScreen)
+        // Not clipped: tipped toward you, a clip in the glass's middle plane sliced the tops off.
+        // Rounded corners so they read as ice, not glass blocks.
+        val soft = CornerPathEffect(a * 0.35f)
         var near = -1
         for (k in faceOrder) {
             val q = CUBE_FACES[k]
@@ -541,12 +529,19 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
             val ny = n[1] * cph - n[2] * sph
             val light = (0.5f - 0.5f * ny).coerceIn(0f, 1f)
             val fill = rgba((196 + 59 * light).toInt(), (220 + 35 * light).toInt(), 248, (0.3f + 0.3f * light) * alpha)
-            c.drawPath(poly, p.fill(fill))
-            val edge = p.stroke(rgba(255, 255, 255, (0.3f + 0.45f * light) * alpha), max(1f, a * 0.06f))
+            val body = p.fill(fill)
+            body.pathEffect = soft
+            c.drawPath(poly, body)
+            val edge = p.stroke(rgba(255, 255, 255, (0.16f + 0.3f * light) * alpha), max(1f, a * 0.04f))
             edge.strokeJoin = Paint.Join.ROUND
+            edge.pathEffect = soft
             c.drawPath(poly, edge)
             if (k != TOP_FACE && k != 3) near = k // sides only; the last drawn is nearest
         }
+
+        // The pen's paints are shared: clear the rounding before anything else draws with them.
+        p.fill.pathEffect = null
+        p.stroke.pathEffect = null
 
         // The shine: a streak across the top face and a glint at its corner.
         val q = CUBE_FACES[TOP_FACE]
@@ -560,10 +555,9 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
         streak.strokeCap = Paint.Cap.ROUND
         c.drawLine(sx1, sy1, sx2, sy2, streak)
         c.drawCircle(mx + (corners[q[0] * 2] - mx) * 0.78f, my + (corners[q[0] * 2 + 1] - my) * 0.78f, max(1.5f, a * 0.1f), p.fill(rgba(255, 255, 255, 0.95f * alpha)))
-        c.restoreToCount(save)
 
-        // A tiny mirrored face in the nearest side, as a GPU patch under the clear ice.
-        if (hb != null && near >= 0) {
+        // A mirrored face in the nearest side, as a GPU patch under the clear ice.
+        if (f != null && near >= 0) {
             val f4 = CUBE_FACES[near]
             val x0 = corners[f4[0] * 2]
             val y0 = corners[f4[0] * 2 + 1]
@@ -577,22 +571,22 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
             val fy = (y0 + y1 + y2 + y3) / 4
             val across = hypot((x0 + x1) / 2 - (x2 + x3) / 2, (y0 + y1) / 2 - (y2 + y3) / 2)
             val down = hypot((x1 + x2) / 2 - (x3 + x0) / 2, (y1 + y2) / 2 - (y3 + y0) / 2)
-            val r = min(across, down) * 0.36f
+            val r = min(across, down) * 0.46f
             if (r > 3f) {
-                val k = hb.halfH * 1.2f / r
+                val centre = features(f)
+                val k = f.eyeDist * 1.1f / r
                 d.patches += Patch(
-                    fx, fy, r, r, 0f, 0.5f,
-                    floatArrayOf(-k, 0f, hb.x + k * fx, 0f, k, hb.y - k * fy),
-                    tint = rgba(225, 240, 255, 0.35f), blur = 0.8f, opacity = 0.85f * alpha,
+                    fx, fy, r, r, 0f, 0.55f,
+                    floatArrayOf(-k, 0f, centre.x + k * fx, 0f, k, centre.y - k * fy),
+                    tint = rgba(225, 240, 255, 0.18f), blur = 0.5f, opacity = alpha,
                 )
             }
         }
     }
 
-    // A plain dark-red straw at the back, swaying about its foot. Under the lemonade it shows
-    // through, shifted sideways where it enters the liquid, the way a straw in a drink looks
-    // bent.
-    private fun straw(c: Canvas, p: Pen, s: State, W: Float, H: Float) {
+    // A plain dark-red straw at the back, swaying about its foot. Only the part above the
+    // lemonade shows: the liquid is opaque, and its surface covers where the straw goes in.
+    private fun straw(c: Canvas, p: Pen, s: State, W: Float, H: Float, e: Float) {
         inPlane(c, s, W * 0.35f) {
             val fx = STRAW_FOOT_X * W
             val fy = STRAW_FOOT_Y * H
@@ -601,14 +595,12 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
                 lineTo(0.74f * W, STRAW_TOP_Y * H)
             }
             val width = W * 0.065f
-            val sub = c.save()
-            c.clipPath(liquid)
-            c.rotate(deg(s.straw), fx, fy)
-            c.translate(W * 0.05f, 0f)
-            c.drawPath(p.path, p.stroke(rgba(165, 35, 62, 0.6f), width))
-            c.restoreToCount(sub)
             val top = c.save()
+            // Above the lemonade and off its surface, which is drawn on the layer underneath.
             c.clipRect(-W * 3, -H * 3, W * 3, -H)
+            lidPath.reset()
+            lidPath.addOval(-W, -H - W * e, W, -H + W * e, Path.Direction.CW)
+            c.clipOutPath(lidPath)
             c.rotate(deg(s.straw), fx, fy)
             val body = p.stroke(hex("#b8233f"), width)
             body.strokeCap = Paint.Cap.BUTT
@@ -638,14 +630,15 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
         }
     }
 
-    // The top of the lemonade, just below the rim, sloshing a little against the acceleration.
+    // The top of the lemonade, just below the rim: an opaque lid whose front edge is exactly
+    // where the face patch stops (Patch.surface), rocking only slightly so the two stay together.
     private fun liquidTop(c: Canvas, p: Pen, s: State, W: Float, H: Float, e: Float, t: Long) {
-        val slosh = (-s.ax / W * 0.004f).coerceIn(-0.25f, 0.25f) + sin((t % 100_000L) / 400f) * 0.03f
+        val slosh = (-s.ax / W * 0.002f).coerceIn(-0.05f, 0.05f) + sin((t % 100_000L) / 400f) * 0.015f
         val save = c.save()
         c.translate(0f, -H)
         c.rotate(deg(slosh))
-        c.drawOval(p.rect(0f, 0f, W * 0.98f, W * 0.98f * e), p.fill(rgba(226, 168, 186, 0.6f)))
-        c.drawOval(p.rect(0f, 0f, W * 0.98f, W * 0.98f * e), p.stroke(rgba(255, 255, 255, 0.35f), W * 0.012f))
+        c.drawOval(p.rect(0f, 0f, W, W * e), p.fill(LinearGradient(0f, -W * e, 0f, W * e, hex("#e9b4c4"), hex("#c98a9f"), Shader.TileMode.CLAMP)))
+        c.drawOval(p.rect(0f, 0f, W, W * e), p.stroke(rgba(255, 255, 255, 0.4f), W * 0.012f))
         c.restoreToCount(save)
     }
 
@@ -684,16 +677,28 @@ object Lemonade : Filter("lemonade", "Lemonade", "🍋", Mode.MESH, voice = 0.9f
         c.drawArc(-rOut, y - rOut * e, rOut, y + rOut * e, 0f, 180f, false, p.stroke(rgba(255, 250, 230, 0.95f), W * 0.018f))
     }
 
-    // A soft broad highlight on the near side of the left wall.
+    // Reflections on the near side of the glass: a broad soft band down the left with a crisp
+    // streak inside it, a fainter band on the right, and a sheen along the bottom curve.
     private fun highlight(c: Canvas, p: Pen, W: Float, H: Float) {
-        p.newPath().apply {
-            moveTo(-0.88f * W, -1.0f * H)
-            lineTo(-0.74f * W, -1.0f * H)
-            lineTo(-0.62f * W, 0.7f * H)
-            lineTo(-0.72f * W, 0.7f * H)
-            close()
+        fun band(x0: Float, x1: Float, lean: Float, top: Float, bottom: Float, peak: Float) {
+            p.newPath().apply {
+                moveTo(x0, top)
+                lineTo(x1, top)
+                lineTo(x1 + lean, bottom)
+                lineTo(x0 + lean, bottom)
+                close()
+            }
+            c.drawPath(p.path, p.fill(LinearGradient(
+                x0, 0f, x1, 0f,
+                intArrayOf(rgba(255, 255, 255, 0f), rgba(255, 255, 255, peak), rgba(255, 255, 255, 0f)), floatArrayOf(0f, 0.4f, 1f), Shader.TileMode.CLAMP,
+            )))
         }
-        c.drawPath(p.path, p.fill(rgba(255, 255, 255, 0.14f)))
+        band(-0.95f * W, -0.4f * W, 0.14f * W, -1.05f * H, 0.9f * H, 0.38f)
+        band(-0.8f * W, -0.7f * W, 0.13f * W, -1.0f * H, 0.8f * H, 0.7f)
+        band(0.5f * W, 0.85f * W, -0.1f * W, -1.0f * H, 0.85f * H, 0.22f)
+        val sheen = p.stroke(rgba(255, 255, 255, 0.3f), W * 0.05f)
+        sheen.strokeCap = Paint.Cap.ROUND
+        c.drawArc(-0.7f * W, 0.75f * H, 0.7f * W, 1.05f * H, 25f, 130f, false, sheen)
     }
 
     // A real slice hooked on the left rim, behind the front of the lip: a waxy rind darkening to
