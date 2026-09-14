@@ -181,6 +181,13 @@ Each of these cost real time, so check here first:
   any mirror off the matrix itself, so the crop stays right either way. If another Portal
   comes out sideways, `--ei rot N` fixes it and is remembered per device; `--ei rot -1`
   clears it.
+- **The camera mirrors without saying so.** Camera 0's buffers come already mirrored, but the
+  SurfaceTexture transform carries no flip (`flip=false`). The screen pass mirrors the frame,
+  so for a while the screen wasn't a mirror at all: book spines read normally, and people moved
+  the opposite way to what they saw. `Compositor` now undoes that hidden mirror too
+  (`CAMERA_MIRRORS`), so the frame is the room as it is and the screen behaves like a mirror.
+  To check on another Portal, find text in the room on the live preview: it should read
+  backwards.
 - **Only camera 0.** `cameraIdList` shows apps only camera 0, Meta's 1280x720 "smart camera"
   that crops and pans in hardware. Camera 1 (the 4056x3040 sensor) needs `CAMERA_PRIV`.
 - **The GPU segmenter aborts the process.** `ImageSegmenter` with a category mask on the GPU

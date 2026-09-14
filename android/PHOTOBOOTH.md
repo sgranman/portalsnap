@@ -88,6 +88,23 @@ details above:
   baked into clips. The straw sways on a spring.
 - **Mouth:** the open question was guessed: yes, it reacts. A pucker, funnel or wide-open jaw
   blows bubbles up the straw with a bloop. A gentle fizz runs all the time.
+
+Polish pass after the user's review:
+
+- **Losing tracking:** the glass no longer drops back to the camera. The new
+  `Filter.keepsScene` has the Painter keep drawing the scene and overlay with no faces. The
+  last glass settles to the middle, empty of the face, still sloshing and fizzing, and picks
+  the face back up when tracking returns.
+- **Face:** it's zoomed out, so the head sits in the glass with the room around it rather than
+  skin from rim to rim. The lens is weaker (0.72), and the face patch is 80% opaque
+  (`Patch.opacity`), so the lemonade and the straw show through.
+- **Ice:** real 3D blocks. Eight corners are projected through the glass pose at their own
+  depths, with clear faces drawn far to near, lit from above. A shine streak and a glint sit on
+  the top face, and a tiny mirrored face patch sits in the nearest side.
+- **Straw:** longer, visible under the lemonade, and offset where it enters the liquid, the way
+  a straw in a drink looks bent.
+- **Lemon:** a realistic slice with a waxy rind, a pith ring, ten translucent segments with
+  juice streaks, a pale centre, and a gloss.
 - **Arms:** bendy arms with mitten hands. On each pea one arm waves and the other swings.
 
 ## The effects

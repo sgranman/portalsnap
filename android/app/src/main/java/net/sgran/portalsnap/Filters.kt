@@ -123,6 +123,8 @@ class Patch(
     val feather: Float, val map: FloatArray, val bulge: Float = 0f,
     val shape: Int = ELLIPSE, val tint: Int = 0, val blur: Float = 0f, val wave: Float = 0f, val phase: Float = 0f,
     val local: FloatArray? = null,
+    /** Below 1, whatever was drawn under the patch shows through it. */
+    val opacity: Float = 1f,
 ) {
     companion object {
         const val ELLIPSE = 0
@@ -143,6 +145,8 @@ abstract class Filter(
     open val usesOver = true
     /** The under layer replaces the camera entirely: a sky, a scene. */
     open val coversCamera = false
+    /** Keeps drawing its scene (scene + overlay, with no faces) while nobody is in view. */
+    open val keepsScene = false
 
     open fun voiceFrom(face: Face): Float? = null
 

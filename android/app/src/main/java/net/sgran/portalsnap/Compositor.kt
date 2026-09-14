@@ -29,6 +29,9 @@ const val FRAME_H = 720
 
 private val IDENTITY_3X3 = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
 
+// The camera's buffers arrive mirrored with no flip in their transform (gen 1 Portal, camera 0).
+private const val CAMERA_MIRRORS = true
+
 /**
  * The render thread. Everything GL lives here.
  *
@@ -278,8 +281,11 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         GlMatrix.setIdentityM(user, 0)
         GlMatrix.translateM(user, 0, 0.5f, 0.5f, 0f)
         GlMatrix.rotateM(user, 0, rotation.toFloat(), 0f, 0f, 1f)
-        // Undo the camera service's front-camera mirror, so the frame is the room as it is.
-        GlMatrix.scaleM(user, 0, if (stFlip) -cx else cx, cy, 1f)
+        // Undo any mirror in the buffers, so the frame is the room as it is. The Portal's smart
+        // camera mirrors its picture without saying so in the transform (flip=false), which
+        // left the screen pass un-mirroring it: book spines read normally on screen, and you
+        // moved the opposite way to your reflection. So that hidden mirror is undone as well.
+        GlMatrix.scaleM(user, 0, if (stFlip != CAMERA_MIRRORS) -cx else cx, cy, 1f)
         GlMatrix.translateM(user, 0, -0.5f, -0.5f, 0f)
         GlMatrix.multiplyMM(texM, 0, camMatrix, 0, user, 0)
         GLES20.glDisable(GLES20.GL_BLEND)
@@ -422,6 +428,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glUniform1f(pPatch.u("uBlur"), p.blur)
             GLES20.glUniform1f(pPatch.u("uWave"), p.wave)
             GLES20.glUniform1f(pPatch.u("uPhase"), p.phase)
+            GLES20.glUniform1f(pPatch.u("uOpacity"), p.opacity)
             val l = p.local ?: IDENTITY_3X3
             GLES20.glUniformMatrix3fv(pPatch.u("uLocal"), 1, false, floatArrayOf(l[0], l[3], l[6], l[1], l[4], l[7], l[2], l[5], l[8]), 0)
             val m = p.map

@@ -196,8 +196,27 @@ class Painter {
             jitter = tracks.jitterPx()
             // Face filters rest with nobody in view; frame shaders keep playing.
             if (live.isEmpty() && !f.usesFx) {
-                idle(under, over)
                 voice = voiceOf(f, null)
+                // A scene that keeps itself (Lemonade's glass) stays up on its own ground rather
+                // than dropping back to the camera the moment tracking blinks.
+                if (f.keepsScene) {
+                    guarded(f) { f.update(draw, emptyList()) }
+                    under.paint { c ->
+                        draw.c = c
+                        guarded(f) { f.scene(draw, emptyList()) }
+                    }
+                    over.paint { c ->
+                        draw.c = c
+                        guarded(f) { f.overlay(draw, emptyList()) }
+                    }
+                    plan.composite = true
+                    plan.base = !f.coversCamera
+                    plan.under = true
+                    plan.over = true
+                    plan.patches = ArrayList(draw.patches)
+                    return plan
+                }
+                idle(under, over)
                 return plan
             }
 

@@ -239,6 +239,7 @@ object Shaders {
         uniform float uWave;
         uniform float uPhase;
         uniform mat3 uLocal;
+        uniform float uOpacity;
         vec4 frameAt(vec2 s) {
             return texture2D(uTexture, vec2(s.x / uSize.x, 1.0 - s.y / uSize.y));
         }
@@ -273,7 +274,7 @@ object Shaders {
                 vec2 corner = vec2((abs(g.x) - (halfW - 0.38)) / 0.38, (g.y - 0.74) / 0.26);
                 if (corner.x > 0.0 && corner.y > 0.0) a *= 1.0 - smoothstep(1.0 - soft * 3.0, 1.0, length(corner));
                 // A cylinder of liquid is a lens: it magnifies the middle and squeezes the sides.
-                g.x = g.x * (0.6 + 0.4 * g.x * g.x);
+                g.x = g.x * (0.72 + 0.28 * g.x * g.x);
                 src = uMap * vec3(g, 1.0);
             } else {
                 a = 1.0 - smoothstep(uFeather, 1.0, r);
@@ -300,7 +301,7 @@ object Shaders {
                 col.rgb = mix(col.rgb, vec3(lum), 0.55 * uTint.a);
                 col.rgb = mix(col.rgb, col.rgb * uTint.rgb + uTint.rgb * 0.22, uTint.a);
             }
-            gl_FragColor = col * a;
+            gl_FragColor = col * (a * uOpacity);
         }
     """
 
