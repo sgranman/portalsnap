@@ -179,6 +179,23 @@ The user added details from watching the videos:
 - It stretches the face.
 - It moves around the screen as the face moves.
 - The ice makes clinking sounds.
+
+From reference video 919589313478329 (30s, frames only; the effect is described here, not the
+person):
+
+- **Glass body:** a clear 3D tumbler about half the frame's height. It's slim, with nearly
+  straight sides and a slight taper, and tilts about ±20°.
+- **Outline:** thick walls with a bright cream outer edge, a fainter inner edge, and a thin
+  sheen down each side.
+- **Rim:** a rounded lip all the way round, pale, and brighter along the front.
+- **Bottom:** heavily rounded corners on a thick clear base. The bottom of the liquid shows as
+  a lighter oval above it.
+- **Lemonade:** a muted, dusty mauve-pink, filled almost to the rim. The face shows through it
+  softened and a little tall.
+- **Props:** grey ice cubes with bright tops stand above the liquid at the rim. There's a thin
+  plain dark-red straw at the back right, and a big lemon slice hooked on the left rim, behind
+  the front of the lip.
+- **Background:** an orange-and-pink gradient whose glow drifts around.
 - **Build:** mesh tier, no camera background.
   - **Face:** a face patch warped into the glass's interior (an affine plus a slight vertical
     stretch), tinted and blurred in the shader.

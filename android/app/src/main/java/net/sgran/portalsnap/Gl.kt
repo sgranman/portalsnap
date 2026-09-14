@@ -265,10 +265,13 @@ object Shaders {
                 // glass units on to the camera.
                 vec3 l = uLocal * vec3(p, 1.0);
                 vec2 g = l.xy / l.z;
-                // A tumbler: full width at the top, 0.8 of it at the bottom, soft-edged.
-                float halfW = mix(1.0, 0.8, (g.y + 1.0) * 0.5);
+                // A tumbler: full width at the top, 0.85 of it at the bottom, with rounded bottom
+                // corners (0.38 across, 0.26 up; Lemonade.kt draws the same shape), soft-edged.
+                float halfW = mix(1.0, 0.85, (g.y + 1.0) * 0.5);
                 float soft = 1.0 - uFeather;
                 a = smoothstep(0.0, soft, halfW - abs(g.x)) * smoothstep(0.0, soft, 1.0 - abs(g.y));
+                vec2 corner = vec2((abs(g.x) - (halfW - 0.38)) / 0.38, (g.y - 0.74) / 0.26);
+                if (corner.x > 0.0 && corner.y > 0.0) a *= 1.0 - smoothstep(1.0 - soft * 3.0, 1.0, length(corner));
                 // A cylinder of liquid is a lens: it magnifies the middle and squeezes the sides.
                 g.x = g.x * (0.6 + 0.4 * g.x * g.x);
                 src = uMap * vec3(g, 1.0);
@@ -291,7 +294,12 @@ object Shaders {
             } else {
                 col = frameAt(src.xy);
             }
-            if (uTint.a > 0.0) col.rgb = mix(col.rgb, col.rgb * uTint.rgb + uTint.rgb * 0.22, uTint.a);
+            if (uTint.a > 0.0) {
+                // Muted first, as through cloudy lemonade, then the colour cast.
+                float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+                col.rgb = mix(col.rgb, vec3(lum), 0.55 * uTint.a);
+                col.rgb = mix(col.rgb, col.rgb * uTint.rgb + uTint.rgb * 0.22, uTint.a);
+            }
             gl_FragColor = col * a;
         }
     """
