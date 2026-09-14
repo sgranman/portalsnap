@@ -186,6 +186,16 @@ Each of these cost real time, so check here first:
   H.264 encoder, hardware or software, fails with -1010 after ACodec logs `Failed to set
   standard component role 'video_decoder.avc'`. Passing `CONFIGURE_FLAG_ENCODE` and an
   `encoder=1` format key fixes it (`Recorder.asEncoder`).
+- **The preview stuck after Keep.** On Android 9 a `SurfaceView` (so a `VideoView`) ignores an
+  ancestor going `GONE`. The review's video surface stayed composited over the camera after
+  the panel closed. Hide the `VideoView` itself (`ReviewPanel.close()`,
+  `AlbumPanel.closeViewer()`). To check, `dumpsys SurfaceFlinger --list` should show one
+  `SurfaceView` for the app, not two.
+- **Clips came out quiet.** The raw mic (`CAMCORDER` source) measured -23.9 LUFS on a real
+  clip. The web app's clips were -12 to -16, because Chrome's `getUserMedia` has gain control
+  on by default. `Loudness.kt` is a block AGC with a silence gate and a soft limiter, plus the
+  platform `NoiseSuppressor` where one exists. It was prototyped on that clip first: target
+  -16dB and a 0.8 knee gave -15.6 LUFS with peaks at 0dB.
 - **No parachute emoji.** Android 9's emoji font has no 🪂, so the Skydive chip falls back to 🎈.
 - **Bulk transfers stall over USB.** Through usbipd into WSL, small adb commands work but
   large file transfers hang. Use adb over Wi-Fi: run `adb tcpip 5555` once over USB, then

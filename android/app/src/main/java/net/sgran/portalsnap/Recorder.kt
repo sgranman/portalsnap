@@ -8,6 +8,7 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
+import android.media.audiofx.NoiseSuppressor
 import android.util.Log
 import android.view.Surface
 import java.io.File
@@ -29,6 +30,7 @@ class Recorder(private val file: File, wantAudio: Boolean) {
     private val video: MediaCodec
     private var audio: MediaCodec? = null
     private var mic: AudioRecord? = null
+    private var noise: NoiseSuppressor? = null
     private val muxer = MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
     private val lock = Object()
@@ -113,6 +115,12 @@ class Recorder(private val file: File, wantAudio: Boolean) {
                 },
             )
             codec.start()
+            // Chrome also ran noise suppression on the mic; use the platform's where the
+            // Portal offers one, so the gain below lifts voices rather than the room.
+            if (NoiseSuppressor.isAvailable()) {
+                noise = runCatching { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } }.getOrNull()
+            }
+            Log.i(TAG, "audio: noise suppressor ${if (noise?.enabled == true) "on" else "unavailable"}")
             mic = rec
             audio = codec
             hasAudio = true
@@ -130,6 +138,7 @@ class Recorder(private val file: File, wantAudio: Boolean) {
         val rec = mic ?: return
         val codec = audio ?: return
         val shifter = PitchShifter()
+        val loudness = Loudness()
         val shorts = ShortArray(BLOCK)
         val floats = FloatArray(BLOCK)
         val bytes = ByteBuffer.allocate(BLOCK * 2).order(ByteOrder.LITTLE_ENDIAN)
@@ -140,6 +149,8 @@ class Recorder(private val file: File, wantAudio: Boolean) {
             val n = rec.read(shorts, 0, BLOCK)
             if (n <= 0) continue
             for (i in 0 until n) floats[i] = shorts[i] / 32768f
+            // Gain first, as Chrome's capture-side AGC was, so the voice is shifted at level.
+            loudness.process(floats, n)
             shifter.process(floats, n, voiceRatio)
             bytes.clear()
             for (i in 0 until n) bytes.putShort((floats[i] * 32767f).toInt().coerceIn(-32768, 32767).toShort())
@@ -253,6 +264,7 @@ class Recorder(private val file: File, wantAudio: Boolean) {
         runCatching { video.release() }
         runCatching { audio?.stop() }
         runCatching { audio?.release() }
+        runCatching { noise?.release() }
         runCatching { mic?.release() }
         inputSurface.release()
         return if (ok && file.length() > 0) file else null

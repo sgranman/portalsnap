@@ -169,8 +169,12 @@ class ReviewPanel(ctx: Context, onKeep: () -> Unit, onAgain: () -> Unit) : Linea
         msg.setTextColor(color)
     }
 
+    // The VideoView is hidden itself, not just via this panel: on Android 9 a SurfaceView
+    // ignores an ancestor going GONE, so its video surface stayed composited over the camera
+    // after "Keep it" — the "stuck preview".
     fun close() {
         video.stopPlayback()
+        video.visibility = GONE
         image.setImageDrawable(null)
         visibility = GONE
     }
@@ -252,6 +256,7 @@ class AlbumPanel(
         }
         vDelete.setOnClickListener { deleteViewing() }
         vVideo.setOnPreparedListener { vVideo.start() }
+        vVideo.visibility = GONE
         addView(viewer, lp(MATCH, MATCH))
     }
 
@@ -357,9 +362,11 @@ class AlbumPanel(
         }
     }
 
+    // Same SurfaceView rule as ReviewPanel.close(): hide the VideoView itself.
     private fun closeViewer() {
         viewing = null
         vVideo.stopPlayback()
+        vVideo.visibility = GONE
         vImage.setImageDrawable(null)
         viewer.visibility = GONE
     }
