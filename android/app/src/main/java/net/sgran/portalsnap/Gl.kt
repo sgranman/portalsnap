@@ -238,6 +238,7 @@ object Shaders {
         uniform float uBlur;
         uniform float uWave;
         uniform float uPhase;
+        uniform mat3 uLocal;
         vec4 frameAt(vec2 s) {
             return texture2D(uTexture, vec2(s.x / uSize.x, 1.0 - s.y / uSize.y));
         }
@@ -257,16 +258,25 @@ object Shaders {
                 return;
             }
             float a;
+            vec3 src;
             if (uShape > 0.5) {
+                // The glass's own plane. uLocal takes a frame pixel into glass units, projectively
+                // so the glass can turn in 3D; the mask and the lens live there, and uMap takes
+                // glass units on to the camera.
+                vec3 l = uLocal * vec3(p, 1.0);
+                vec2 g = l.xy / l.z;
                 // A tumbler: full width at the top, 0.8 of it at the bottom, soft-edged.
-                float halfW = mix(1.0, 0.8, (q.y + 1.0) * 0.5);
+                float halfW = mix(1.0, 0.8, (g.y + 1.0) * 0.5);
                 float soft = 1.0 - uFeather;
-                a = smoothstep(0.0, soft, halfW - abs(q.x)) * smoothstep(0.0, soft, 1.0 - abs(q.y));
+                a = smoothstep(0.0, soft, halfW - abs(g.x)) * smoothstep(0.0, soft, 1.0 - abs(g.y));
+                // A cylinder of liquid is a lens: it magnifies the middle and squeezes the sides.
+                g.x = g.x * (0.6 + 0.4 * g.x * g.x);
+                src = uMap * vec3(g, 1.0);
             } else {
                 a = 1.0 - smoothstep(uFeather, 1.0, r);
+                src = uMap * vec3(p, 1.0);
             }
             if (a <= 0.0) discard;
-            vec3 src = uMap * vec3(p, 1.0);
             // Seen through liquid: a slow ripple, a soft blur, and a colour cast.
             if (uWave > 0.0) src.x += sin(src.y * 0.045 + uPhase) * uWave;
             vec4 col;

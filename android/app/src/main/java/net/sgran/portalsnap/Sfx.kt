@@ -28,6 +28,9 @@ object Sfx {
             clips["creak1"] = Mixer.Clip(creak(11L, 0.55f, 390f), RATE)
             clips["creak2"] = Mixer.Clip(creak(23L, 0.5f, 450f), RATE)
             clips["bloop"] = Mixer.Clip(bloop(), RATE)
+            clips["clink1"] = Mixer.Clip(clink(5L, 2400f), RATE)
+            clips["clink2"] = Mixer.Clip(clink(7L, 2900f), RATE)
+            clips["clink3"] = Mixer.Clip(clink(13L, 3500f), RATE)
         }
     }
 
@@ -35,6 +38,27 @@ object Sfx {
     fun play(name: String, volume: Float = 1f, rate: Float = 1f) {
         val clip = clips[name] ?: return
         Mixer.play(clip, volume, rate.coerceIn(0.5f, 2f))
+    }
+
+    // Ice on glass: a bright, inharmonic ping that dies fast, with a tick of noise on the strike.
+    private fun clink(seed: Long, baseHz: Float): ShortArray {
+        val rng = Random(seed)
+        val n = (RATE * 0.35f).toInt()
+        val out = FloatArray(n)
+        val ratios = floatArrayOf(1f, 1.47f, 2.09f, 2.56f, 3.2f)
+        val decayS = floatArrayOf(0.12f, 0.08f, 0.05f, 0.035f, 0.02f)
+        val gains = floatArrayOf(1f, 0.6f, 0.45f, 0.3f, 0.2f)
+        for (m in ratios.indices) {
+            val w = (2 * PI * baseHz * ratios[m] * (0.99f + 0.02f * rng.nextFloat()) / RATE).toFloat()
+            val tau = decayS[m] * RATE
+            val phase = rng.nextFloat() * 6.2832f
+            for (i in 0 until n) out[i] += gains[m] * exp(-i / tau) * sin(w * i + phase)
+        }
+        val tick = RATE / 500
+        for (i in 0 until tick) out[i] += 0.5f * (rng.nextFloat() * 2 - 1) * (1f - i.toFloat() / tick)
+        var peak = 1e-6f
+        for (v in out) peak = max(peak, abs(v))
+        return ShortArray(n) { (out[it] / peak * 0.7f * 32767f).toInt().toShort() }
     }
 
     // A bubble's bloop: a sine that sweeps up as the bubble's cavity shrinks, with a quick

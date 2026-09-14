@@ -27,6 +27,8 @@ import android.opengl.Matrix as GlMatrix
 const val FRAME_W = 1280
 const val FRAME_H = 720
 
+private val IDENTITY_3X3 = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+
 /**
  * The render thread. Everything GL lives here.
  *
@@ -420,6 +422,8 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glUniform1f(pPatch.u("uBlur"), p.blur)
             GLES20.glUniform1f(pPatch.u("uWave"), p.wave)
             GLES20.glUniform1f(pPatch.u("uPhase"), p.phase)
+            val l = p.local ?: IDENTITY_3X3
+            GLES20.glUniformMatrix3fv(pPatch.u("uLocal"), 1, false, floatArrayOf(l[0], l[3], l[6], l[1], l[4], l[7], l[2], l[5], l[8]), 0)
             val m = p.map
             // Column-major: src = M * (x, y, 1).
             GLES20.glUniformMatrix3fv(pPatch.u("uMap"), 1, false, floatArrayOf(m[0], m[3], 0f, m[1], m[4], 0f, m[2], m[5], 1f), 0)

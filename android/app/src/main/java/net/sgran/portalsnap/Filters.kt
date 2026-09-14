@@ -112,7 +112,9 @@ class Draw(val pen: Pen) {
  * [feather] is where the fade starts, as a fraction of the radius. A [bulge] above 0 ignores
  * both and magnifies in place instead: 1 / (1 - bulge) at the centre, easing to none at the rim.
  *
- * [shape] swaps the ellipse for a tumbler (top width rx, bottom 0.8 rx). [tint] is an ARGB
+ * [shape] GLASS swaps the ellipse for a tumbler (0.8 as wide at the bottom) that can turn in 3D:
+ * [local], a row-major projective 3x3, takes a frame pixel into glass units (-1..1 across the
+ * top and top to bottom), and [map] then takes glass units to camera pixels. [tint] is an ARGB
  * colour cast whose alpha is its strength; [blur] is a radius in frame px; [wave] ripples the
  * picture sideways by that many px, moved along by [phase].
  */
@@ -120,6 +122,7 @@ class Patch(
     val cx: Float, val cy: Float, val rx: Float, val ry: Float, val angle: Float,
     val feather: Float, val map: FloatArray, val bulge: Float = 0f,
     val shape: Int = ELLIPSE, val tint: Int = 0, val blur: Float = 0f, val wave: Float = 0f, val phase: Float = 0f,
+    val local: FloatArray? = null,
 ) {
     companion object {
         const val ELLIPSE = 0

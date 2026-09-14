@@ -71,19 +71,23 @@ and also adds the same samples to recordings after the voice effect, matched to 
 capture times. So clips carry the sounds cleanly and at their own pitch, instead of the faint
 copy the mic hears in the room. Beat detection hears the mix directly too.
 
-**Lemonade** is checked only on the test portrait. It runs at 30fps with frames taking about
-3.6ms. It's a full scene: one glass per person (side by side for two) that drifts after the head
-and tilts with it. The face is a patch using new `Patch` options:
+**Lemonade** (`Lemonade.kt`) is checked only on the test portrait. It was rebuilt after the
+details above:
 
-- `shape = GLASS`: a tumbler mask
-- `tint`: a pink cast
-- `blur`: a 2.5px nine-tap blur
-- `wave`: a slow ripple
-
-Over the face go the ice, a straw up the right side, the lemon on the left rim, and a liquid
-surface that stays nearly level. Its open question was guessed: yes, it reacts to the mouth.
-A pucker, a funnel or a wide-open jaw blows a stream of bubbles out of the straw's foot, with a
-synthesized bloop (baked into clips). A gentle fizz rises all the time.
+- **Motion:** the glass chases the head around the screen on a spring and leans against its
+  own motion.
+- **3D pose:** it turns and tips with head yaw and pitch through an `android.graphics.Camera`.
+  Its contents sit on planes at different depths (far wall, ice, face, straw, near highlights),
+  so they shift against each other as it turns. The rim and liquid surface open up as it tips.
+- **Face:** the patch is projective. `Patch.local` takes a frame pixel into the glass's plane,
+  where these apply before the tint, blur and ripple:
+  - the tumbler mask
+  - a cylindrical lens that magnifies the middle of the face and squeezes the sides
+- **Ice:** it floats free. It slides with the tilt, lags the glass's acceleration, bounces off
+  the round wall and off other cubes, and clinks on hard hits with three synthesized clinks,
+  baked into clips. The straw sways on a spring.
+- **Mouth:** the open question was guessed: yes, it reacts. A pucker, funnel or wide-open jaw
+  blows bubbles up the straw with a bloop. A gentle fizz runs all the time.
 - **Arms:** bendy arms with mitten hands. On each pea one arm waves and the other swings.
 
 ## The effects
@@ -168,6 +172,13 @@ The face appears inside a glass of pink lemonade, seen through the liquid: tinte
 blurred and slightly stretched to the glass's shape. The glass has ice cubes, a straw and a
 lemon slice on the rim, and floats on a flat coral-to-pink gradient. The room is gone entirely,
 and the glass tilts with the head.
+
+The user added details from watching the videos:
+
+- The glass is actually 3D. It tilts, and the things inside move around.
+- It stretches the face.
+- It moves around the screen as the face moves.
+- The ice makes clinking sounds.
 - **Build:** mesh tier, no camera background.
   - **Face:** a face patch warped into the glass's interior (an affine plus a slight vertical
     stretch), tinted and blurred in the shader.
