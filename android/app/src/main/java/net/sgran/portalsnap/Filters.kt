@@ -761,6 +761,9 @@ private fun disc(c: Canvas, p: Pen, x: Float, y: Float, r: Float, inner: Int, ou
 }
 
 object Beach : Filter("beach", "Beach", "🏖️", Mode.SEGMENT) {
+    // The Painter only paints a segment filter's backdrop when it says it has one.
+    override val usesUnder = true
+
     override fun backdrop(d: Draw) {
         val c = d.c
         val p = d.pen
@@ -824,6 +827,8 @@ object Beach : Filter("beach", "Beach", "🏖️", Mode.SEGMENT) {
 }
 
 object Palace : Filter("palace", "Palace", "🏰", Mode.SEGMENT) {
+    override val usesUnder = true
+
     override fun backdrop(d: Draw) {
         val c = d.c
         val p = d.pen
@@ -874,6 +879,8 @@ object Palace : Filter("palace", "Palace", "🏰", Mode.SEGMENT) {
 }
 
 object Moon : Filter("moon", "Moon", "🌘", Mode.SEGMENT, voice = 1.3f) {
+    override val usesUnder = true
+
     override fun backdrop(d: Draw) {
         val c = d.c
         val p = d.pen

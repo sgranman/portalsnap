@@ -336,13 +336,21 @@ object Shaders {
         uniform vec2 uTexel;
         void main() {
             vec2 m = vec2(vUv.x, 1.0 - vUv.y);
+            vec3 here = texture2D(uTexture, vUv).rgb;
             float a = 0.0;
+            float wsum = 0.0;
+            // The mask's neighbourhood, weighted toward camera pixels coloured like this one, so
+            // the low-resolution soft edge snaps to the real edge between person and scene.
             for (int i = -1; i <= 1; i++) {
                 for (int j = -1; j <= 1; j++) {
-                    a += texture2D(uMask, m + vec2(float(i), float(j)) * uTexel).a;
+                    vec2 o = vec2(float(i), float(j)) * uTexel;
+                    vec3 c = texture2D(uTexture, vUv + vec2(o.x, -o.y)).rgb - here;
+                    float w = exp(-dot(c, c) * 60.0) * ((i == 0 && j == 0) ? 2.0 : 1.0);
+                    a += w * texture2D(uMask, m + o).a;
+                    wsum += w;
                 }
             }
-            a /= 9.0;
+            a = smoothstep(0.45, 0.75, a / wsum);
             gl_FragColor = texture2D(uTexture, vUv) * a;
         }
     """
@@ -387,6 +395,8 @@ object Shaders {
         uniform float uHalftone;
         uniform float uTime;
         uniform float uFlash;
+        // The way textures on the person slide, in px per second, changed on the beat.
+        uniform vec2 uDrift;
 
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
@@ -454,13 +464,34 @@ object Shaders {
             return uBg;
         }
 
+        // The person, snapped to the picture: the mask's neighbourhood averaged with weights that
+        // fall away where the camera's colour differs from this pixel's. The low-resolution soft
+        // edge then lands on the real edge between person and room.
+        float cutout(vec2 uv, vec3 here) {
+            vec2 d = uMaskTexel * 1.6;
+            float sum = 0.0;
+            float wsum = 0.0;
+            for (int j = -1; j <= 1; j++) {
+                for (int i = -1; i <= 1; i++) {
+                    vec2 o = vec2(float(i), float(j)) * d;
+                    vec3 c = texture2D(uTexture, vec2(uv.x + o.x, 1.0 - uv.y - o.y)).rgb - here;
+                    float w = exp(-dot(c, c) * 60.0) * ((i == 0 && j == 0) ? 2.0 : 1.0);
+                    sum += w * texture2D(uMask, uv + o).a;
+                    wsum += w;
+                }
+            }
+            // A little past halfway: the model's soft edge leans outward into the room.
+            return smoothstep(0.45, 0.75, sum / wsum);
+        }
+
         void main() {
             vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
             vec2 p = uv * uSize;
             vec2 px = 1.0 / uSize;
             vec3 cam = texture2D(uTexture, vUv).rgb;
             float lum = dot(cam, vec3(0.299, 0.587, 0.114));
-            float m = soft(uMask, uv);
+            float m = cutout(uv, cam);
+            vec2 slide = p - uDrift * uTime;
             float dk = darkness(p);
             vec3 col = mix(redGround(p), darkGround(p), dk);
             vec3 groundTone = mix(vec3(0.72, 0.15, 0.19), vec3(0.3, 0.3, 0.34), dk);
@@ -506,22 +537,24 @@ object Shaders {
             vec3 person = cam;
             if (flatYellow) person = vec3(0.95, 0.75, 0.16);
             if (gradient) person = mix(vec3(0.98, 0.8, 0.28), vec3(0.91, 0.45, 0.16), clamp(uv.y * 1.2 + 0.05, 0.0, 1.0));
-            if (textured) person = mix(vec3(0.4, 0.21, 0.08), vec3(0.85, 0.53, 0.18), fbm(p / 24.0)) * (0.85 + 0.25 * hash(floor(p / 3.0)));
+            // Textures on the person slide one way (uDrift), as in the original.
+            if (textured) person = mix(vec3(0.4, 0.21, 0.08), vec3(0.85, 0.53, 0.18), fbm(slide / 24.0)) * (0.85 + 0.25 * hash(floor(slide / 3.0)));
             // Sunk into the ground: its colour, darkened, with just the features' light and shade.
             if (ghost) person = groundTone * (0.3 + 0.6 * lum);
             if (sheer) person = vec3(0.97, 0.78, 0.2) * (0.7 + 0.45 * lum);
+            if (ghost || sheer || gradient) person *= 0.86 + 0.28 * fbm(slide / 18.0);
             if (brown) person = vec3(0.29, 0.15, 0.09);
 
             if (uHead.z > 0.0) {
                 float inHead = 1.0 - smoothstep(uHead.z * 0.8, uHead.z, length(p - uHead.xy));
                 if (uDissolve > 0.5) {
-                    vec2 cell = floor(p / 3.0);
+                    vec2 cell = floor(slide / 3.0);
                     float speck = step(0.6, hash(cell + floor(uTime * 12.0)));
                     vec3 glitter = mix(person * 0.5, vec3(1.0, 0.96, 0.88), hash(cell + 7.0));
                     person = mix(person, glitter, speck * inHead * 0.8);
                 }
                 if (uHalftone > 0.5) {
-                    vec2 cell = mod(p, 10.0) - 5.0;
+                    vec2 cell = mod(slide, 10.0) - 5.0;
                     float r = 3.8 * (0.5 + 0.5 * fbm(p / 30.0));
                     float dotted = step(length(cell), r) * inHead * step(p.y, uHead.y);
                     person = mix(person, vec3(0.96, 0.8, 0.15), dotted);
@@ -529,8 +562,10 @@ object Shaders {
             }
 
             if (uOutline > 0.5) {
-                float d1 = max(max(texture2D(uMask, uv + vec2(5.0, 0.0) * px).a, texture2D(uMask, uv - vec2(5.0, 0.0) * px).a),
-                    max(texture2D(uMask, uv + vec2(0.0, 5.0) * px).a, texture2D(uMask, uv - vec2(0.0, 5.0) * px).a));
+                float d1 = max(max(texture2D(uMask, uv + vec2(3.0, 0.0) * px).a, texture2D(uMask, uv - vec2(3.0, 0.0) * px).a),
+                    max(texture2D(uMask, uv + vec2(0.0, 3.0) * px).a, texture2D(uMask, uv - vec2(0.0, 3.0) * px).a));
+                // Thresholded like the cut-out, so the outline is a line, not the raw mask's glow.
+                d1 = smoothstep(0.45, 0.75, d1);
                 float band = clamp(d1 - m, 0.0, 1.0);
                 if (uOutline < 1.5) {
                     // Fire: a hot band, with flames licking up off it.

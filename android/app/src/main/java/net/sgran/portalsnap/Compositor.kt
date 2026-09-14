@@ -32,6 +32,9 @@ private val IDENTITY_3X3 = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
 // The camera's buffers arrive mirrored with no flip in their transform (gen 1 Portal, camera 0).
 private const val CAMERA_MIRRORS = true
 
+// How far each segmentation result moves the smoothed mask (1 = no smoothing).
+private const val MASK_SMOOTH = 0.75f
+
 /**
  * The render thread. Everything GL lives here.
  *
@@ -96,6 +99,8 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private val echoAt = LongArray(3)
     private var echoLast = 0L
     private var personMask = ByteArray(0)
+    private var maskEma = FloatArray(0)
+    private var maskInverted = false
 
     private var photo: ((ByteArray?) -> Unit)? = null
 
@@ -530,6 +535,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glUniform1f(p.u("uHalftone"), q[13])
             GLES20.glUniform1f(p.u("uTime"), q[14])
             GLES20.glUniform1f(p.u("uFlash"), q[15])
+            GLES20.glUniform2f(p.u("uDrift"), q[16], q[17])
         }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, frame.tex)
@@ -598,23 +604,34 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     // the model's convention has changed between releases.
     private fun uploadMask(bytes: ByteArray, w: Int, h: Int, now: Long) {
         if (w == 0 || h == 0 || bytes.size < w * h) return
-        val corners = listOf(bytes[0], bytes[w - 1], bytes[(h - 1) * w], bytes[h * w - 1])
-        val bg = corners.groupingBy { it }.eachCount().maxByOrNull { it.value }!!.key
+        val n = w * h
+        // The model's person confidence, 0..255. The top corners are nearly always room: if both
+        // read as person, this model's mask runs the other way round. Decided only on clear
+        // evidence, so someone filling a corner can't flip it frame to frame.
+        val topCorners = ((bytes[0].toInt() and 255) + (bytes[w - 1].toInt() and 255)) / 2
+        if (topCorners > 200) maskInverted = true else if (topCorners < 55) maskInverted = false
         var buf = maskBuf
-        if (buf == null || buf.capacity() != w * h) {
-            buf = ByteBuffer.allocateDirect(w * h)
+        if (buf == null || buf.capacity() != n) {
+            buf = ByteBuffer.allocateDirect(n)
             maskBuf = buf
         }
         buf!!.clear()
-        if (personMask.size != w * h) personMask = ByteArray(w * h)
+        if (personMask.size != n) personMask = ByteArray(n)
+        // Smoothed over time, so the edge holds still between results instead of boiling.
+        val fresh = maskEma.size != n || now - maskAt > 500
+        if (maskEma.size != n) maskEma = FloatArray(n)
+        val k = if (fresh) 1f else MASK_SMOOTH
         var person = 0
-        for (i in 0 until w * h) {
-            if (bytes[i] != bg) {
-                buf.put(255.toByte())
+        for (i in 0 until n) {
+            var v = (bytes[i].toInt() and 255) / 255f
+            if (maskInverted) v = 1f - v
+            val e = maskEma[i] + (v - maskEma[i]) * k
+            maskEma[i] = e
+            buf.put((e * 255f).toInt().toByte())
+            if (e > 0.5f) {
                 personMask[i] = 1
                 person++
             } else {
-                buf.put(0)
                 personMask[i] = 0
             }
         }

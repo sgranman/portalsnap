@@ -194,6 +194,11 @@ Each of these cost real time, so check here first:
   delegate kills the app in `convertToTaskResult`: `image_frame.cc: Check failed:
   ImageFormat::UNKNOWN != format_`. It's a native abort, so there is nothing to catch. The
   segmenter runs on the CPU instead, at 26ms.
+- **Segment edges need help.** The category mask is a hard 256x144 staircase under a 1280x720
+  frame. The segmenter now returns confidence masks instead. `Compositor.uploadMask` smooths
+  them over time (`MASK_SMOOTH`) and fixes their polarity. The `MASK` and `FX_POP_ART` shaders
+  snap the soft edge to the camera image (a colour-weighted neighbourhood, then a threshold a
+  little past halfway), which removes most of the halo of room around a person.
 - **Encoders get the decoder role.** `MediaCodec.configure(format, null, null, 0)` on any
   H.264 encoder, hardware or software, fails with -1010 after ACodec logs `Failed to set
   standard component role 'video_decoder.avc'`. Passing `CONFIGURE_FLAG_ENCODE` and an

@@ -232,6 +232,23 @@ frames taking about 5ms, and so far is checked on the test portrait only.
   upper outline and head, read from a 0/1 copy of the mask that the compositor hands the
   Painter. Segment-tier filters can now draw an overlay.
 
+After the user's first look:
+
+- **Moving textures:** the grain fill, halftone cap, glitter dissolve and a moving grain over the
+  ghost, sheer and gradient looks all slide in a direction the director picks on each strong
+  beat (`uDrift`).
+- **Squiggles:** loopy white lines drawn right across the screen. The pen's curls are wide and
+  close enough together to actually loop. They're drawn on from one side with the tail
+  following. Rings and arcs are rarer to make room.
+- **Tighter cut-out, for every segment filter:**
+  - The segmenter now returns confidence, not categories.
+  - The compositor smooths the mask over time and decides once, on clear evidence, whether
+    the model's mask comes out inverted.
+  - The shaders snap the low-resolution edge to the picture: the mask neighbourhood is weighted
+    by camera-colour similarity, then thresholded a little past halfway.
+- **Beach, Palace, Moon:** they had never set `usesUnder`, so their scenes weren't painted
+  (black since the native build). Fixed along the way.
+
 ### 4. Monster / Cutie (one effect, two moods)
 Hand-drawn doodle face paint that changes with expression. Both frames come from the same
 video, 1s and 4s in.

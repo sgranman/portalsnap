@@ -15,6 +15,7 @@ import com.google.mediapipe.tasks.vision.facedetector.FaceDetector
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenter
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -121,12 +122,23 @@ class Tracker(private val ctx: Context) {
                 when (val task = model?.task) {
                     is FaceDetector -> faces = Anchors.fromDetections(task.detectForVideo(img, ts), Anchors.faceCap(Mode.FAST))
                     is FaceLandmarker -> faces = Anchors.fromLandmarks(task.detectForVideo(img, ts), Anchors.faceCap(Mode.MESH))
-                    is ImageSegmenter -> task.segmentForVideo(img, ts).categoryMask().orElse(null)?.let { cm ->
-                        val buf = ByteBufferExtractor.extract(cm)
-                        mw = cm.width
-                        mh = cm.height
-                        mask = ByteArray(buf.remaining()).also { buf.get(it) }
-                        cm.close()
+                    is ImageSegmenter -> {
+                        // Confidence, not categories: a soft edge the compositor can smooth over
+                        // time and the shaders can snap to the picture. The category mask was a
+                        // hard 256x144 staircase.
+                        val masks = task.segmentForVideo(img, ts).confidenceMasks().orElse(null)
+                        val cm = masks?.lastOrNull()
+                        if (cm != null) {
+                            val fb = ByteBufferExtractor.extract(cm).order(ByteOrder.nativeOrder()).asFloatBuffer()
+                            mw = cm.width
+                            mh = cm.height
+                            val out = ByteArray(mw * mh)
+                            for (i in 0 until minOf(out.size, fb.limit())) {
+                                out[i] = (fb.get(i).coerceIn(0f, 1f) * 255f).toInt().toByte()
+                            }
+                            mask = out
+                        }
+                        masks?.forEach { it.close() }
                     }
                 }
                 img.close()
@@ -191,8 +203,8 @@ class Tracker(private val ctx: Context) {
                     ImageSegmenter.ImageSegmenterOptions.builder()
                         .setBaseOptions(base("selfie_segmenter_landscape.tflite"))
                         .setRunningMode(RunningMode.VIDEO)
-                        .setOutputCategoryMask(true)
-                        .setOutputConfidenceMasks(false)
+                        .setOutputCategoryMask(false)
+                        .setOutputConfidenceMasks(true)
                         .build(),
                 )
             }

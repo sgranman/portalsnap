@@ -61,7 +61,7 @@ class CanvasLayer(handler: Handler) {
 class FrameFx {
     var kind = NONE
     /** Sixteen more parameters for effects that need them (POP_ART). */
-    val q = FloatArray(16)
+    val q = FloatArray(20)
     val a = FloatArray(3)
     val b = FloatArray(3)
     val c = FloatArray(3)

@@ -51,6 +51,7 @@ object PopSilhouette : Filter("pop", "Pop Art", "🎨", Mode.SEGMENT) {
     private const val RING = 0
     private const val ARC = 1
     private const val SCRIBBLE = 2
+    private const val SQUIGGLE = 3
 
     private class Stroke(
         val kind: Int, val x: Float, val y: Float, val r: Float, val a0: Float, val born: Long, val life: Long,
@@ -69,6 +70,9 @@ object PopSilhouette : Filter("pop", "Pop Art", "🎨", Mode.SEGMENT) {
     private var warmEcho = true
     private var dissolve = false
     private var halftone = false
+    // Which way textures on the person slide, px per second.
+    private var driftX = 70f
+    private var driftY = -45f
     private var lastBeatAt = 0L
     private var seenBeats = -1
     private var seenLoop = -1
@@ -154,10 +158,15 @@ object PopSilhouette : Filter("pop", "Pop Art", "🎨", Mode.SEGMENT) {
             warmEcho = rng.nextBoolean()
             dissolve = (look == NATURAL || look == SHEER_YELLOW || look == STICKER) && rng.nextFloat() < 0.22f
             halftone = look == GHOST && rng.nextFloat() < 0.4f
-            if (rng.nextFloat() < 0.35f) spawnArc(now)
+            val angle = rnd(0f, TAU)
+            val speed = rnd(60f, 130f)
+            driftX = kotlin.math.cos(angle) * speed
+            driftY = sin(angle) * speed
+            if (rng.nextFloat() < 0.5f) spawnSquiggle(now)
+            if (rng.nextFloat() < 0.2f) spawnArc(now)
             if (rng.nextFloat() < 0.45f && look != FLAT_YELLOW && look != SHEER_YELLOW) spawnScribble(now)
         }
-        if (rng.nextFloat() < (if (strong) 0.6f else 0.4f)) spawnRings(now)
+        if (rng.nextFloat() < (if (strong) 0.35f else 0.2f)) spawnRings(now)
     }
 
     // Weighted, never the same look twice running. The dark ground favours the natural cut-out
@@ -250,6 +259,8 @@ object PopSilhouette : Filter("pop", "Pop Art", "🎨", Mode.SEGMENT) {
         q[13] = if (halftone) 1f else 0f
         q[14] = (d.t % 100_000L) / 1000f
         q[15] = d.beat * 0.05f
+        q[16] = driftX
+        q[17] = driftY
     }
 
     /* ------------------------------ strokes ------------------------------ */
@@ -286,6 +297,36 @@ object PopSilhouette : Filter("pop", "Pop Art", "🎨", Mode.SEGMENT) {
         strokes += Stroke(SCRIBBLE, 0f, 0f, 0f, 0f, now, 1100L, false, false, color, pts)
     }
 
+    // A loopy hand-drawn line right across the screen: a wave with curls rolled along it, drawn
+    // on from one side while its tail follows it off.
+    private fun spawnSquiggle(now: Long) {
+        val w = FRAME_W.toFloat()
+        val h = FRAME_H.toFloat()
+        val n = 160
+        val leftToRight = rng.nextBoolean()
+        val y0 = h * rnd(0.12f, 0.88f)
+        val tilt = h * rnd(-0.3f, 0.3f)
+        val wave = h * rnd(0.04f, 0.12f)
+        val waves = rnd(0.8f, 1.8f)
+        // Curls wide enough, and close enough together, that the pen actually loops back on
+        // itself rather than scalloping.
+        val curls = rnd(8f, 13f)
+        val curl = h * rnd(0.06f, 0.09f)
+        val phase = rnd(0f, TAU)
+        val pts = FloatArray(n * 2)
+        for (i in 0 until n) {
+            val t = i / (n - 1f)
+            val along = -0.05f * w + t * 1.1f * w
+            val x = if (leftToRight) along else w - along
+            val y = y0 + tilt * (t - 0.5f) + wave * sin(t * TAU * waves + phase)
+            val dir = if (leftToRight) 1f else -1f
+            pts[i * 2] = x + curl * kotlin.math.cos(t * TAU * curls) * dir
+            pts[i * 2 + 1] = y + curl * sin(t * TAU * curls)
+        }
+        strokes += Stroke(SQUIGGLE, 0f, 0f, 0f, 0f, now, 1500L, false, false, Color.WHITE, pts)
+        if (strokes.size > 24) strokes.removeAt(0)
+    }
+
     override fun overlay(d: Draw, faces: List<Face>) {
         val c = d.c
         val now = d.t
@@ -316,6 +357,19 @@ object PopSilhouette : Filter("pop", "Pop Art", "🎨", Mode.SEGMENT) {
                     ink.strokeWidth = max(4f, s.r * 0.035f)
                     oval.set(s.x - s.r, s.y - s.r, s.x + s.r, s.y + s.r)
                     if (head > tail) c.drawArc(oval, s.a0 + tail, head - tail, false, ink)
+                }
+                SQUIGGLE -> {
+                    val pts = s.points ?: continue
+                    val n = pts.size / 2
+                    val head = (n * (age / 800f)).toInt().coerceIn(0, n)
+                    val tail = (n * ((age - 500f) / 900f)).toInt().coerceIn(0, n)
+                    if (head - tail < 2) continue
+                    ink.alpha = 240
+                    ink.strokeWidth = 5f
+                    line.reset()
+                    line.moveTo(pts[tail * 2], pts[tail * 2 + 1])
+                    for (i in tail + 1 until head) line.lineTo(pts[i * 2], pts[i * 2 + 1])
+                    c.drawPath(line, ink)
                 }
                 SCRIBBLE -> {
                     val pts = s.points ?: continue
