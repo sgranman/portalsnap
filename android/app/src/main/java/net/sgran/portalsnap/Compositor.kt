@@ -96,6 +96,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     // than failing every frame after it.
     private var glassRenderer: GlassRenderer? = null
     private var podRenderer: PodRenderer? = null
+    private var rideRenderer: RideRenderer? = null
     private var glassFailed = false
 
     private var camTex = 0
@@ -567,7 +568,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             pPatch.drawQuad()
         }
 
-        if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty()) && !glassFailed) {
+        if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty() || plan.rides.isNotEmpty()) && !glassFailed) {
             try {
                 if (plan.glasses.isNotEmpty()) {
                     val r = glassRenderer ?: GlassRenderer().also { glassRenderer = it }
@@ -576,6 +577,10 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
                 if (plan.pods.isNotEmpty()) {
                     val r = podRenderer ?: PodRenderer().also { podRenderer = it }
                     r.draw(plan.pods, shown.tex)
+                }
+                if (plan.rides.isNotEmpty()) {
+                    val r = rideRenderer ?: RideRenderer().also { rideRenderer = it }
+                    r.draw(plan.rides, shown.tex, comp)
                 }
             } catch (e: Throwable) {
                 glassFailed = true
