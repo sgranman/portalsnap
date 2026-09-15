@@ -631,9 +631,10 @@ object BigHead : Filter("bighead", "Big Head", "🤯", Mode.MESH) {
     }
 }
 
+// In the bar's order: the Faces group first (its chip stands where Dog is), then Places.
 val FILTERS: List<Filter> = listOf(
-    Mirror, PopSilhouette, DiscoStar, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod, BikeRide, Freefall,
-    Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Places)
+    Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Places,
+    Mirror, PopSilhouette, DiscoStar, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod, BikeRide, Freefall)
 
 /**
  * Filters that share one chip in the bar, where the first of them would be; while one of them is

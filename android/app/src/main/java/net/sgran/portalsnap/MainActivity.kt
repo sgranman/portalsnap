@@ -378,9 +378,13 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(4), dp(14), dp(4))
         }
-        // Room above and below the chips inside the scroller, which clips: the selected chip rises
-        // 3dp, and its outline used to lose its top edge against the bar.
-        val strip = LinearLayout(this).apply { setPadding(0, dp(6), 0, dp(6)) }
+        // Room above and below the chips, drawn into: the selected chip rises 3dp, and its outline
+        // lost its top edge. Padding alone didn't do it, because a layout clips its children to its
+        // padding unless told not to.
+        val strip = LinearLayout(this).apply {
+            setPadding(0, dp(6), 0, dp(6))
+            clipToPadding = false
+        }
         strip.addView(chip(null, "🚫", "None"))
         for (f in FILTERS) {
             // A group's one chip stands where its first member would.
