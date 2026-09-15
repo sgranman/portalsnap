@@ -142,7 +142,7 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
     private val debt = HashMap<Int, Float>()
     // While hearts pour out, a piano walks down the white keys, a note every NOTE_MS, and starts
     // again from the top when it runs out of keyboard or after the mouths have been shut a moment.
-    private const val NOTE_MS = 120L
+    private const val NOTE_MS = 85L
     private var noteAt = 0L
     private var noteKey = 0
     private var pouringAt = -1_000_000L

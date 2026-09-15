@@ -378,7 +378,7 @@ It works on two children at once.
 - **Question:** did the hearts come out only while the mouth was open, or was the stream always
   on and just stronger when open?
 - **Sound (added at the user's request, 2026-09-15):** for as long as hearts are pouring out, a
-  bright little piano walks down the white keys from C6 to C4. It plays one note every 120ms and
+  bright little piano walks down the white keys from C6 to C4. It plays one note every 85ms and
   goes back to the top when it runs out of keyboard, or after the mouths have been shut for
   0.4s. Every note is synthesized at its own pitch in `Sfx` (`key0`–`key14`, a few stretched
   partials and a hammer tick). None is pitch-shifted, so it all stays in C major. It's baked
