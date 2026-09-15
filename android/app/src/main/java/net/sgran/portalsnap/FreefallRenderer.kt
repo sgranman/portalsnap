@@ -10,7 +10,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Random
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.pow
+import kotlin.math.sign
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -118,10 +122,105 @@ object FallShaders {
         }
     """.trimIndent()
 
-    // The helmet: a glossy shell of quartered blue and white panels, open at the face and
-    // underneath, with a pale trim round the opening, white cheek guards carrying blue plates, and
-    // grey padding inside.
+    // The helmet, after the reference's close-ups: a clear-coated shell with a blue stripe over the
+    // crown, white bands either side and blue sides, open at the face and underneath. White cheek
+    // guards run round the opening from the brow to the jaw, outlined by a groove, each with a blue
+    // plate of three vent holes; silver rivets; quilted grey padding inside. The coat reflects the
+    // sky and the same cloud noise as the backdrop, which gives the reference's marbled look.
     val HELMET = """
+        #version 300 es
+        precision highp float;
+        in vec3 vWorld;
+        in vec3 vNormal;
+        in vec3 vLocal;
+        in vec3 vLocalNormal;
+        uniform vec3 uEye;
+        uniform sampler2D uNoise;
+        uniform float uClock;
+        out vec4 outColor;
+        $LIGHT
+        const vec3 C = vec3(0.0, ${FreefallRenderer.HELMET_CY}, ${FreefallRenderer.HELMET_CZ});
+        const vec3 R = vec3(${FreefallRenderer.HELMET_RX}, ${FreefallRenderer.HELMET_RY}, ${FreefallRenderer.HELMET_RZ});
+        const vec3 BLUE = vec3(0.04, 0.2, 0.95);
+        const vec3 WHITE = vec3(0.97, 0.97, 0.98);
+        // A second, broad studio light up and to the left, for the long glossy streaks.
+        const vec3 KEY = vec3(-0.5774, 0.5774, 0.5774);
+
+        vec3 sky(vec3 r) {
+            vec3 c = mix(vec3(0.78, 0.86, 0.96), vec3(0.28, 0.5, 0.86), clamp(r.y * 0.9 + 0.3, 0.0, 1.0));
+            float h = max(length(r.xz), 0.05);
+            float n = texture(uNoise, vec2(atan(r.x, -r.z) * 0.55, r.y / h * 0.55 - uClock * 0.16)).r;
+            return mix(c, vec3(0.97, 0.98, 1.0), smoothstep(0.35, 0.7, n) * 0.8);
+        }
+
+        vec3 onShell(vec3 dir) {
+            return C + R * normalize(dir);
+        }
+
+        void main() {
+            vec3 q = (vLocal - C) / R;
+            float th = atan(q.x, q.z);
+            // Down to the jaw at the sides, higher behind.
+            if (q.y < mix(-1.01, -0.45, smoothstep(1.9, 2.7, abs(th)))) discard;
+            vec2 o = vec2(vLocal.x / 0.1, (vLocal.y + 0.035) / 0.132);
+            float od = pow(pow(abs(o.x), 2.6) + pow(abs(o.y), 2.6), 1.0 / 2.6);
+            bool front = q.z > 0.0;
+            if (front && (od < 1.0 || (vLocal.y < -0.1 && abs(vLocal.x) < 0.1))) discard;
+
+            vec3 n = normalize(vNormal);
+            vec3 v = normalize(uEye - vWorld);
+            vec3 col;
+            if (dot(n, v) < 0.0) {
+                vec3 dd = normalize(vLocal - C);
+                float quilt = sin(atan(dd.x, dd.z) * 24.0) * sin(dd.y * 26.0);
+                col = vec3(0.25, 0.26, 0.28) * (0.85 + 0.15 * quilt) * (0.75 + 0.25 * max(dot(-n, SUN), 0.0));
+                outColor = vec4(mix(col, vec3(1.0), uWhite), 1.0);
+                return;
+            }
+            float sd = q.x < 0.0 ? -1.0 : 1.0;
+            float x = abs(q.x);
+            float aa = fwidth(x) * 1.5 + 0.002;
+            vec3 base = mix(WHITE, BLUE, max(1.0 - smoothstep(0.2 - aa, 0.2 + aa, x), smoothstep(0.62 - aa, 0.62 + aa, x)));
+            float seam = max(1.0 - smoothstep(0.0, aa * 1.5, abs(x - 0.2)), 1.0 - smoothstep(0.0, aa * 1.5, abs(x - 0.62)));
+
+            float gaa = fwidth(od) * 1.5 + 0.002;
+            float guard = front ? (1.0 - smoothstep(1.7 - gaa, 1.7 + gaa, od)) * (1.0 - smoothstep(0.026, 0.034, vLocal.y)) : 0.0;
+            float groove = front
+                ? max((1.0 - smoothstep(0.0, gaa * 1.8, abs(od - 1.7))) * step(vLocal.y, 0.03),
+                      (1.0 - smoothstep(0.0, 0.004, abs(vLocal.y - 0.03))) * step(od, 1.7))
+                : 0.0;
+            base = mix(base, WHITE, guard);
+            seam *= 1.0 - guard;
+
+            vec3 plateAt = onShell(vec3(sd * 0.74, -0.6, 0.3));
+            float plate = 1.0 - smoothstep(0.9, 1.0, length((vLocal - plateAt) / vec3(0.028, 0.04, 0.028)));
+            base = mix(base, BLUE, plate);
+            float hole = 0.0;
+            for (int i = 0; i < 3; i++) {
+                hole = max(hole, 1.0 - smoothstep(0.0055, 0.0075, length(vLocal - plateAt - vec3(0.0, -0.022 + 0.022 * float(i), 0.0))));
+            }
+            float rivet = max(1.0 - smoothstep(0.007, 0.009, length(vLocal - onShell(vec3(sd * 0.86, 0.12, 0.5)))),
+                              1.0 - smoothstep(0.006, 0.008, length(vLocal - onShell(vec3(sd * 0.7, -0.85, 0.2)))));
+
+            vec3 r = reflect(-v, n);
+            float ndv = max(dot(n, v), 0.0);
+            float fres = 0.06 + 0.94 * pow(1.0 - ndv, 5.0);
+            vec3 amb = mix(vec3(0.55, 0.6, 0.7), vec3(0.95, 0.97, 1.0), 0.5 + 0.5 * n.y);
+            col = base * (amb * 0.72 + max(dot(n, SUN), 0.0) * 0.4 + max(dot(n, KEY), 0.0) * 0.2);
+            float coat = 1.0 - hole;
+            col = mix(col, sky(r), (0.05 + 0.6 * fres) * coat);
+            float rs = max(dot(r, SUN), 0.0);
+            float rk = max(dot(r, KEY), 0.0);
+            col += vec3(pow(rs, 200.0) * 1.3 + pow(rs, 16.0) * 0.08 + pow(rk, 60.0) * 0.7 + pow(rk, 8.0) * 0.06) * coat;
+            col *= 1.0 - 0.35 * seam - 0.5 * groove;
+            col = mix(col, vec3(0.03), hole);
+            col = mix(col, vec3(0.72) + vec3(pow(rs, 40.0)), rivet);
+            outColor = vec4(mix(col, vec3(1.0), uWhite), 1.0);
+        }
+    """.trimIndent()
+
+    // The chin cup: ribbed grey padding under the chin, in head units.
+    val PAD = """
         #version 300 es
         precision highp float;
         in vec3 vWorld;
@@ -131,45 +230,15 @@ object FallShaders {
         uniform vec3 uEye;
         out vec4 outColor;
         $LIGHT
-        const vec3 C = vec3(0.0, ${FreefallRenderer.HELMET_CY}, ${FreefallRenderer.HELMET_CZ});
-        const vec3 R = vec3(${FreefallRenderer.HELMET_RX}, ${FreefallRenderer.HELMET_RY}, ${FreefallRenderer.HELMET_RZ});
-        const vec3 BLUE = vec3(0.13, 0.25, 0.85);
-        const vec3 WHITE = vec3(0.93, 0.94, 0.96);
         void main() {
-            vec3 q = (vLocal - C) / R;
-            float th = atan(q.x, q.z);
-            // Down to the jaw at the sides, higher behind.
-            if (q.y < mix(-0.98, -0.5, smoothstep(1.9, 2.7, abs(th)))) discard;
-            vec2 o = vec2(vLocal.x / 0.1, (vLocal.y + 0.035) / 0.132);
-            float od = pow(pow(abs(o.x), 2.6) + pow(abs(o.y), 2.6), 1.0 / 2.6);
-            if (q.z > 0.0 && (od < 1.0 || (vLocal.y < -0.12 && abs(vLocal.x) < 0.1))) discard;
-
             vec3 n = normalize(vNormal);
             vec3 v = normalize(uEye - vWorld);
-            bool inside = dot(n, v) < 0.0;
-            if (inside) n = -n;
-            float across = atan(q.x, q.y);
-            vec3 base = mod(floor((across + 1.5708) / 0.7854), 2.0) < 0.5 ? BLUE : WHITE;
-            if (q.y < -0.22 && abs(th) < 1.9) {
-                base = WHITE;
-                vec2 pl = vec2(abs(th) - 1.2, q.y + 0.6);
-                if (abs(pl.x) < 0.26 && abs(pl.y) < 0.2) {
-                    base = BLUE;
-                    for (int i = 0; i < 3; i++) {
-                        if (length(pl - vec2(0.06, -0.1 + 0.1 * float(i))) < 0.04) base = vec3(0.12);
-                    }
-                }
-            }
-            if (q.z > 0.0) base = mix(base, vec3(0.86, 0.87, 0.89), 1.0 - smoothstep(1.0, 1.1, od));
-            vec3 col;
-            if (inside) {
-                col = vec3(0.3, 0.31, 0.33) * (0.75 + 0.25 * max(dot(n, SUN), 0.0));
-            } else {
-                vec3 amb = mix(vec3(0.45, 0.5, 0.6), vec3(0.82, 0.88, 0.98), 0.5 + 0.5 * n.y);
-                col = base * (amb * 0.7 + max(dot(n, SUN), 0.0) * 0.6);
-                col += vec3(pow(max(dot(n, normalize(SUN + v)), 0.0), 60.0) * 0.9);
-                col += vec3(0.8, 0.88, 1.0) * pow(1.0 - max(dot(n, v), 0.0), 4.0) * 0.4;
-            }
+            if (dot(n, v) < 0.0) n = -n;
+            float rib = 0.5 + 0.5 * sin(atan(vLocal.x, vLocal.y + 0.02) * 70.0);
+            vec3 base = vec3(0.3, 0.31, 0.33) * (0.75 + 0.25 * rib);
+            vec3 amb = mix(vec3(0.42, 0.46, 0.56), vec3(0.8, 0.85, 0.95), 0.5 + 0.5 * n.y);
+            vec3 col = base * (amb * 0.8 + max(dot(n, SUN), 0.0) * 0.5);
+            col += vec3(pow(max(dot(n, normalize(SUN + v)), 0.0), 24.0) * 0.12);
             outColor = vec4(mix(col, vec3(1.0), uWhite), 1.0);
         }
     """.trimIndent()
@@ -224,6 +293,11 @@ object FallShaders {
                 * (1.0 - smoothstep(0.75, 1.0, -q.y));
             float lips = (1.0 - smoothstep(0.0, 0.25, abs(q.y + 0.46))) * (1.0 - smoothstep(0.25, 0.65, abs(q.x)));
             vec2 st = q;
+            // Puffed cheeks: a lens on each magnifies it from its middle.
+            vec2 cc = vec2(q.x < 0.0 ? -0.5 : 0.5, -0.28);
+            float pr = length((q - cc) / vec2(0.36, 0.32));
+            float puff = (1.0 - smoothstep(0.0, 1.0, pr)) * (0.8 + 0.2 * uWind);
+            st = cc + (st - cc) * (1.0 - 0.32 * puff * puff);
             st.x *= 1.0 - (0.2 * cheek + 0.14 * lips) * uWind;
             st.x += sin(abs(q.x) * 14.0 - uTime * 30.0) * 0.022 * cheek * sign(q.x) * uWind;
             st.y += sin(abs(q.x) * 11.0 - uTime * 24.0 + 1.3) * 0.018 * cheek * uWind;
@@ -233,6 +307,8 @@ object FallShaders {
             vec2 px = uCentre + vec2(c * o.x - s * o.y, s * o.x + c * o.y);
             vec3 face = texture(uFace, vec2(px.x / uSize.x, 1.0 - px.y / uSize.y)).rgb;
             face *= 0.92 + 0.14 * max(dot(normalize(vNormal), SUN), 0.0);
+            // Round the puffs: light across their tops, a soft shade under them.
+            face *= 1.0 + puff * (0.08 * clamp((q.y - cc.y) / 0.32 + 0.6, 0.0, 1.0) - 0.06 * clamp((cc.y - q.y) / 0.32, 0.0, 1.0));
             face = mix(face, vec3(1.0), uWhite);
             outColor = vec4(face * mask, mask);
         }
@@ -249,11 +325,14 @@ class FreefallRenderer(assets: AssetManager) {
     private val pDiver = Program(RideShaders.COLOR_VERTEX, FallShaders.DIVER)
     private val pHelmet = Program(Shaders3D.VERTEX, FallShaders.HELMET)
     private val pFace = Program(FallShaders.FACE_VERTEX, FallShaders.FACE)
+    private val pPad = Program(Shaders3D.VERTEX, FallShaders.PAD)
     private val env = Fbo(FRAME_W / 2, FRAME_H / 2)
     private val noise = noiseTexture()
     private val ground = groundTexture(assets)
     private val helmet = ellipsoid(HELMET_CY, HELMET_CZ, HELMET_RX, HELMET_RY, HELMET_RZ)
     private val face = faceWindow()
+    private val trim = helmetTrim()
+    private val chin = chinCup()
     private val bodies = DynamicColorMesh()
     private val identity = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
 
@@ -296,7 +375,15 @@ class FreefallRenderer(assets: AssetManager) {
         }
         for (h in f.heads) {
             begin(pHelmet, h.model, f)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, noise)
+            GLES20.glUniform1i(pHelmet.u("uNoise"), 0)
+            GLES20.glUniform1f(pHelmet.u("uClock"), f.clock)
             helmet.draw(pHelmet)
+            begin(pDiver, h.model, f)
+            trim.draw(pDiver)
+            begin(pPad, h.model, f)
+            chin.draw(pPad)
         }
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
@@ -334,11 +421,11 @@ class FreefallRenderer(assets: AssetManager) {
         const val GROUND_SPAN = 9000f
 
         // The helmet shell, in head units: an ellipsoid round the head, cut open in its shader.
-        const val HELMET_CY = 0.05f
+        const val HELMET_CY = 0.04f
         const val HELMET_CZ = -0.03f
-        const val HELMET_RX = 0.168f
-        const val HELMET_RY = 0.2f
-        const val HELMET_RZ = 0.19f
+        const val HELMET_RX = 0.19f
+        const val HELMET_RY = 0.21f
+        const val HELMET_RZ = 0.2f
 
         private fun ellipsoid(cy: Float, cz: Float, rx: Float, ry: Float, rz: Float): Mesh {
             val segs = 48
@@ -374,6 +461,41 @@ class FreefallRenderer(assets: AssetManager) {
                 }
             }
             return Mesh(data, idx.toIntArray())
+        }
+
+        private val IDENTITY = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+
+        // A pale rubber trim round the face opening, sitting on the shell's edge from low on one
+        // side, over the brow, to low on the other; the chin cup closes the bottom.
+        private fun helmetTrim(): ColorMesh {
+            val g = ColorGeo(2048, 4096)
+            val n = 36
+            val ctrl = FloatArray(n * 3)
+            for (k in 0 until n) {
+                val a = (-0.28 * PI + 1.56 * PI * k / (n - 1)).toFloat()
+                val c = cos(a)
+                val s = sin(a)
+                val x = 0.1f * 1.03f * sign(c) * abs(c).pow(2f / 2.6f)
+                val y = -0.035f + 0.132f * 1.03f * sign(s) * abs(s).pow(2f / 2.6f)
+                val qx = x / HELMET_RX
+                val qy = (y - HELMET_CY) / HELMET_RY
+                ctrl[k * 3] = x
+                ctrl[k * 3 + 1] = y
+                ctrl[k * 3 + 2] = HELMET_CZ + HELMET_RZ * sqrt(max(0f, 1f - qx * qx - qy * qy))
+            }
+            g.color(0xf2f3f5, 0.9f).tube(IDENTITY, ctrl, n, 0.0055f, 0.0055f, 6, 2)
+            return ColorMesh(g)
+        }
+
+        // The chin cup: a padded band from one cheek guard to the other, under the chin.
+        private fun chinCup(): ColorMesh {
+            val g = ColorGeo(1024, 2048)
+            g.color(0x4d4f52).tube(
+                IDENTITY,
+                floatArrayOf(-0.11f, -0.1f, 0.065f, -0.092f, -0.15f, 0.07f, -0.05f, -0.182f, 0.078f, 0f, -0.192f, 0.08f, 0.05f, -0.182f, 0.078f, 0.092f, -0.15f, 0.07f, 0.11f, -0.1f, 0.065f),
+                7, 0.017f, 0.017f, 10, 3,
+            )
+            return ColorMesh(g)
         }
 
         // A gently domed rounded square facing +z, centred at the face's middle.

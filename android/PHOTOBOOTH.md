@@ -569,11 +569,27 @@ How it's built:
 - **Wind in the face:** at the user's request, the face shader stretches the cheeks and lips out
   toward the helmet by sampling nearer the middle, and runs ripples back across the cheeks. It
   flaps harder during the fall (`Fall3D.wind`), and the ripples speed up with the cloud clock.
-- **Helmet:** an ellipsoid shell, cut open at the face and underneath by its shader, which also
-  paints the panels, trim, cheek guards and inner padding. The face window sits inside, pulled
-  2cm nearer so the padding behind it never wins the depth test.
-- **Placement:** distance comes from the eye distance, corrected for yaw. The face shows at 1.7×
-  life size, and the diver stays between 0.6m and 2.2m away.
+  The cheeks are also puffed: a lens on each magnifies it from its middle, with light across the
+  top of each puff and a soft shade beneath.
+- **Helmet:** redone at the user's request to match the reference's close-ups.
+  - **Shell:** a round ellipsoid, cut open at the face and underneath by its shader.
+  - **Paint:** a vivid blue stripe over the crown, bright white bands either side and blue sides,
+    with thin seams.
+  - **Cheek guards:** white, round the opening from the brow to the jaw, outlined by a groove,
+    each with a blue plate of three vent holes. Silver rivets sit at the temples and jaw.
+  - **Finish:** a clear coat that reflects the sky and the backdrop's cloud noise, the
+    reference's marbled look, with a sharp sun glint and a broad studio streak from the upper
+    left. Quilted grey padding lines the inside.
+  - **Geometry:** a thin bright rubber trim round the opening, and a ribbed grey chin cup under
+    the chin.
+  - **Face:** its window sits inside, pulled 2cm nearer so the padding behind it never wins the
+    depth test.
+- **Placement:** the user asked for the diver to come and go as they lean in and out.
+  - **Measured:** on the gen 1 Portal, a face logged at about 80px between the eyes sitting
+    normally, 45px sat back, and 150px leaning in.
+  - **Mapping:** the diver is 0.8m away at 80px (the face then about 1.7× life size), and distance
+    follows the eye distance's ratio to the power 1.6, corrected for yaw. So leaning moves the
+    diver more than it moves the face: from 0.4m close up to 2.4m sat back.
 - **The fall:**
   - **Trigger:** `jawOpen` above 0.5, which needs the mesh tier for blendshapes, or a poke.
   - **Motion:** divers drop along a steepening curve, tumbling about the chest. The camera
@@ -593,7 +609,7 @@ How it's built:
 
 Not yet checked with a real person:
 
-- how big the face comes out
+- the new distance mapping, with a real person leaning in and out
 - how reliably a real scream crosses the jaw threshold, and whether talking sets it off
 - the sound on the Portal's speaker
 

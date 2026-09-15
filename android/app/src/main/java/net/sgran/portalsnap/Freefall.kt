@@ -30,11 +30,17 @@ object Freefall : Filter("freefall", "Freefall", "☁️", Mode.MESH) {
     private const val JAW = 0.5f
     private const val SHOW_MS = 350L
     private const val FORGET_MS = 3000L
+    // Leaning in and out moves the diver more than it moves the face. Measured on the gen 1 Portal
+    // on 2026-09-15: eyes ~80px apart sitting normally, ~45px sat back, ~150px leaning in. A face at
+    // NEUTRAL_EYE puts the diver NEUTRAL metres away (the face then shows at about 1.7x life
+    // size), and distance goes as the eye distance's ratio to the power DEPTH_GAIN, so sitting
+    // back sends the diver about 2.5x further and leaning in brings them about 2x nearer.
+    private const val NEUTRAL_EYE = 80f
+    private const val NEUTRAL = 0.8f
+    private const val DEPTH_GAIN = 1.6f
     /** Nearest and furthest the diver comes, m. */
-    private const val NEAR = 0.6f
-    private const val FAR = 2.2f
-    /** The face shows this much bigger than it is, for the reference's close-up. */
-    private const val ZOOM = 1.7f
+    private const val NEAR = 0.4f
+    private const val FAR = 2.4f
 
     // The fall, in seconds since the scream: tumbling away, the white-out, back to the close-up
     // (hidden in the white), the white clearing, and ready to go again.
@@ -89,7 +95,7 @@ object Freefall : Filter("freefall", "Freefall", "☁️", Mode.MESH) {
             // A turned head shows narrower eyes; don't let that push the diver away.
             val turn = sqrt(max(0.4f, 1f - f.yaw * f.yaw))
             val dist = debugDist
-                ?: (FallView.F * DiverParts.FACE_HALF_W * DiverParts.HEAD_SCALE / (ZOOM * f.eyeDist / turn)).coerceIn(NEAR, FAR)
+                ?: (NEUTRAL * (NEUTRAL_EYE / (f.eyeDist / turn)).pow(DEPTH_GAIN)).coerceIn(NEAR, FAR)
             val centre = toPixels(f, 0f, f.mouth.y * 0.42f)
             val fresh = !r.ready || now - r.seen > SHOW_MS
             val kk = if (fresh) 1f else k
@@ -196,7 +202,7 @@ object Freefall : Filter("freefall", "Freefall", "☁️", Mode.MESH) {
         h.reachY = r.reachY
         h.roll = r.faceRoll
         fall.heads += h
-        DiverParts.body(fall.body, m, h.model, sin(clock * 11f + r.phase) * 0.012f, DiverParts.BODY_TILT)
+        DiverParts.body(fall.body, m, sin(clock * 11f + r.phase) * 0.012f, DiverParts.BODY_TILT)
     }
 }
 
@@ -269,10 +275,9 @@ object DiverParts {
     private const val PACK = 0x2a2b2f
     private const val TRIM = 0xcdb68c
     private const val BOOT = 0x1d2b6e
-    private const val STRAP = 0x55575a
 
-    /** The body through [m], the chin strap through [head]; [flap] ruffles the arms in the wind. */
-    fun body(g: ColorGeo, diver: FloatArray, head: FloatArray, flap: Float, tilt: Float) {
+    /** The body through [diver]; [flap] ruffles the arms in the wind, [tilt] tips the body at the neck. */
+    fun body(g: ColorGeo, diver: FloatArray, flap: Float, tilt: Float) {
         // The body pivots at the neck: a negative tilt drops it below the head, into view.
         val m = diver.copyOf()
         Matrix.translateM(m, 0, 0f, -0.2f, -0.12f)
@@ -324,11 +329,5 @@ object DiverParts {
             g.tube(m, floatArrayOf(knee[0], knee[1], knee[2], ankle[0], ankle[1], ankle[2]), 2, 0.075f, 0.058f, 10)
             g.color(BOOT, 0.5f).ellipsoid(m, ankle[0], ankle[1] + 0.04f, ankle[2] - 0.02f, 0.068f, 0.12f, 0.075f, 10, 7)
         }
-        // The helmet's padded chin strap, under the chin.
-        g.color(STRAP, 0.2f).tube(
-            head,
-            floatArrayOf(-0.105f, -0.09f, 0.07f, -0.075f, -0.15f, 0.085f, 0f, -0.172f, 0.095f, 0.075f, -0.15f, 0.085f, 0.105f, -0.09f, 0.07f),
-            5, 0.024f, 0.024f, 8, 3,
-        )
     }
 }
