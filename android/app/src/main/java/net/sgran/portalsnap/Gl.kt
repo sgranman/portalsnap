@@ -613,37 +613,166 @@ object Shaders {
         }
     """
 
-    // Disco: a purple wash, and an LED dot grid that twinkles, brightens near the head and
-    // rings outward from it on each beat.
+    // Disco Star (Disco.kt): three looks picked by uLook.
+    //  0, an LED wall: round lights each showing the picture under them, over a dimmed wash of the
+    //     room, with a star outline of brighter lights turning across the grid.
+    //  1, a huge five-point star of drifting candy clouds with a rainbow and magenta edge.
+    //  2, the room under drifting purple and orange haze. Its neon lines are drawn on the canvas.
+    // No variable may be named out, flat, smooth or sample: they're reserved words.
     const val FX_DISCO = """
         precision highp float;
         varying vec2 vUv;
         uniform sampler2D uTexture;
         uniform vec2 uSize;
-        uniform vec2 uHead;
+        uniform float uLook;
         uniform float uTime;
         uniform float uBeat;
-        uniform float uLevel;
-        uniform float uRing;
         uniform vec3 uTint;
-        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        uniform vec2 uCentre;
+        uniform float uStarR;
+        uniform float uStarRot;
+        uniform float uGridRot;
+        uniform vec3 uBurstR;
+        uniform vec3 uBurstA;
+
+        // Cheap and free of sin, which loses precision on mobile GPUs at large inputs.
+        float hash(vec2 p) {
+            vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+            p3 += dot(p3, p3.yzx + 33.33);
+            return fract((p3.x + p3.y) * p3.z);
+        }
+
+        float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f * f * (3.0 - 2.0 * f);
+            return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+        }
+
+        float fbm(vec2 p) {
+            float v = 0.0;
+            float a = 0.5;
+            for (int i = 0; i < 4; i++) {
+                v += a * noise(p);
+                p = p * 2.03 + vec2(17.1, 9.2);
+                a *= 0.5;
+            }
+            return v;
+        }
+
+        vec3 hsv(float h, float s, float v) {
+            vec3 k = clamp(abs(fract(h + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+            return v * mix(vec3(1.0), k, s);
+        }
+
+        vec2 turn(vec2 p, float a) {
+            float c = cos(a);
+            float s = sin(a);
+            return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+        }
+
+        // Signed distance to a five-point star of outer radius r, point up in y-up space, inner
+        // corners at rf (Inigo Quilez's sdStar5).
+        float star5(vec2 p, float r, float rf) {
+            vec2 k1 = vec2(0.809016994, -0.587785252);
+            vec2 k2 = vec2(-0.809016994, -0.587785252);
+            p.x = abs(p.x);
+            p -= 2.0 * max(dot(k1, p), 0.0) * k1;
+            p -= 2.0 * max(dot(k2, p), 0.0) * k2;
+            p.x = abs(p.x);
+            p.y -= r;
+            vec2 ba = rf * vec2(-k1.y, k1.x) - vec2(0.0, 1.0);
+            float h = clamp(dot(p, ba) / dot(ba, ba), 0.0, r);
+            return length(p - ba * h) * sign(p.y * ba.x - p.x * ba.y);
+        }
+
+        // The lights on a star outline of radius r, a couple of cells thick. Nothing for no star.
+        float ring(vec2 q, float r, float cell) {
+            if (r < 1.0) return 0.0;
+            return 1.0 - smoothstep(cell * 1.1, cell * 2.6, abs(star5(q, r, 0.45)));
+        }
+
+        vec3 ledWall(vec2 px, vec3 cam, float lum) {
+            float cell = uSize.x / 52.0;
+            vec2 id = floor(px / cell);
+            vec2 f = fract(px / cell) - 0.5;
+            vec2 centre = (id + 0.5) * cell;
+            vec3 c = texture2D(uTexture, vec2(centre.x / uSize.x, 1.0 - centre.y / uSize.y)).rgb;
+            float cl = dot(c, vec3(0.299, 0.587, 0.114));
+            // Star outlines bursting out from the head, one per beat, each fading as it grows.
+            vec2 q = turn(centre - uCentre, uGridRot);
+            q.y = -q.y;
+            float band = min(1.0, ring(q, uBurstR.x, cell) * uBurstA.x + ring(q, uBurstR.y, cell) * uBurstA.y
+                + ring(q, uBurstR.z, cell) * uBurstA.z);
+            float r = hash(id);
+            float twinkle = 0.75 + 0.25 * sin(uTime * (2.0 + 4.0 * r) + r * 40.0);
+            // Lit in the wall's colour: bright parts of the picture go pale, dark parts glow tinted.
+            // The burst lights go near white and well above the rest, so a star reads over a bright picture.
+            vec3 led = mix(c * (0.55 + 0.75 * uTint) + uTint * 0.3, vec3(1.0, 0.97, 0.92), band * 0.9);
+            float bright = (0.35 + 0.6 * cl + band * (1.4 + 0.6 * uBeat)) * twinkle;
+            float lamp = 1.0 - smoothstep(0.24, 0.36, length(f));
+            vec3 room = mix(cam, uTint * (0.35 + lum), 0.45) * 0.7;
+            return room + led * lamp * bright * 0.85;
+        }
+
+        // Smoky white light with a rainbow cast shining out from behind a star. The star blocks
+        // it, so the room shows clear through the star's middle, and the light is brightest right
+        // at the edge. The star is a true pentagram (inner corners at 0.382), so the laser beams
+        // drawn along its edges on the canvas line up exactly.
+        vec3 starLook(vec2 px, vec3 cam) {
+            float h = uSize.y;
+            vec2 q = turn(px - uCentre, uStarRot);
+            q.y = -q.y;
+            float sd = star5(q, uStarR, 0.382);
+            if (sd <= 0.0) return cam;
+            float away = sd / h;
+            vec2 dir = (px - uCentre) / h;
+            float dist = length(dir);
+            float ang = atan(dir.y, dir.x);
+            // The smoke circles the star counter-clockwise as seen on the screen. The screen is a
+            // mirror, so here, in the frame's y-down space, it turns clockwise: toward larger
+            // angles. Sampling the noise in a frame turned back by the spin makes what's drawn turn
+            // forward by it.
+            float spin = uTime * 0.9;
+            vec2 swirl = turn(dir, -spin);
+            float smoke = fbm(swirl * 2.4 + vec2(0.0, dist * 1.5));
+            float wisp = fbm(swirl * 5.0 + vec2(uTime * 0.1, 0.0));
+            // Uneven arms spiralling round with it, so the light isn't a uniform glow.
+            float arms = 0.5 + 0.5 * sin(3.0 * ang - spin * 1.3 + dist * 5.0 + smoke * 2.5);
+            // The light pours out of one side of the star at a time, about a third of the way round,
+            // and that side travels round the same way as the swirl, about once a look. A faint thin
+            // glow stays on the rest of the edge so the whole star still reads.
+            float side = pow(max(0.0, 0.5 + 0.5 * cos(ang - uTime * 1.3)), 2.5);
+            // Bright right up to the edge and still strong well out, then half as strong again.
+            float aura = exp(-away * 1.7) * (0.35 + 0.55 * smoke + 0.5 * arms) * side + exp(-away * 18.0) * (0.2 + 0.4 * side);
+            float hue = fract(ang / 6.2831853 + dist * 0.8 - spin * 0.05 + wisp * 0.3);
+            vec3 light = mix(vec3(1.0, 0.98, 1.0), hsv(hue, 0.7, 1.0), 0.25 + 0.35 * smoothstep(0.3, 0.8, wisp));
+            return mix(cam, light, clamp(aura * 1.5 * (0.9 + 0.2 * uBeat), 0.0, 0.97));
+        }
+
+        vec3 laserLook(vec2 px, vec3 cam) {
+            vec2 uv = px / uSize.y;
+            float haze = fbm(uv * 1.4 + vec2(uTime * 0.09, uTime * 0.02));
+            float warm = fbm(uv * 0.6 + vec2(4.3 - uTime * 0.05, 1.7));
+            vec3 hazeCol = mix(vec3(0.62, 0.28, 0.95), vec3(1.0, 0.55, 0.28), smoothstep(0.35, 0.65, warm));
+            float up = 1.0 - smoothstep(0.1, 0.75, px.y / uSize.y);
+            float amount = smoothstep(0.42, 0.78, haze) * (0.3 + 0.5 * up) * (0.85 + 0.3 * uBeat);
+            return cam * 0.95 + hazeCol * amount * 0.6;
+        }
+
         void main() {
+            vec2 px = vec2(vUv.x, 1.0 - vUv.y) * uSize;
             vec3 cam = texture2D(uTexture, vUv).rgb;
             float lum = dot(cam, vec3(0.299, 0.587, 0.114));
-            vec3 col = mix(cam, lum * uTint * 1.5, 0.6);
-            vec2 px = vec2(vUv.x, 1.0 - vUv.y) * uSize;
-            float cell = uSize.y / 30.0;
-            vec2 id = floor(px / cell);
-            float d = length(fract(px / cell) - 0.5);
-            float r = hash(id);
-            float twinkle = 0.5 + 0.5 * sin(uTime * (1.2 + 3.5 * r) + r * 40.0);
-            float dist = length(px - uHead) / uSize.y;
-            float ring = exp(-pow((dist - uRing) * 9.0, 2.0)) * (0.35 + uBeat);
-            float near = exp(-dist * 2.2);
-            float bright = 0.15 + 0.5 * twinkle * (0.45 + 0.55 * uLevel) + 0.8 * ring + 0.6 * uBeat * near;
-            float dotMask = smoothstep(0.34, 0.2, d);
-            vec3 dotCol = mix(uTint * 1.3, vec3(1.0, 0.9, 1.0), r * 0.6);
-            gl_FragColor = vec4(col + dotCol * dotMask * bright * 0.8, 1.0);
+            vec3 col;
+            if (uLook < 0.5) {
+                col = ledWall(px, cam, lum);
+            } else if (uLook < 1.5) {
+                col = starLook(px, cam);
+            } else {
+                col = laserLook(px, cam);
+            }
+            gl_FragColor = vec4(col, 1.0);
         }
     """
 }

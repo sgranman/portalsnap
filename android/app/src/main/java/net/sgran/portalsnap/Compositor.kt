@@ -617,13 +617,18 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glUniform1f(p.u("uFlash"), fx.p1)
         }
         if (fx.kind == FrameFx.DISCO) {
+            val q = fx.q
             GLES20.glUniform2f(p.u("uSize"), FRAME_W.toFloat(), FRAME_H.toFloat())
-            GLES20.glUniform2f(p.u("uHead"), fx.x, fx.y)
-            GLES20.glUniform1f(p.u("uTime"), fx.p0)
-            GLES20.glUniform1f(p.u("uBeat"), fx.p1)
-            GLES20.glUniform1f(p.u("uLevel"), fx.p2)
-            GLES20.glUniform1f(p.u("uRing"), fx.b[0])
-            GLES20.glUniform3fv(p.u("uTint"), 1, fx.a, 0)
+            GLES20.glUniform1f(p.u("uLook"), q[0])
+            GLES20.glUniform1f(p.u("uTime"), q[1])
+            GLES20.glUniform1f(p.u("uBeat"), q[2])
+            GLES20.glUniform3f(p.u("uTint"), q[3], q[4], q[5])
+            GLES20.glUniform2f(p.u("uCentre"), q[6], q[7])
+            GLES20.glUniform1f(p.u("uStarR"), q[8])
+            GLES20.glUniform1f(p.u("uStarRot"), q[9])
+            GLES20.glUniform1f(p.u("uGridRot"), q[10])
+            GLES20.glUniform3f(p.u("uBurstR"), q[11], q[12], q[13])
+            GLES20.glUniform3f(p.u("uBurstA"), q[14], q[15], q[16])
         }
         if (fx.kind == FrameFx.POP_ART) {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE1)

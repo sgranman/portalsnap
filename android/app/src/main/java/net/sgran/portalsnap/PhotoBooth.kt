@@ -22,11 +22,6 @@ internal val rng = Random()
 
 internal fun rnd(a: Float, b: Float) = a + rng.nextFloat() * (b - a)
 
-private fun rgb(hex: String): FloatArray {
-    val c = Color.parseColor(hex)
-    return floatArrayOf(Color.red(c) / 255f, Color.green(c) / 255f, Color.blue(c) / 255f)
-}
-
 /* ------------------------------ particles ------------------------------ */
 
 class Particle(
@@ -91,85 +86,6 @@ object Mirror : Filter("mirror", "Mirror", "🪞", Mode.FAST) {
 /* ---------------------------- Pop Silhouette ---------------------------- */
 
 // Rebuilt from its reference video in PopArt.kt.
-
-/* ------------------------------ Disco Dots ------------------------------ */
-
-// A purple wash and a twinkling LED dot grid that ripples out from the head on the beat,
-// with star bursts thrown from the head. Quiet room: a gentler burst on a slow clock.
-object DiscoDots : Filter("disco", "Disco", "🪩", Mode.FAST) {
-    override val usesFx = true
-    override val wantsMic = true
-
-    private val stars = Particles()
-    private val starColors = intArrayOf(Color.WHITE, hex("#ff9bf0"), hex("#ffe27a"), hex("#9ff3ff"))
-    private val tint = rgb("#b23cff")
-    private var seenBeats = -1
-    private var lastBurst = 0L
-    private val path = Path()
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-    override fun update(d: Draw, faces: List<Face>) {
-        val head = faces.maxByOrNull { it.eyeDist }
-        val beat = d.beats != seenBeats && seenBeats >= 0
-        seenBeats = d.beats
-        val idle = d.sinceBeatMs > 2500 && d.t - lastBurst > 1100
-        if (head != null && (beat || idle)) {
-            burst(head, if (beat) 1f else 0.55f)
-            lastBurst = d.t
-        }
-        stars.step(d.dt, gravity = 60f, drag = 1.2f)
-    }
-
-    override fun fx(d: Draw, faces: List<Face>, fx: FrameFx) {
-        val head = faces.maxByOrNull { it.eyeDist }
-        fx.kind = FrameFx.DISCO
-        fx.x = head?.cx ?: (d.w / 2)
-        fx.y = head?.let { it.cy - it.eyeDist * 0.3f } ?: (d.h / 2)
-        fx.p0 = (d.t % 1_000_000L) / 1000f
-        fx.p1 = d.beat
-        fx.p2 = d.level
-        tint.copyInto(fx.a)
-        fx.b[0] = min(d.sinceBeatMs, 4000f) / 1000f * 1.1f // ripple radius, in frame heights
-    }
-
-    private fun burst(f: Face, strength: Float) {
-        val scale = f.eyeDist / 90f
-        val count = (16 * strength).toInt()
-        val cx = f.cx
-        val cy = f.cy - f.eyeDist * 0.6f
-        for (i in 0 until count) {
-            val a = i * TAU / count + rnd(-0.2f, 0.2f)
-            val speed = rnd(260f, 520f) * scale * strength
-            stars.add(Particle(cx, cy, cos(a) * speed, sin(a) * speed, rnd(0.7f, 1.1f), rnd(9f, 20f) * scale, starColors[rng.nextInt(starColors.size)], rnd(-3f, 3f)))
-        }
-    }
-
-    override fun overlay(d: Draw, faces: List<Face>) {
-        val c = d.c
-        for (p in stars.list) {
-            val grow = 0.6f + 0.6f * (p.age / p.life)
-            val r = p.size * grow
-            paint.shader = null
-            paint.color = p.color
-            paint.alpha = (255 * p.fade).toInt()
-            sparkle(c, p.x, p.y, r, p.rot)
-        }
-    }
-
-    // A four-point sparkle, the shape that reads as "star" at a glance.
-    private fun sparkle(c: Canvas, x: Float, y: Float, r: Float, rot: Float) {
-        path.reset()
-        for (i in 0 until 8) {
-            val a = rot + i * TAU / 8
-            val rr = if (i % 2 == 0) r else r * 0.28f
-            val px = x + cos(a) * rr
-            val py = y + sin(a) * rr
-            if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
-        }
-        path.close()
-        c.drawPath(path, paint)
-    }
-}
 
 /* ---------------------------- Monster / Cutie ---------------------------- */
 

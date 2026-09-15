@@ -939,5 +939,5 @@ object Moon : Filter("moon", "Moon", "🌘", Mode.SEGMENT, voice = 1.3f) {
 }
 
 val FILTERS: List<Filter> = listOf(
-    Mirror, PopSilhouette, DiscoDots, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod,
+    Mirror, PopSilhouette, DiscoStar, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod,
     Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Skydiver, Beach, Palace, Moon)
