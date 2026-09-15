@@ -12,7 +12,7 @@ services:
       - ./:/app
     ports:
       # Loopback only. The camera needs HTTPS, so something has to sit in front
-      # of this either way (see "Running it" in the README) — and binding to
+      # of this either way (see "Running it" in BUILD-JOURNAL.md) — and binding to
       # 127.0.0.1 means the plain-HTTP port is never reachable from the LAN by
       # accident. Change to "8080:8080" only if you know why you want that.
       - "127.0.0.1:8080:8080"

@@ -43,7 +43,7 @@ const SHARE_DEFAULT_DAYS = 7;
 
 // The diagnostic pages: the capability probe, the two tracker sweeps, the
 // recording harness and the share-support checker. They are how every number
-// in the README was arrived at, and they are worth keeping — but they are
+// in BUILD-JOURNAL.md was arrived at, and they are worth keeping — but they are
 // developer tools, not part of the app a child opens, and each one starts a
 // camera and a tracker of its own. Off unless asked for.
 //
