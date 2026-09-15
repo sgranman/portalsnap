@@ -768,6 +768,7 @@ class MainActivity : Activity() {
             Log.i(TAG, "segmentation model set to $it; restart to apply")
         }
         if (i.hasExtra("jaw")) painter.debugJaw = i.getFloatExtra("jaw", -1f).takeIf { it >= 0f }
+        if (i.hasExtra("rideDist")) BikeRide.debugDist = i.getFloatExtra("rideDist", -1f).takeIf { it > 0f }
         when (i.getStringExtra("action")) {
             "photo" -> takePhoto()
             "poke" -> painter.active?.poke()

@@ -23,7 +23,7 @@ filters where that works, or a supplied image where a photographic look is the p
 | 7 | Pink Palace | (screenshot 103721) | segment | backdrop image + person cut-out | small, plus art |
 | 8 | Lemonade | (screenshot 103801) | mesh | face patch warped into a glass, tinted and blurred | medium |
 | 9 | Peas in a Pod | 1434519407443964 | mesh | the face cloned into three peas | medium |
-| 10 | Bike Ride | 3745986732290546 | fast / mesh | moving scene + rider body + face in helmet | medium–large |
+| 10 | Bike Ride | 3745986732290546 | fast | real 3D park, riders and helmets, face on the head (built) | medium–large |
 | 11 | Freefall | 897386285564659 | fast | photoreal-style skydiver, with a camera that pulls away | large |
 
 ### Status (2026-09-14)
@@ -451,17 +451,79 @@ shadow.
 - **Questions:** did the three peas bob independently? Did two children fill different peas?
 
 ### 10. Bike Ride
-The child on a bike ride through a stylised low-poly forest at sunset: cone and ball trees, a
-road rushing toward the camera with motion blur, and a pink-orange sky. Their face sits in a
-cartoon rider's head wearing a white bike helmet with a chin strap, on a teal-jersey body
-leaning forward. The rider leans and steers with the head.
-- **Build:** the Skydive pattern at a larger scale.
-  - **Scene:** a scrolling vanishing-point scene in Canvas, with trees spawning at the horizon
-    and growing as they pass, plus the road.
-  - **Rider:** a body under the face patch and a helmet over it.
-  - **Steering:** the head's yaw and x position.
-- **Question:** did turning the head actually steer, with the road curving and trees passing on
-  one side?
+**Built in real 3D** (`BikeRide.kt`, `Park.kt`, `Geo3D.kt`, `RideRenderer.kt`; the "Bike" chip)
+from its reference video (3745986732290546). What the video showed:
+
+- **Camera:** it backs down a straight path ahead of the rider, who pedals toward it. The park
+  recedes toward a vanishing point at mid-height at about 4 m/s: a lamp post halves in size in
+  0.9s. The path never curves, and turning the head doesn't steer.
+- **Park:** low-poly, at sunset.
+  - **Trees:** faceted three-tier pines with dark undersides, and trees with bendy trunks whose
+    branches end in balls of leaves.
+  - **Ground:** lime bushes, a grey path with orange edging and a brick walk on each side, and
+    dark grass.
+  - **Props:** benches and blue bins on the left; lanterns on posts and green recycling bins on
+    the right.
+  - **Sky:** grey-lilac overhead to peach and pink at the horizon, with a hazy pink city behind
+    the trees.
+  - **Blur and light:** the ground and the near edges are motion-blurred; the rider isn't. A low
+    sun on the right lights the trees' right-hand sides and rims the rider.
+- **Rider:** a cartoon kid with a big head.
+  - **Helmet:** white and vented, with a dark lower band, and dark straps down the cheeks to a
+    buckle under the chin.
+  - **Outfit:** a teal long-sleeved jersey, navy trousers, light-blue gloves and yellow shoes, on
+    a blue bike.
+  - **Face:** it sits under the brim, forehead to chin, with a soft edge at the cheeks.
+- **Following the head:** the rider's place on screen follows the face, and their size follows
+  the face's size. Leaning into the Portal brings the rider up close, with the handlebars at the
+  bottom of the frame; sitting back sends them down the path. Stepping out of frame leaves the
+  empty path rolling.
+- **Sound:** none. The clip has only voices.
+
+How it's built:
+
+- **Park:** `Park.build` lays out an 80m stretch in two variants, each one mesh with a colour on
+  every vertex (`ColorGeo`), so a whole stretch of forest is one draw call. The renderer lays four
+  stretches end to end, nearest first, alternating variants, and scrolls them away. The scroll
+  wraps at 8km.
+- **Ground:** one big quad patterned in the shader in park coordinates:
+  - asphalt, the edging and grass
+  - bricks that fade to their average colour where they get too small to draw
+  - soft tree shadows drifting across
+- **Sky:** a full-screen shader with the gradient and two rows of city towers, taller toward the
+  middle.
+- **Blur:** the park renders into its own framebuffer, then into the composite through an 8-tap
+  zoom blur away from the vanishing point, strongest low down and at the edges.
+- **Rider:** rebuilt every frame from tubes and ellipsoids in world space:
+  - **Bike:** tyres, spokes that turn with the scroll, and cranks turning 1.2 times a second.
+  - **Body:** a torso from the saddle to under the chin, with a shoulder yoke.
+  - **Limbs:** two-bone arms to the grips and legs to the pedals.
+- **Head:**
+  - **Helmet:** a shell mesh whose vents, band and dark inside are drawn by its shader. It's
+    tipped 14° forward on its brim so its top shows.
+  - **Face:** a gently domed window sampling the camera, clipped at the brim. It's drawn 7cm
+    nearer along its own line of sight, which leaves it in the same place on screen, so it
+    always wins against the collar behind the chin.
+  - **Straps:** they draw last, over the face's edges.
+- **Placement:**
+  - **Distance:** focal length × the face window's half-width ÷ eye distance, corrected for yaw,
+    and held between 0.85m and 3.2m. The rider's face comes out the size of the real one.
+  - **Sideways:** the face's x places the head. Its height stays within what the body can reach.
+  - **Lean:** the bike trails the head on a spring, and the body leans across the gap.
+- **Several people:** one rider each, keyed by track and kept through a 350ms tracking blink.
+- **Camera:** its own level perspective (55° vertical, 1.17m up), not `View3D`.
+- **Cost on the gen 1 Portal:**
+  - **Test portrait:** 30fps and about 6–8ms a frame (p50) with one or two riders; 12ms while
+    `screenrecord` was running.
+  - **Live camera with nobody in view:** 29.5fps and 9ms.
+- **Testing on the portrait:** its size never changes, so `--ef rideDist 1.6` holds every rider
+  at that distance. A negative value clears it.
+
+Not yet checked with a real person:
+
+- how far away real faces put the rider, since the mapping may need a nudge
+- the sideways lean on quick moves
+- head roll and yaw on the helmet
 
 ### 11. Freefall
 A near-photoreal skydiver in a blue-and-white suit and striped helmet, arms spread, with the

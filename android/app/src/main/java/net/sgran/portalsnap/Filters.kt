@@ -109,6 +109,8 @@ class Draw(val pen: Pen) {
     val glasses = ArrayList<Glass3D>()
     /** Real 3D pea pods, drawn at the same point as glasses. */
     val pods = ArrayList<Pod3D>()
+    /** Bike Ride's park and riders, drawn at the same point as glasses. */
+    val rides = ArrayList<Ride3D>()
     /** Segment tier: the latest person mask (1 person, 0 not), maskW x maskH, top row first. */
     var mask: ByteArray? = null
     var maskW = 0
@@ -939,5 +941,5 @@ object Moon : Filter("moon", "Moon", "🌘", Mode.SEGMENT, voice = 1.3f) {
 }
 
 val FILTERS: List<Filter> = listOf(
-    Mirror, PopSilhouette, DiscoStar, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod,
+    Mirror, PopSilhouette, DiscoStar, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod, BikeRide,
     Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Skydiver, Beach, Palace, Moon)
