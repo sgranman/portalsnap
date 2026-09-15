@@ -73,7 +73,7 @@ adb shell pm install -r -g /data/local/tmp/portalsnap.apk
 ```
 
 Debug builds are signed with a different key from releases, so run
-`adb uninstall net.sgran.portalsnap` when switching between the two. That forgets settings and
+`adb uninstall net.sgransoft.portalsnap` when switching between the two. That forgets settings and
 server pairing, but photos and clips stay. [android/README.md](android/README.md) has the rest:
 driving the app from adb, releases, and the Portal's quirks.
 

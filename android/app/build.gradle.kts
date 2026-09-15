@@ -14,11 +14,11 @@ val psnapVersionCode = (findProperty("psnapVersionCode") as String?)?.toInt() ?:
 val releaseKeystore: String? = System.getenv("PORTALSNAP_KEYSTORE")
 
 android {
-    namespace = "net.sgran.portalsnap"
+    namespace = "net.sgransoft.portalsnap"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "net.sgran.portalsnap"
+        applicationId = "net.sgransoft.portalsnap"
         // Portal tops out at API 29 (gen 2) and gen 1 is API 28.
         minSdk = 28
         targetSdk = 29

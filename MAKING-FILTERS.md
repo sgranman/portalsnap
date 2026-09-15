@@ -12,7 +12,7 @@ ways to make a new one: with a coding agent doing the typing and you directing, 
 ## The shape of a filter (Android)
 
 A filter is a Kotlin object that extends `Filter`, and it goes in the `FILTERS` list at the bottom
-of `android/app/src/main/java/net/sgran/portalsnap/Filters.kt`. Here's a whole one:
+of `android/app/src/main/java/net/sgransoft/portalsnap/Filters.kt`. Here's a whole one:
 
 ```kotlin
 object ClownNose : Filter("clown", "Clown", "🤡", Mode.FAST) {
@@ -121,7 +121,7 @@ cd android
 adb push app/build/outputs/apk/debug/app-debug.apk /data/local/tmp/psnap.apk
 adb shell pm install -r -g /data/local/tmp/psnap.apk
 
-A="adb shell am start -n net.sgran.portalsnap/.MainActivity"
+A="adb shell am start -n net.sgransoft.portalsnap/.MainActivity"
 $A --ei faces 1 --es filter clown --ez hud true   # the test portrait, your filter, the HUD
 $A --ei faces 2                                    # two people
 $A --ef jaw 0.8                                    # pretend the mouth is open (mesh tier); negative clears
@@ -134,7 +134,7 @@ adb logcat -s PSNAP                                # stats lines: render fps, fr
 ```
 
 - **Sound in clips:** `$A --es action record`, then `stop`, then copy the draft out of the app's
-  cache with `adb exec-out run-as net.sgran.portalsnap cat cache/<vid-….mp4>`. Discard it with
+  cache with `adb exec-out run-as net.sgransoft.portalsnap cat cache/<vid-….mp4>`. Discard it with
   `again`.
 - **Holding still:** for a filter that follows how close you are, add a debug extra that holds the
   distance, like `--ef rideDist` and `--ef fallDist` do, since the portrait never moves.

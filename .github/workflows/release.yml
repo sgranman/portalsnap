@@ -82,6 +82,7 @@ jobs:
         id: package
         env:
           V: ${{ steps.version.outputs.name }}
+          CODE: ${{ steps.version.outputs.code }}
         run: |
           APK=android/app/build/outputs/apk/release/app-release.apk
           if [ ! -f "$APK" ]; then
@@ -96,7 +97,12 @@ jobs:
           CERT=$(sed -n 's/.*certificate SHA-256 digest: //p' certs.txt | head -1)
           mkdir dist
           cp "$APK" "dist/PortalSnap-$V.apk"
-          (cd dist && sha256sum "PortalSnap-$V.apk" > SHA256SUMS.txt)
+          # The same APK under a name that never changes, plus its version, so
+          # releases/latest/download/ always finds the newest. The Immortal store's catalog entry
+          # installs PortalSnap.apk and reads versionCode from version.json to offer updates.
+          cp "$APK" dist/PortalSnap.apk
+          printf '{"versionName": "%s", "versionCode": %s}\n' "$V" "$CODE" > dist/version.json
+          (cd dist && sha256sum "PortalSnap-$V.apk" PortalSnap.apk version.json > SHA256SUMS.txt)
           echo "cert=$CERT" >> "$GITHUB_OUTPUT"
 
       - name: Publish the release
