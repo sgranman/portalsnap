@@ -249,6 +249,17 @@ After the user's first look:
 - **Beach, Palace, Moon:** they had never set `usesUnder`, so their scenes weren't painted
   (black since the native build). Fixed along the way.
 
+**Pop Art: done for now (2026-09-14).** The user signed off after these changes, all described
+in the README's Portal quirks:
+
+- the segmentation crop around the person
+- the 512x288 mask grid
+- frame-synced cut-outs at about 28fps on the test portrait
+- a note that the multiclass model is too slow (about 830ms a frame on the CPU)
+
+If hair edges ever need more, the next step is running the model through TensorFlow Lite's own
+GPU delegate.
+
 ### 4. Monster / Cutie (one effect, two moods)
 Hand-drawn doodle face paint that changes with expression. Both frames come from the same
 video, 1s and 4s in.
