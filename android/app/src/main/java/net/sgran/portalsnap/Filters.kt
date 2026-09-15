@@ -111,6 +111,8 @@ class Draw(val pen: Pen) {
     val pods = ArrayList<Pod3D>()
     /** Bike Ride's park and riders, drawn at the same point as glasses. */
     val rides = ArrayList<Ride3D>()
+    /** Freefall's sky and divers, drawn at the same point as glasses. */
+    val falls = ArrayList<Fall3D>()
     /** Segment tier: the latest person mask (1 person, 0 not), maskW x maskH, top row first. */
     var mask: ByteArray? = null
     var maskW = 0
@@ -161,6 +163,8 @@ abstract class Filter(
     open val keepsScene = false
     /** An asset path for this filter's own soundtrack, looped while it's selected. */
     open val music: String? = null
+    /** A synthesized [Sfx] sound looped under everything while it's selected, such as wind. */
+    open val ambience: String? = null
 
     open fun voiceFrom(face: Face): Float? = null
 
@@ -941,5 +945,5 @@ object Moon : Filter("moon", "Moon", "🌘", Mode.SEGMENT, voice = 1.3f) {
 }
 
 val FILTERS: List<Filter> = listOf(
-    Mirror, PopSilhouette, DiscoStar, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod, BikeRide,
+    Mirror, PopSilhouette, DiscoStar, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod, BikeRide, Freefall,
     Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Skydiver, Beach, Palace, Moon)

@@ -24,7 +24,7 @@ filters where that works, or a supplied image where a photographic look is the p
 | 8 | Lemonade | (screenshot 103801) | mesh | face patch warped into a glass, tinted and blurred | medium |
 | 9 | Peas in a Pod | 1434519407443964 | mesh | the face cloned into three peas | medium |
 | 10 | Bike Ride | 3745986732290546 | fast | real 3D park, riders and helmets, face on the head (built) | medium–large |
-| 11 | Freefall | 897386285564659 | fast | photoreal-style skydiver, with a camera that pulls away | large |
+| 11 | Freefall | 897386285564659 | mesh + blendshapes | real 3D diver and helmet, sky and ground shader, falls on an open mouth (built) | large |
 
 ### Status (2026-09-14)
 
@@ -526,14 +526,101 @@ Not yet checked with a real person:
 - head roll and yaw on the helmet
 
 ### 11. Freefall
-A near-photoreal skydiver in a blue-and-white suit and striped helmet, arms spread, with the
-child's face in the helmet opening, against a sky of real-looking clouds. Over the ~30 seconds
-the camera pulls back: by 22s the diver is a small figure tumbling below, with the ground
-visible through the clouds.
-- **Build:** the largest of the set. The existing Skydive filter is a cartoon version of the
-  idea. Getting this look means rendered art for the diver, in a few poses, plus a cloud
-  backdrop, and a scripted camera move over the clip's duration.
-- **Question:** did the pull-away start when recording started, or loop on its own?
+**Built in real 3D** (`Freefall.kt`, `FreefallRenderer.kt`; the "Freefall" chip) from its
+reference video (897386285564659). What the video showed:
+
+- **Close-up:** a skydiver in a glossy blue suit falls face-on to the camera, arms spread with
+  forearms up and legs trailing behind.
+  - **Helmet:** quartered blue and white panels, a pale trim round the opening, grey padding,
+    white cheek guards with blue riveted plates, and a grey chin strap.
+  - **Face:** it fills the opening, bigger than life.
+  - **Motion:** the diver follows the head around the frame and turns and tilts with it.
+  - **Background:** clouds rushing upward.
+- **The fall:** opening the mouth wide sends the diver tumbling away below.
+  - **Far view:** within about a second the view tips down onto hazy farmland far below, with
+    the diver a small tumbling figure.
+  - **White-out:** a cloud deck rises from below and the view goes white.
+  - **Back:** the close-up fades in about 3s after the scream, and the next big open mouth does
+    it again.
+  - **Earlier guess corrected:** this catalogue first guessed a scripted pull-back over the
+    clip, which was wrong.
+- **Nobody in view:** just the clouds rushing past.
+- **Sound:** voices over a steady low rumble. The user asked for synthesized wind and a whoosh.
+
+How it's built:
+
+- **Sky:** one shader over each view ray, drawn at half size and scaled up, since it's all soft.
+  - **Cloud wall:** blue sky with a wall of cloud wrapped round the fall line, rushing upward and
+    lit from above. The clouds come from a 256² tiling noise texture made at start-up. The wall
+    fades from rays looking steeply down, where the wrap would swirl.
+  - **Near layer:** at the user's request, a nearer, wispier layer of bigger cloud shapes in front
+    of the wall, rushing up about three and a half times as fast on screen.
+  - **Below:** the ground photo on a plane 3.2km down, through haze, with a cloud deck in
+    between that closes in as the fall goes on.
+- **Ground:** a public-domain USDA NAIP aerial photo of New York farmland (2022), 2048² and laid
+  over 9km, with mirrored repeat and mipmaps. It's credited in `THIRD-PARTY.md`.
+- **Diver:** rebuilt every frame from tubes, ellipsoids and boxes (`ColorGeo`, with colour alpha
+  as gloss): the suit, a harness with a chest buckle, the pack, gloves with white cuffs, bent
+  legs and boots.
+  - **Body tilt:** the user couldn't see the body or feet, so it tips 32° down behind the head,
+    pivoting at the neck (`DiverParts.BODY_TILT`). The torso, harness and buckle now show below
+    the chin. Tipping it the other way hid everything behind the helmet.
+  - **Legs:** splayed, with the shins up, so the boots stick out behind.
+- **Wind in the face:** at the user's request, the face shader stretches the cheeks and lips out
+  toward the helmet by sampling nearer the middle, and runs ripples back across the cheeks. It
+  flaps harder during the fall (`Fall3D.wind`), and the ripples speed up with the cloud clock.
+  The cheeks are also puffed: a lens on each magnifies it from its middle, with light across the
+  top of each puff and a soft shade beneath.
+- **Helmet:** redone at the user's request to match the reference's close-ups.
+  - **Shell:** a round ellipsoid, cut open at the face and underneath by its shader.
+  - **Paint:** a vivid blue stripe over the crown, bright white bands either side and blue sides,
+    with thin seams.
+  - **Cheek guards:** white, round the opening from the brow to the jaw, outlined by a groove,
+    each with a blue plate of three vent holes. Silver rivets sit at the temples and jaw.
+  - **Finish:** a clear coat that reflects the sky and the backdrop's cloud noise, the
+    reference's marbled look, with a sharp sun glint and a broad studio streak from the upper
+    left. Quilted grey padding lines the inside.
+  - **Geometry:** a thin bright rubber trim round the opening, and a ribbed grey chin cup under
+    the chin.
+  - **Face:** its window sits inside, pulled 2cm nearer so the padding behind it never wins the
+    depth test.
+- **Placement:** the user asked for the diver to come and go as they lean in and out.
+  - **Measured:** on the gen 1 Portal, a face logged at about 80px between the eyes sitting
+    normally, 45px sat back, and 150px leaning in.
+  - **Mapping:** the diver is 1.2m away at 80px, and distance follows the eye distance's ratio to
+    the power 1.6, corrected for yaw. So leaning moves the diver more than it moves the face:
+    from 0.6m close up to 3.6m sat back. The user first had it at 0.8m (0.4–2.4m), then asked for
+    it all half as far again back.
+  - **Smoothing:** the user found the tracking rough and suggested rendering at 20fps. The stats
+    said otherwise: 30fps rendering at 6–7ms a frame, but the mesh tracker (needed for `jawOpen`)
+    updating 15–19 times a second with 8–17px of jitter, which the depth mapping magnifies. So the
+    diver now follows on critically damped springs instead: position at 7 rad/s, depth at 3.2
+    rad/s on the log of the distance, turn and tilt at 8 rad/s. The face picture itself still
+    follows the live track exactly.
+- **The fall:**
+  - **Trigger:** `jawOpen` above 0.5, which needs the mesh tier for blendshapes, or a poke.
+  - **Motion:** divers drop along a steepening curve, tumbling about the chest. The camera
+    pitches to follow the nearest one, and the cloud wall fades as the ground and deck show.
+  - **Timing:** white from 1.75s, back to the close-up at 2.35s inside the white, clear by 3s,
+    and ready again at 3.3s.
+  - **Groups:** everyone falls together.
+- **Sound:**
+  - **Wind:** `Sfx` synthesizes a seamless 6s loop. It plays as the filter's new `ambience`:
+    `MainActivity` loops it through `Mixer` while the filter is selected, so it's baked into
+    clips.
+  - **Whoosh:** 1.8s, on each fall.
+- **Cost on the gen 1 Portal:** 30fps on the test portrait through the whole fall, with frames
+  about 5.5ms p50 and 11ms p95.
+- **Testing:** `--ef fallDist 0.75` holds divers at a distance. `--es action poke` or
+  `--ef jaw 0.8` makes them fall.
+
+Not yet checked with a real person:
+
+- the new distance mapping, with a real person leaning in and out
+- how reliably a real scream crosses the jaw threshold, and whether talking sets it off
+- the sound on the Portal's speaker
+
+The reference's clouds are photographic; these are procedural.
 
 ## Shared building blocks these need
 

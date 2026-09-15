@@ -1,6 +1,7 @@
 package net.sgran.portalsnap
 
 import android.content.Context
+import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
@@ -97,6 +98,9 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private var glassRenderer: GlassRenderer? = null
     private var podRenderer: PodRenderer? = null
     private var rideRenderer: RideRenderer? = null
+    private var fallRenderer: FreefallRenderer? = null
+    /** The app's assets, for 3D passes that load pictures (Freefall's ground). */
+    private lateinit var assets: AssetManager
     private var glassFailed = false
 
     private var camTex = 0
@@ -162,6 +166,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     }
 
     fun start(context: Context, onCameraTexture: (SurfaceTexture) -> Unit) {
+        assets = context.applicationContext.assets
         handler.post {
             egl = EglCore()
             pOes = Program(Shaders.VERTEX, Shaders.OES)
@@ -568,7 +573,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             pPatch.drawQuad()
         }
 
-        if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty() || plan.rides.isNotEmpty()) && !glassFailed) {
+        if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty() || plan.rides.isNotEmpty() || plan.falls.isNotEmpty()) && !glassFailed) {
             try {
                 if (plan.glasses.isNotEmpty()) {
                     val r = glassRenderer ?: GlassRenderer().also { glassRenderer = it }
@@ -581,6 +586,10 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
                 if (plan.rides.isNotEmpty()) {
                     val r = rideRenderer ?: RideRenderer().also { rideRenderer = it }
                     r.draw(plan.rides, shown.tex, comp)
+                }
+                if (plan.falls.isNotEmpty()) {
+                    val r = fallRenderer ?: FreefallRenderer(assets).also { fallRenderer = it }
+                    r.draw(plan.falls, shown.tex, comp)
                 }
             } catch (e: Throwable) {
                 glassFailed = true

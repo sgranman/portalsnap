@@ -30,6 +30,8 @@ object Sfx {
             clips["clink1"] = Mixer.Clip(clink(5L, 2400f), RATE)
             clips["clink2"] = Mixer.Clip(clink(7L, 2900f), RATE)
             clips["clink3"] = Mixer.Clip(clink(13L, 3500f), RATE)
+            clips["whoosh"] = Mixer.Clip(whoosh(), RATE)
+            clips["wind"] = Mixer.Clip(wind(), RATE)
         }
     }
 
@@ -37,6 +39,60 @@ object Sfx {
     fun play(name: String, volume: Float = 1f, rate: Float = 1f) {
         val clip = clips[name] ?: return
         Mixer.play(clip, volume, rate.coerceIn(0.5f, 2f))
+    }
+
+    /** Loops a sound until [Mixer.stop] with the id returned; 0 if it isn't ready yet. */
+    fun loop(name: String, volume: Float = 1f): Int {
+        val clip = clips[name] ?: return 0
+        return Mixer.play(clip, volume, loop = true)
+    }
+
+    // Two-pole low-pass noise whose cutoff and level follow [cut] and [env] over time, for air.
+    private inline fun air(n: Int, seed: Long, cut: (Float) -> Float, env: (Float) -> Float): FloatArray {
+        val rng = Random(seed)
+        val out = FloatArray(n)
+        var lp1 = 0f
+        var lp2 = 0f
+        for (i in 0 until n) {
+            val t = i.toFloat() / RATE
+            val k = exp(-2f * PI.toFloat() * cut(t) / RATE)
+            lp1 = (1 - k) * (rng.nextFloat() * 2 - 1) + k * lp1
+            lp2 = (1 - k) * lp1 + k * lp2
+            out[i] = lp2 * env(t)
+        }
+        return out
+    }
+
+    // Freefall's wind: dark rushing air with slow gusts, a brighter layer breathing on top of it.
+    // Six seconds, with its end crossfaded into its start so the loop has no seam.
+    private fun wind(): ShortArray {
+        val body = 6f
+        val fade = 0.5f
+        val n = (RATE * (body + fade)).toInt()
+        val low = air(n, 41L, { t -> 380f + 120f * sin(t * 1.3f) }) { t -> 0.8f + 0.2f * sin(t * 0.9f + 1f) }
+        val high = air(n, 43L, { t -> 1400f + 500f * sin(t * 0.7f + 2f) }) { t -> 0.18f + 0.12f * sin(t * 2.1f) }
+        val mixed = FloatArray(n) { low[it] * 3f + high[it] * 2f }
+        val len = (RATE * body).toInt()
+        val f = (RATE * fade).toInt()
+        val out = FloatArray(len) { mixed[it] }
+        for (i in 0 until f) {
+            val a = i.toFloat() / f
+            out[i] = mixed[len + i] * (1 - a) + mixed[i] * a
+        }
+        var peak = 1e-6f
+        for (v in out) peak = max(peak, abs(v))
+        return ShortArray(len) { (out[it] / peak * 0.7f * 32767f).toInt().toShort() }
+    }
+
+    // The fall: air swelling and brightening as the diver drops away, then rushing off darker.
+    private fun whoosh(): ShortArray {
+        val n = (RATE * 1.8f).toInt()
+        val out = air(n, 47L, { t -> 300f + 2600f * exp(-((t - 0.45f) / 0.35f).pow(2)) }) { t ->
+            min(1f, t / 0.35f).pow(2) * exp(-max(0f, t - 0.5f) / 0.45f)
+        }
+        var peak = 1e-6f
+        for (v in out) peak = max(peak, abs(v))
+        return ShortArray(n) { (out[it] / peak * 0.8f * 32767f).toInt().toShort() }
     }
 
     // Ice on glass: a bright, inharmonic ping that dies fast, with a tick of noise on the strike.
