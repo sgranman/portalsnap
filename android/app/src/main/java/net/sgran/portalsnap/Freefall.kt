@@ -4,6 +4,8 @@ import android.opengl.Matrix
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -32,15 +34,22 @@ object Freefall : Filter("freefall", "Freefall", "☁️", Mode.MESH) {
     private const val FORGET_MS = 3000L
     // Leaning in and out moves the diver more than it moves the face. Measured on the gen 1 Portal
     // on 2026-09-15: eyes ~80px apart sitting normally, ~45px sat back, ~150px leaning in. A face at
-    // NEUTRAL_EYE puts the diver NEUTRAL metres away (the face then shows at about 1.7x life
-    // size), and distance goes as the eye distance's ratio to the power DEPTH_GAIN, so sitting
-    // back sends the diver about 2.5x further and leaning in brings them about 2x nearer.
+    // NEUTRAL_EYE puts the diver NEUTRAL metres away, and distance goes as the eye distance's ratio
+    // to the power DEPTH_GAIN, so sitting back sends the diver about 2.5x further and leaning in
+    // brings them about 2x nearer. The user asked for everything half as far again back.
     private const val NEUTRAL_EYE = 80f
-    private const val NEUTRAL = 0.8f
+    private const val NEUTRAL = 1.2f
     private const val DEPTH_GAIN = 1.6f
     /** Nearest and furthest the diver comes, m. */
-    private const val NEAR = 0.4f
-    private const val FAR = 2.4f
+    private const val NEAR = 0.6f
+    private const val FAR = 3.6f
+    // The mesh tracker updates ~16 times a second with 8-17px of jitter, and the depth mapping
+    // magnifies the eye distance's. So the diver follows on critically damped springs rather than
+    // the raw track: floaty, like a skydiver, with no steps or shake. Angular frequencies, rad/s;
+    // depth is the softest, on the log of the distance so near and far ease alike.
+    private const val FOLLOW_W = 7f
+    private const val DEPTH_W = 3.2f
+    private const val TURN_W = 8f
 
     // The fall, in seconds since the scream: tumbling away, the white-out, back to the close-up
     // (hidden in the white), the white clearing, and ready to go again.
@@ -62,6 +71,11 @@ object Freefall : Filter("freefall", "Freefall", "☁️", Mode.MESH) {
         var dist = 1.5f
         var yaw = 0f
         var roll = 0f
+        var vx = 0f
+        var vy = 0f
+        var vDist = 0f
+        var vYaw = 0f
+        var vRoll = 0f
         var faceX = 0f
         var faceY = 0f
         var reachX = 0f
@@ -89,7 +103,6 @@ object Freefall : Filter("freefall", "Freefall", "☁️", Mode.MESH) {
     override fun update(d: Draw, faces: List<Face>) {
         val dt = min(d.dt, 50f) / 1000f
         val now = d.t
-        val k = min(1f, dt * 9f)
         for (f in faces) {
             val r = divers.getOrPut(f.id) { Diver().also { it.phase = (f.id * 1.9f) % TAU } }
             // A turned head shows narrower eyes; don't let that push the diver away.
@@ -97,13 +110,30 @@ object Freefall : Filter("freefall", "Freefall", "☁️", Mode.MESH) {
             val dist = debugDist
                 ?: (NEUTRAL * (NEUTRAL_EYE / (f.eyeDist / turn)).pow(DEPTH_GAIN)).coerceIn(NEAR, FAR)
             val centre = toPixels(f, 0f, f.mouth.y * 0.42f)
-            val fresh = !r.ready || now - r.seen > SHOW_MS
-            val kk = if (fresh) 1f else k
-            r.sx += (centre.x - r.sx) * kk
-            r.sy += (centre.y - r.sy) * kk
-            r.dist += (dist - r.dist) * (if (fresh) 1f else min(1f, dt * 5f))
-            r.yaw += (f.yaw * 30f - r.yaw) * kk
-            r.roll += (f.angle - r.roll) * kk
+            if (!r.ready || now - r.seen > SHOW_MS) {
+                r.sx = centre.x
+                r.sy = centre.y
+                r.dist = dist
+                r.yaw = f.yaw * 30f
+                r.roll = f.angle
+                r.vx = 0f
+                r.vy = 0f
+                r.vDist = 0f
+                r.vYaw = 0f
+                r.vRoll = 0f
+            } else {
+                r.vx += (FOLLOW_W * FOLLOW_W * (centre.x - r.sx) - 2 * FOLLOW_W * r.vx) * dt
+                r.sx += r.vx * dt
+                r.vy += (FOLLOW_W * FOLLOW_W * (centre.y - r.sy) - 2 * FOLLOW_W * r.vy) * dt
+                r.sy += r.vy * dt
+                val logDist = ln(r.dist)
+                r.vDist += (DEPTH_W * DEPTH_W * (ln(dist) - logDist) - 2 * DEPTH_W * r.vDist) * dt
+                r.dist = exp(logDist + r.vDist * dt)
+                r.vYaw += (TURN_W * TURN_W * (f.yaw * 30f - r.yaw) - 2 * TURN_W * r.vYaw) * dt
+                r.yaw += r.vYaw * dt
+                r.vRoll += (TURN_W * TURN_W * (f.angle - r.roll) - 2 * TURN_W * r.vRoll) * dt
+                r.roll += r.vRoll * dt
+            }
             r.faceX = centre.x
             r.faceY = centre.y
             r.reachX = f.eyeDist * 1.05f

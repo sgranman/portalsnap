@@ -587,9 +587,16 @@ How it's built:
 - **Placement:** the user asked for the diver to come and go as they lean in and out.
   - **Measured:** on the gen 1 Portal, a face logged at about 80px between the eyes sitting
     normally, 45px sat back, and 150px leaning in.
-  - **Mapping:** the diver is 0.8m away at 80px (the face then about 1.7× life size), and distance
-    follows the eye distance's ratio to the power 1.6, corrected for yaw. So leaning moves the
-    diver more than it moves the face: from 0.4m close up to 2.4m sat back.
+  - **Mapping:** the diver is 1.2m away at 80px, and distance follows the eye distance's ratio to
+    the power 1.6, corrected for yaw. So leaning moves the diver more than it moves the face:
+    from 0.6m close up to 3.6m sat back. The user first had it at 0.8m (0.4–2.4m), then asked for
+    it all half as far again back.
+  - **Smoothing:** the user found the tracking rough and suggested rendering at 20fps. The stats
+    said otherwise: 30fps rendering at 6–7ms a frame, but the mesh tracker (needed for `jawOpen`)
+    updating 15–19 times a second with 8–17px of jitter, which the depth mapping magnifies. So the
+    diver now follows on critically damped springs instead: position at 7 rad/s, depth at 3.2
+    rad/s on the log of the distance, turn and tilt at 8 rad/s. The face picture itself still
+    follows the live track exactly.
 - **The fall:**
   - **Trigger:** `jawOpen` above 0.5, which needs the mesh tier for blendshapes, or a poke.
   - **Motion:** divers drop along a steepening curve, tumbling about the chest. The camera
