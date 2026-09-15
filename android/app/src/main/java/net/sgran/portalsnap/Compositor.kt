@@ -35,6 +35,15 @@ private const val CAMERA_MIRRORS = true
 // How far each segmentation result moves the smoothed mask (1 = no smoothing).
 private const val MASK_SMOOTH = 0.75f
 
+// The segmenter's crop: never tighter than this share of the frame on either side; the person's
+// bounds grown by these; the model's view stretched no more than this; and the whole frame when
+// fewer than this many (every-other) mask pixels are person.
+private const val SEG_ROI_MIN = 0.4f
+private const val SEG_ROI_MARGIN_X = 1.35f
+private const val SEG_ROI_MARGIN_Y = 1.15f
+private const val SEG_ROI_MAX_STRETCH = 1.6f
+private const val SEG_ROI_MIN_PIXELS = 60
+
 /**
  * The render thread. Everything GL lives here.
  *
@@ -101,6 +110,13 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private var personMask = ByteArray(0)
     private var maskEma = FloatArray(0)
     private var maskInverted = false
+    // The part of the frame the segmenter looks at next (x, y, w, h in 0..1, y down): around the
+    // person, so the model's few pixels go to their outline instead of the room.
+    private val segRoi = floatArrayOf(0f, 0f, 1f, 1f)
+    private val cropM = FloatArray(16)
+    /** How much of the frame's width the segmenter's crop covers, 0..1. */
+    @Volatile var segCrop = 1f
+        private set
 
     private var photo: ((ByteArray?) -> Unit)? = null
 
@@ -386,13 +402,22 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR_MIPMAP_LINEAR)
         target.bind()
         GLES20.glDisable(GLES20.GL_BLEND)
-        // Flipped, so row 0 of the readback is the top of the picture.
-        drawTexture(frame.tex, Program.IDENTITY, FLIP_V)
+        // Flipped, so row 0 of the readback is the top of the picture. The segmenter gets its
+        // crop: texture u = x + s w, t = 1 - (y + v h), since row 0 must be the crop's top.
+        val crop = m == Mode.SEGMENT
+        if (crop) {
+            GlMatrix.setIdentityM(cropM, 0)
+            cropM[0] = segRoi[2]
+            cropM[5] = -segRoi[3]
+            cropM[12] = segRoi[0]
+            cropM[13] = 1f - segRoi[1]
+        }
+        drawTexture(frame.tex, Program.IDENTITY, if (crop) cropM else FLIP_V)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, frame.tex)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
         val buf = smallBuf!!
         target.read(buf)
-        tracker.submit(buf, target.w, target.h, (SystemClock.elapsedRealtimeNanos() - t0) / 1e6)
+        tracker.submit(buf, target.w, target.h, (SystemClock.elapsedRealtimeNanos() - t0) / 1e6, if (crop) segRoi else FULL_FRAME)
     }
 
     private fun composite(plan: Plan) {
@@ -653,6 +678,63 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         maskH = h
         maskAt = now
         segShare = person.toFloat() / (w * h)
+        nextSegRoi(personMask, w, h)
+    }
+
+    // Where the segmenter looks next: the person's bounds, with room to move, square in 0..1 so
+    // the crop keeps the frame's 16:9. It grows at once (an arm swinging in must not be cut off)
+    // and shrinks or pans gently. With nobody found, the whole frame.
+    private fun nextSegRoi(mask: ByteArray, w: Int, h: Int) {
+        var minX = w
+        var maxX = -1
+        var minY = h
+        var maxY = -1
+        var count = 0
+        for (y in 0 until h step 2) {
+            val row = y * w
+            for (x in 0 until w step 2) {
+                if (mask[row + x].toInt() != 0) {
+                    count++
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
+                }
+            }
+        }
+        var cw = 1f
+        var ch = 1f
+        var cx = 0f
+        var cy = 0f
+        if (count >= SEG_ROI_MIN_PIXELS) {
+            val bx0 = minX / w.toFloat()
+            val bx1 = (maxX + 2) / w.toFloat()
+            val by0 = minY / h.toFloat()
+            val by1 = (maxY + 2) / h.toFloat()
+            // Width and height apart: someone seated runs from head to the frame's bottom, and a
+            // crop that kept 16:9 would then always be the whole frame. The model's view is
+            // stretched a little instead, never by more than SEG_ROI_MAX_STRETCH.
+            cw = (bx1 - bx0) * SEG_ROI_MARGIN_X + 0.06f
+            ch = (by1 - by0) * SEG_ROI_MARGIN_Y + 0.05f
+            // Touching the crop's edge (where that isn't also the frame's edge) means part of the
+            // person may be outside it: look wider.
+            val r = segRoi
+            val e = 0.02f
+            if ((bx0 <= r[0] + e && r[0] > e) || (bx1 >= r[0] + r[2] - e && r[0] + r[2] < 1f - e)) cw *= 1.3f
+            if ((by0 <= r[1] + e && r[1] > e) || (by1 >= r[1] + r[3] - e && r[1] + r[3] < 1f - e)) ch *= 1.3f
+            cw = maxOf(cw, ch / SEG_ROI_MAX_STRETCH).coerceIn(SEG_ROI_MIN, 1f)
+            ch = maxOf(ch, cw / SEG_ROI_MAX_STRETCH).coerceIn(SEG_ROI_MIN, 1f)
+            cx = ((bx0 + bx1) / 2 - cw / 2).coerceIn(0f, 1f - cw)
+            cy = (by0 - (by1 - by0) * 0.12f - 0.03f).coerceIn(0f, 1f - ch)
+        }
+        // Grow at once (an arm swinging in must not be cut off); shrink and pan gently.
+        val kx = if (cw > segRoi[2]) 1f else 0.3f
+        val ky = if (ch > segRoi[3]) 1f else 0.3f
+        segRoi[2] += (cw - segRoi[2]) * kx
+        segRoi[3] += (ch - segRoi[3]) * ky
+        segRoi[0] = (segRoi[0] + (cx - segRoi[0]) * kx).coerceIn(0f, 1f - segRoi[2])
+        segRoi[1] = (segRoi[1] + (cy - segRoi[1]) * ky).coerceIn(0f, 1f - segRoi[3])
+        segCrop = segRoi[2]
     }
 
     // Head and shoulders only: the full portrait puts the face at ~12px of the tracker's

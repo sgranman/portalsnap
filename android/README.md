@@ -199,6 +199,17 @@ Each of these cost real time, so check here first:
   them over time (`MASK_SMOOTH`) and fixes their polarity. The `MASK` and `FX_POP_ART` shaders
   snap the soft edge to the camera image (a colour-weighted neighbourhood, then a threshold a
   little past halfway), which removes most of the halo of room around a person.
+- **The segmenter looks at the person, not the room.** Its 256x144 input is a crop around where
+  the person was (`Compositor.nextSegRoi`):
+  - The crop takes the person's bounds plus margins.
+  - Width and height are set apart, stretching the model's view by at most 1.6x, so someone
+    seated from head to frame bottom still gets a narrower crop.
+  - It grows at once when the person touches its edge, and shrinks gently.
+  - `Tracker.toFrame` lays the crop's confidence back over the whole frame on a 512x288 grid,
+    so everything downstream stays in frame space.
+  - Per-sample `FloatBuffer` reads there cost more than the model (67ms a result), so it copies
+    in bulk and precomputes per-column positions. Segmentation then takes about 18ms at
+    ~27Hz on Beach, where it was about 27ms at ~21Hz.
 - **Encoders get the decoder role.** `MediaCodec.configure(format, null, null, 0)` on any
   H.264 encoder, hardware or software, fails with -1010 after ACodec logs `Failed to set
   standard component role 'video_decoder.avc'`. Passing `CONFIGURE_FLAG_ENCODE` and an

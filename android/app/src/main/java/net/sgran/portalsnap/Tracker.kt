@@ -16,6 +16,9 @@ import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenter
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.FloatBuffer
+import kotlin.math.ceil
+import kotlin.math.floor
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -23,6 +26,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
 class TrackResult(val faces: List<FaceAnchors>, val mask: ByteArray?, val maskW: Int, val maskH: Int, val mode: Mode)
+
+/** Segmentation masks come back over the whole frame at this size, whatever crop the model saw. */
+const val MASK_GRID_W = 512
+const val MASK_GRID_H = 288
+
+val FULL_FRAME = floatArrayOf(0f, 0f, 1f, 1f)
 
 /**
  * MediaPipe on its own thread, one frame in flight — the shape of tracker.worker.js.
@@ -102,10 +111,15 @@ class Tracker(private val ctx: Context) {
         rate.clear()
     }
 
-    /** Returns false (and takes nothing) while a frame is already in flight. */
-    fun submit(rgba: ByteBuffer, w: Int, h: Int, grabMs: Double): Boolean {
+    /**
+     * Returns false (and takes nothing) while a frame is already in flight. [roi] is the part of
+     * the frame (x, y, w, h in 0..1, y down) the image shows; masks come back laid over the whole
+     * frame regardless.
+     */
+    fun submit(rgba: ByteBuffer, w: Int, h: Int, grabMs: Double, roi: FloatArray = FULL_FRAME): Boolean {
         if (busy || !ready) return false
         busy = true
+        val jobRoi = roi.copyOf()
         handler.post {
             val m = mode
             val model = current
@@ -130,13 +144,9 @@ class Tracker(private val ctx: Context) {
                         val cm = masks?.lastOrNull()
                         if (cm != null) {
                             val fb = ByteBufferExtractor.extract(cm).order(ByteOrder.nativeOrder()).asFloatBuffer()
-                            mw = cm.width
-                            mh = cm.height
-                            val out = ByteArray(mw * mh)
-                            for (i in 0 until minOf(out.size, fb.limit())) {
-                                out[i] = (fb.get(i).coerceIn(0f, 1f) * 255f).toInt().toByte()
-                            }
-                            mask = out
+                            mask = toFrame(fb, cm.width, cm.height, jobRoi)
+                            mw = MASK_GRID_W
+                            mh = MASK_GRID_H
                         }
                         masks?.forEach { it.close() }
                     }
@@ -167,6 +177,70 @@ class Tracker(private val ctx: Context) {
         }
         return true
     }
+
+    // The segmenter saw only a crop of the frame. Lay its confidence back over the whole frame on
+    // a finer grid (bilinear), so everything downstream stays in frame space and simply gets more
+    // detail where the person is. Outside the crop is room: the crop's own top corners say what
+    // room reads as, whichever way round the model's mask runs.
+    private fun toFrame(src: FloatBuffer, sw: Int, sh: Int, roi: FloatArray): ByteArray {
+        val gw = MASK_GRID_W
+        val gh = MASK_GRID_H
+        val out = ByteArray(gw * gh)
+        val n = sw * sh
+        if (src.limit() < n || sw < 2 || sh < 2) return out
+        // One bulk copy: per-sample FloatBuffer reads cost more than the model did.
+        if (conf.size < n) conf = FloatArray(n)
+        val c = conf
+        src.position(0)
+        src.get(c, 0, n)
+        val room = ((c[0] + c[sw - 1]) / 2 * 255f).coerceIn(0f, 255f).toInt().toByte()
+        java.util.Arrays.fill(out, room)
+        val ox = roi[0] * gw
+        val oy = roi[1] * gh
+        val sx = sw / (roi[2] * gw)
+        val sy = sh / (roi[3] * gh)
+        val gx0 = floor(ox).toInt().coerceIn(0, gw)
+        val gx1 = ceil(ox + roi[2] * gw).toInt().coerceIn(0, gw)
+        val gy0 = floor(oy).toInt().coerceIn(0, gh)
+        val gy1 = ceil(oy + roi[3] * gh).toInt().coerceIn(0, gh)
+        // Per-column source positions, worked out once.
+        if (colX0.size < gw) {
+            colX0 = IntArray(gw)
+            colX1 = IntArray(gw)
+            colT = FloatArray(gw)
+        }
+        for (gx in gx0 until gx1) {
+            val fx = (gx + 0.5f - ox) * sx - 0.5f
+            val ix = floor(fx).toInt()
+            colT[gx] = fx - ix
+            colX0[gx] = ix.coerceIn(0, sw - 1)
+            colX1[gx] = (ix + 1).coerceIn(0, sw - 1)
+        }
+        for (gy in gy0 until gy1) {
+            val fy = (gy + 0.5f - oy) * sy - 0.5f
+            val iy = floor(fy).toInt()
+            val ty = fy - iy
+            val r0 = iy.coerceIn(0, sh - 1) * sw
+            val r1 = (iy + 1).coerceIn(0, sh - 1) * sw
+            val row = gy * gw
+            for (gx in gx0 until gx1) {
+                val x0 = colX0[gx]
+                val x1 = colX1[gx]
+                val tx = colT[gx]
+                val top = c[r0 + x0] + (c[r0 + x1] - c[r0 + x0]) * tx
+                val bottom = c[r1 + x0] + (c[r1 + x1] - c[r1 + x0]) * tx
+                val v = (top + (bottom - top) * ty) * 255f
+                out[row + gx] = (if (v < 0f) 0f else if (v > 255f) 255f else v).toInt().toByte()
+            }
+        }
+        return out
+    }
+
+    // Scratch for toFrame, tracker thread only.
+    private var conf = FloatArray(0)
+    private var colX0 = IntArray(0)
+    private var colX1 = IntArray(0)
+    private var colT = FloatArray(0)
 
     // The segmenter runs on the CPU. On the gen 1 Portal's Adreno 540, converting its GPU
     // category mask aborts the whole process (image_frame.cc: "ImageFormat::UNKNOWN !=

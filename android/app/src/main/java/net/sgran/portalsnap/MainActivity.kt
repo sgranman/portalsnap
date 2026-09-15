@@ -644,6 +644,7 @@ class MainActivity : Activity() {
         put("beats", mic.beats)
         put("micSilent", mic.silent)
         put("segPct", r1(compositor.segShare * 100.0))
+        put("segCrop", r1(compositor.segCrop * 100.0))
         put("loadMs", JSONObject().apply { Mode.entries.forEach { m -> tracker.loadMs(m)?.let { put(m.name, it) } } })
         put("nativeHeapMB", Debug.getNativeHeapAllocatedSize() / 1_000_000)
         tracker.lastError?.let { put("error", it) }
