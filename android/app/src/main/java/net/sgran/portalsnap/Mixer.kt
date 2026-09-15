@@ -19,7 +19,7 @@ import kotlin.math.tanh
 /**
  * Everything the app plays, filter sound effects and music, is mixed here and sent two places:
  * the speaker, and the recorder, which adds the same samples to the clip after the voice
- * effect. A clip then carries the creak or the song cleanly and at its own pitch, instead of
+ * effect. A clip then carries the clink or the song cleanly and at its own pitch, instead of
  * the faint copy the mic hears in the room.
  *
  * The speaker walks each voice with its own cursor, so no sound ever loses its start. The

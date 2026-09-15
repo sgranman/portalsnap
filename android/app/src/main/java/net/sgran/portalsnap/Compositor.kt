@@ -95,6 +95,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     // Built on first use. If it ever throws (a shader the driver rejects), 3D stays off rather
     // than failing every frame after it.
     private var glassRenderer: GlassRenderer? = null
+    private var podRenderer: PodRenderer? = null
     private var glassFailed = false
 
     private var camTex = 0
@@ -566,13 +567,19 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             pPatch.drawQuad()
         }
 
-        if (plan.glasses.isNotEmpty() && !glassFailed) {
+        if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty()) && !glassFailed) {
             try {
-                val r = glassRenderer ?: GlassRenderer().also { glassRenderer = it }
-                r.draw(plan.glasses, shown.tex)
+                if (plan.glasses.isNotEmpty()) {
+                    val r = glassRenderer ?: GlassRenderer().also { glassRenderer = it }
+                    r.draw(plan.glasses, shown.tex)
+                }
+                if (plan.pods.isNotEmpty()) {
+                    val r = podRenderer ?: PodRenderer().also { podRenderer = it }
+                    r.draw(plan.pods, shown.tex)
+                }
             } catch (e: Throwable) {
                 glassFailed = true
-                Log.e(TAG, "3D glass pass failed; turning it off", e)
+                Log.e(TAG, "3D pass failed; turning it off", e)
                 GLES20.glDisable(GLES20.GL_DEPTH_TEST)
                 GLES20.glDepthMask(true)
                 GLES20.glEnable(GLES20.GL_BLEND)

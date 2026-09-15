@@ -48,23 +48,42 @@ two open questions above were answered by guessing, so check both against the vi
   crumbs, three bites finish it, and a fresh one pops in 1.3s later.
 - **Cheek puff:** no warp yet. A pair of gentle `bulge` patches on the cheeks would add one.
 
-**Peas in a Pod** (`PeasInAPod`, the "Peas" chip) is also checked only on the test portrait.
-It's a full scene like Skydive: the camera is hidden, and each pea is a circular patch of the
-head box. It uses the fast tier rather than mesh, since only the head box is needed and faces
-then follow at 30fps. It renders at 30fps with a paint time of about 4ms. Its two open
-questions were also guessed:
+**Peas in a Pod** (`PeasInAPod.kt`, the "Peas" chip) was first built in 2D, with circular face
+patches in a Canvas pod. After the user's review it was **rebuilt in real 3D** from its
+reference video (1434519407443964). What the video showed:
 
-- **Bobbing:** yes, each pea bobs and sways on its own phase. There's no time offset, which
-  would need a history of camera frames.
-- **Two children:** the peas alternate top, middle, bottom between them. With three, each gets
-  one pea.
+- **No face:** a short pod, closed round one plain pea, the lips meeting in a V and a seam below.
+- **A face arrives:** it lands on that pea. About 0.7s later the pod stretches and a second pea
+  pops in, and a third about 3s after the first. Losing the face snaps back to the closed pod.
+- **Faces:** every pea shows the live face at once, with no delay between them. The face sits in
+  a rounded window about half the pea's width, brow to chin, with pink blush on the cheeks.
+- **Tendrils:** each pea wears different yellow-green tendrils: hands meeting under the chin on
+  the top pea, arms reaching out over the pod's lips on the middle one, and on the bottom one
+  arms reaching in from the sides with Y-shaped hands spread over the eyes (peekaboo). Beside each
+  face a little heart made of two leaves grows, holds a moment, poofs away and grows back
+  nearby. At the user's word, the hearts are about as big as the bottom pea's old static one. A first guess drew lashes from the nose outward, which the user
+  rightly called weird.
+- **Scene:** a flat lime ground (#c4e665), white stars twinkling in and out (more round the
+  shadow), and a soft shadow under the floating pod. The pod turns and slides a little with the
+  head.
+- **Sound:** only voices. The original has no creak or other effects.
 
-Additions the user asked for:
+How the 3D version works (the same pass as Lemonade's glass, `Pod3D` in `Draw.pods`):
 
-- **Rocking:** the pod rocks ±6° like a cradle on a 1.8s swing, about a pivot below the frame.
-  The face patches follow the rotation, and the shadow slides under the base.
-- **Creak:** a wooden creak plays at each end of the swing, only while someone is in view.
-  It's synthesized in `Sfx.kt`.
+- **Pod:** one grid mesh bent into shape in the vertex shader: pointed ends, a pinch between
+  peas, an opening that runs down past the last pea and closes into a seam, a thickness, and
+  rolled lips. Its length is a uniform, so it stretches on a spring as peas arrive. Normals come
+  from neighbouring points, so the lighting follows every bulge.
+- **Peas:** spheres that pop in past full size and settle, bob and wobble. The face is laid on
+  each sphere's front in its own coordinates, so it turns with the pea.
+- **Tendrils:** round-ended tubes rebuilt every frame from a few control points, so hands wave,
+  arms swing and the peekaboo hands peek.
+- **Kept from the 2D version:** the cradle rock the user asked for (now ±5° on a 3s swing), and
+  two people taking turns down the pod.
+- **Cost:** 30fps on the test portrait, frames about 11ms, paint about 5.5ms.
+- **No sound:** the 2D version creaked at each end of the swing. The user found it bad, and
+  after hearing synthesized stick-slip replacements (cradle, rope, hinge, floorboard, knock)
+  asked for no creak at all, which matches the original.
 
 Every app sound, effects and music alike, plays through `Mixer.kt`. The mixer feeds the speaker
 and also adds the same samples to recordings after the voice effect, matched to the mic's
@@ -142,7 +161,6 @@ the tilt, and draw order standing in for depth. It now works like this:
   liquid's front in 3D and drawn flat over the pass.
 - **Fallback:** if the pass throws (for example a shader the driver rejects), it logs once and
   turns 3D off rather than failing every frame.
-- **Arms:** bendy arms with mitten hands. On each pea one arm waves and the other swings.
 
 ## The effects
 

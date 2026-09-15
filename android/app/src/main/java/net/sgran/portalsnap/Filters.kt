@@ -107,6 +107,8 @@ class Draw(val pen: Pen) {
     val patches = ArrayList<Patch>()
     /** Real 3D glasses, drawn after the patches and before the over layer. */
     val glasses = ArrayList<Glass3D>()
+    /** Real 3D pea pods, drawn at the same point as glasses. */
+    val pods = ArrayList<Pod3D>()
     /** Segment tier: the latest person mask (1 person, 0 not), maskW x maskH, top row first. */
     var mask: ByteArray? = null
     var maskW = 0

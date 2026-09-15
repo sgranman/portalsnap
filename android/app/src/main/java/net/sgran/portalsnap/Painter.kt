@@ -99,6 +99,7 @@ class Plan {
     var fx: FrameFx? = null
     var patches: List<Patch> = emptyList()
     var glasses: List<Glass3D> = emptyList()
+    var pods: List<Pod3D> = emptyList()
 
     fun reset() {
         composite = false
@@ -109,6 +110,7 @@ class Plan {
         fx = null
         patches = emptyList()
         glasses = emptyList()
+        pods = emptyList()
     }
 }
 
@@ -171,6 +173,7 @@ class Painter {
             draw.dt = dt
             draw.patches.clear()
             draw.glasses.clear()
+            draw.pods.clear()
             val m = mic
             draw.level = m?.level ?: 0f
             draw.beat = m?.beatPulse(now) ?: 0f
@@ -235,6 +238,8 @@ class Painter {
                     plan.under = true
                     plan.over = true
                     plan.patches = ArrayList(draw.patches)
+                    plan.glasses = ArrayList(draw.glasses)
+                    plan.pods = ArrayList(draw.pods)
                     return plan
                 }
                 idle(under, over)
@@ -282,6 +287,7 @@ class Painter {
             plan.over = f.usesOver
             plan.patches = ArrayList(draw.patches)
             plan.glasses = ArrayList(draw.glasses)
+            plan.pods = ArrayList(draw.pods)
             return plan
         } finally {
             paintMs.add((SystemClock.elapsedRealtimeNanos() - t0) / 1e6)

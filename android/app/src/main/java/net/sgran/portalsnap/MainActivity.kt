@@ -713,6 +713,8 @@ class MainActivity : Activity() {
         i.getStringExtra("filter")?.let { id -> selectFilter(FILTERS.firstOrNull { it.id == id }) }
         if (i.hasExtra("hud")) hud.visibility = if (i.getBooleanExtra("hud", false)) View.VISIBLE else View.GONE
         i.getStringExtra("music")?.let { playMusic(it) }
+        // Sound check: `--es sfx clink1` plays one effect.
+        i.getStringExtra("sfx")?.let { Sfx.play(it) }
         // Where the segmenter runs: cpu, gpu or auto (GPU unless it failed before). Takes effect
         // the next time the app starts, and forgets any earlier GPU failure.
         i.getStringExtra("segDelegate")?.let {
