@@ -52,6 +52,8 @@ class MainActivity : Activity() {
     @Volatile private var musicToken = 0
     // The selected filter's own soundtrack (Filter.music).
     private var soundtrackVoice = 0
+    private var ambienceName: String? = null
+    private var ambienceVoice = 0
     private var soundtrackName: String? = null
     private val soundtracks = HashMap<String, Mixer.Clip>()
     private val ui = Handler(Looper.getMainLooper())
@@ -152,6 +154,7 @@ class MainActivity : Activity() {
         syncSource()
         syncMic()
         syncSoundtrack()
+        syncAmbience()
         captures.uploadPending()
     }
 
@@ -166,6 +169,9 @@ class MainActivity : Activity() {
         soundtrackName = null
         soundtrackVoice = 0
         Soundtrack.startedNs = 0L
+        ambienceName = null
+        ambienceVoice = 0
+        ui.removeCallbacks(retryAmbience)
         ui.removeCallbacks(retryCamera)
         camera.close()
         openedCamera = false
@@ -452,6 +458,7 @@ class MainActivity : Activity() {
         painter.active = f
         syncMic()
         syncSoundtrack()
+        syncAmbience()
         if (f == null || f.tier == tracker.mode || trackerBroken) return
         if (tracker.loadMs(f.tier) == null) {
             hint(if (f.tier == Mode.SEGMENT) "Off to the ${f.name}…" else "Getting ${f.name} ready…", 2500)
@@ -489,6 +496,23 @@ class MainActivity : Activity() {
                 Soundtrack.startedNs = System.nanoTime()
             }
         }.start()
+    }
+
+    // The selected filter's ambience (Freefall's wind), looped through Mixer while the app is in
+    // front, so it's baked into clips too. Sfx synthesizes at startup, so a try before the sound is
+    // ready comes back for another go.
+    private val retryAmbience = Runnable { syncAmbience() }
+
+    private fun syncAmbience() {
+        ui.removeCallbacks(retryAmbience)
+        val want = if (resumed) painter.active?.ambience else null
+        if (want == ambienceName && (want == null || ambienceVoice != 0)) return
+        Mixer.stop(ambienceVoice)
+        ambienceVoice = 0
+        ambienceName = want
+        if (want == null) return
+        ambienceVoice = Sfx.loop(want, 0.45f)
+        if (ambienceVoice == 0) ui.postDelayed(retryAmbience, 500)
     }
 
     // A track for the music-reactive effects, from adb for now:
@@ -769,6 +793,7 @@ class MainActivity : Activity() {
         }
         if (i.hasExtra("jaw")) painter.debugJaw = i.getFloatExtra("jaw", -1f).takeIf { it >= 0f }
         if (i.hasExtra("rideDist")) BikeRide.debugDist = i.getFloatExtra("rideDist", -1f).takeIf { it > 0f }
+        if (i.hasExtra("fallDist")) Freefall.debugDist = i.getFloatExtra("fallDist", -1f).takeIf { it > 0f }
         when (i.getStringExtra("action")) {
             "photo" -> takePhoto()
             "poke" -> painter.active?.poke()

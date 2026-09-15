@@ -41,6 +41,19 @@ the pairing page ships no encoder, it just asks `/auth/qr.svg` for one.
 
 "QR Code" is a registered trademark of DENSO WAVE INCORPORATED.
 
+## USDA NAIP aerial photograph — public domain
+
+`android/app/src/main/assets/ground/farmland.jpg` is Freefall's ground: a crop of one 2022
+National Agriculture Imagery Program tile of New York State (`m_4207421_ne_18_060_20221029`),
+scaled to 2048×2048. NAIP imagery is a work of the U.S. Department of Agriculture and is in
+the public domain; the source asks for courtesy attribution:
+
+> USDA Farm Service Agency, Aerial Photography Field Office, via the NOAA Office for Coastal
+> Management's Digital Coast (NY_NAIP_2022_9986).
+
+Fetched from Wikimedia Commons:
+<https://commons.wikimedia.org/wiki/File:2022_USDA_NAIP_4-Band_8_Bit_Imagery,_New_York_%E2%80%93_m_4207421_ne_18_060_20221029.tif>
+
 ## Development-only
 
 `puppeteer-core` (Apache-2.0) drives the browser tests. It is a

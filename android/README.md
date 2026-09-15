@@ -210,6 +210,7 @@ $A --es filter monster --es action poke         # poke = a stage tap (Monster/Cu
 $A --es music /sdcard/Android/data/net.sgran.portalsnap/files/beat120.wav   # loop a track for Disco / Pop Art (baked into clips); "stop" stops
 $A --ef jaw 0.8                                 # force jawOpen on test faces (Hearts, Monster's mouth); negative clears
 $A --es filter bike --ef rideDist 1.6           # Bike Ride: hold every rider this many metres away (the portrait never moves); negative clears
+$A --es filter freefall --ef fallDist 0.75      # Freefall: hold every diver this far away; poke (or --ef jaw 0.8) makes them fall
 $A --es server https://portalsnap.example.net   # set the server
 $A --ei rot 180                                 # override camera rotation
 $A --ez bench true                              # the bench above; results in files/bench-*.json and logcat PSNAP_BENCH
