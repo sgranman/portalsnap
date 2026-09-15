@@ -377,6 +377,15 @@ It works on two children at once.
   after the head moves.
 - **Question:** did the hearts come out only while the mouth was open, or was the stream always
   on and just stronger when open?
+- **Sound (added at the user's request, 2026-09-15):** for as long as hearts are pouring out, a
+  bright little piano walks down the white keys from C6 to C4. It plays one note every 85ms and
+  goes back to the top when it runs out of keyboard, or after the mouths have been shut for
+  0.4s. Every note is synthesized at its own pitch in `Sfx` (`key0`–`key14`, a few stretched
+  partials and a hammer tick). None is pitch-shifted, so it all stays in C major. It's baked
+  into clips.
+  - **First version:** a five-note run every 1.6s with a slight random pitch. The user found it
+    too short, and it drifted out of key.
+  - **Reference:** the video's own notes couldn't be picked out from under the voices.
 
 ### 6. Hamster
 A hamster or mouse face:
@@ -393,6 +402,24 @@ It works on two children at once.
   - **Carrot and paws:** anchored below the mouth, moving with it.
 - **Questions:** did the carrot move, as if being eaten or nibbled when the mouth moved? Were the
   cheeks puffed too, as a warp?
+
+**Props rebuilt in real 3D** (`Hamster3D.kt`) from the reference video (589562750311569), where
+they look like soft 3D renders:
+
+- **Ears:** half moons at the top corners of the head: tall fuzzy brown cups, cut flat where they meet
+  the head, with pink linings turned in toward the face. The fur is fine, soft and fuzzy at its
+  edges.
+- **Nose:** a glossy pink rounded triangle.
+- **Carrot:** chubby, with ridges, and a three-leaf clover at its wide end. The bites cut
+  scalloped chunks off its tip in the shader, showing the paler inside.
+- **Paws:** each a mitten of three fat, rounded fingers, stacked and bunched, curling over the
+  carrot's front, with a pink palm behind and a fuzzy brown back showing at the outer edge. The
+  user rejected the first egg shapes. They keep holding the leaves once the carrot is gone.
+
+All of the props are meshes in the View3D pass, sharing one shader with fur speckle, gloss and
+ridges. The blush (wide soft pink ovals) and the whiskers (two short ones a side) stay flat,
+drawn under the props. The bite mechanics are unchanged. On the test portrait it runs at 30fps,
+about 10ms a frame.
 
 ### 7. Pink Palace
 The room replaced by a dreamy pastel-pink architectural interior: arched windows, a staircase,

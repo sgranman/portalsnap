@@ -112,6 +112,8 @@ class Draw(val pen: Pen) {
     val rides = ArrayList<Ride3D>()
     /** Freefall's sky and divers, drawn at the same point as glasses. */
     val falls = ArrayList<Fall3D>()
+    /** Hamster's 3D props, drawn at the same point as glasses. */
+    val hamsters = ArrayList<Hamster3D>()
     /** Segment tier: the latest person mask (1 person, 0 not), maskW x maskH, top row first. */
     var mask: ByteArray? = null
     var maskW = 0
