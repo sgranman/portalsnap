@@ -40,6 +40,26 @@ to the repo on purpose, so a discontinued device never depends on a CDN staying 
 | [LICENSE](LICENSE) | MIT |
 | [test/README.md](test/README.md) | `npm test` for the pure-maths tests, Puppeteer for the rest |
 
+## Make your own filter
+
+PortalSnap is built to be added to, and a new filter is one self-contained piece of code: it gets
+the faces in the picture and draws. The toolkit covers flat stickers, particles, camera zooms,
+full-frame shaders, real 3D props and scenes, cut-out backdrops and synthesized sound, and every
+shipped filter is a working example of one or more of them. The debug build can feed a test
+portrait through the pipeline instead of the camera, so a filter can be built and checked from a
+desk over Wi-Fi adb.
+
+There are two ways in:
+
+- **With a coding agent:** brief it with what the effect should do and a reference video, give it
+  adb access to a Portal, and let it build, screenshot, compare and iterate while you make the
+  calls. Every Photo Booth rebuild in this repo was made this way.
+- **By hand:** copy the nearest existing filter, give it a new id, and iterate against the test
+  portrait.
+
+[MAKING-FILTERS.md](MAKING-FILTERS.md) walks through the filter contract, the toolkit, testing,
+both workflows, and sharing what you make.
+
 ## How to read the rest of this
 
 What follows is the build journal, roughly in the order it happened: what the device turned
