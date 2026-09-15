@@ -78,6 +78,8 @@ class MainActivity : Activity() {
     private lateinit var captures: Captures
     private lateinit var gear: TextView
     private val chips = ArrayList<Pair<Filter?, LinearLayout>>()
+    private lateinit var placeBar: HorizontalScrollView
+    private lateinit var placeRow: LinearLayout
 
     private var cameraTexture: SurfaceTexture? = null
     private var openedCamera = false
@@ -114,6 +116,8 @@ class MainActivity : Activity() {
         painter.mic = mic
         Sfx.init()
         rotOverride = getSharedPreferences("device", MODE_PRIVATE).getInt("rot", -1).takeIf { it >= 0 }
+        Places.assets = assets
+        Places.current = getSharedPreferences("places", MODE_PRIVATE).getInt("place", 0).coerceIn(0, Places.PLACES.size - 1)
         buildUi()
 
         compositor.start(this) { st -> ui.post { cameraTexture = st; syncSource() } }
@@ -124,7 +128,7 @@ class MainActivity : Activity() {
                 trackerBroken = !ok
             }
         }
-        // Loaded on their own thread: the first tap on the puppy or the beach is instant.
+        // Loaded on their own thread: the first tap on the puppy or on Places is instant.
         tracker.preload(Mode.MESH, Mode.SEGMENT)
 
         // Storage is for kept photos and clips, in the shared Pictures and Movies folders. Android 9
@@ -337,6 +341,20 @@ class MainActivity : Activity() {
         }
         stage.addView(gear, lp(dp(60), dp(60), Gravity.TOP or Gravity.END).apply { rightMargin = dp(18); topMargin = dp(18) })
 
+        // Places' second row: where to go, over the bottom of the picture while Places is on.
+        placeRow = LinearLayout(this).apply { setPadding(dp(14), dp(10), dp(14), dp(12)) }
+        for ((i, place) in Places.PLACES.withIndex()) {
+            placeRow.addView(placeChip(i, place), LinearLayout.LayoutParams(dp(96), dp(76)).apply { if (i > 0) leftMargin = dp(8) })
+        }
+        placeBar = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(170, 0, 0, 0), Color.TRANSPARENT))
+            addView(placeRow)
+            visibility = View.GONE
+        }
+        stylePlaces()
+        stage.addView(placeBar, lp(MATCH, WRAP, Gravity.BOTTOM))
+
         loadMsg = label("Waking up the camera…", 22f, Palette.DIM).apply { gravity = Gravity.CENTER }
         loader = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -359,9 +377,11 @@ class MainActivity : Activity() {
         val bar = LinearLayout(this).apply {
             setBackgroundColor(Palette.BAR)
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setPadding(dp(14), dp(4), dp(14), dp(4))
         }
-        val strip = LinearLayout(this)
+        // Room above and below the chips inside the scroller, which clips: the selected chip rises
+        // 3dp, and its outline used to lose its top edge against the bar.
+        val strip = LinearLayout(this).apply { setPadding(0, dp(6), 0, dp(6)) }
         strip.addView(chip(null, "🚫", "None"))
         for (f in FILTERS) {
             strip.addView(chip(f, emojiOr(f.emoji, EMOJI_FALLBACK[f.id] ?: "✨"), f.name), LinearLayout.LayoutParams(dp(96), dp(96)).apply { leftMargin = dp(10) })
@@ -406,6 +426,30 @@ class MainActivity : Activity() {
         }
         chips += Pair(f, c)
         return c
+    }
+
+    private fun placeChip(i: Int, place: Places.Place) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        addView(label(emojiOr(place.emoji, "📍"), 28f).apply { gravity = Gravity.CENTER; includeFontPadding = false })
+        addView(label(place.name, 12f, Palette.DIM, bold = true).apply { gravity = Gravity.CENTER })
+        setOnClickListener { selectPlace(i) }
+    }
+
+    private fun stylePlaces() {
+        for (k in 0 until placeRow.childCount) {
+            val c = placeRow.getChildAt(k) as LinearLayout
+            val on = k == Places.current
+            c.background = rounded(if (on) Palette.CHIP_ON else Color.argb(160, 25, 27, 38), dp(18).toFloat(), dp(3), if (on) Palette.ACCENT else Color.TRANSPARENT)
+            (c.getChildAt(1) as TextView).setTextColor(if (on) Color.WHITE else Palette.DIM)
+        }
+    }
+
+    // Remembered, so Places opens where it was left.
+    private fun selectPlace(i: Int) {
+        Places.current = i
+        getSharedPreferences("places", MODE_PRIVATE).edit().putInt("place", i).apply()
+        stylePlaces()
     }
 
     private fun styleChips(active: Filter?) {
@@ -455,13 +499,14 @@ class MainActivity : Activity() {
 
     private fun selectFilter(f: Filter?) {
         styleChips(f)
+        placeBar.visibility = if (f === Places) View.VISIBLE else View.GONE
         painter.active = f
         syncMic()
         syncSoundtrack()
         syncAmbience()
         if (f == null || f.tier == tracker.mode || trackerBroken) return
         if (tracker.loadMs(f.tier) == null) {
-            hint(if (f.tier == Mode.SEGMENT) "Off to the ${f.name}…" else "Getting ${f.name} ready…", 2500)
+            hint("Getting ${f.name} ready…", 2500)
         }
         tracker.select(f.tier) { ok -> if (!ok) ui.post { hint("${f.name} is having a nap", 2500) } }
     }
@@ -775,6 +820,8 @@ class MainActivity : Activity() {
             syncSource()
         }
         i.getStringExtra("filter")?.let { id -> selectFilter(FILTERS.firstOrNull { it.id == id }) }
+        // `--es place moon`: which of Places' places.
+        i.getStringExtra("place")?.let { id -> Places.PLACES.indexOfFirst { it.id == id }.takeIf { it >= 0 }?.let { selectPlace(it) } }
         if (i.hasExtra("hud")) hud.visibility = if (i.getBooleanExtra("hud", false)) View.VISIBLE else View.GONE
         i.getStringExtra("music")?.let { playMusic(it) }
         // Sound check: `--es sfx clink1` plays one effect.
@@ -834,20 +881,20 @@ class MainActivity : Activity() {
             Phase("A camera: tracker only (fast)", 0, null, false),
             Phase("B camera: shades (fast)", 0, "shades", false),
             Phase("D camera: puppy (mesh)", 0, "dog", false),
-            Phase("F camera: skydive (fast)", 0, "skydiver", false),
-            Phase("G camera: beach (segment)", 0, "beach", false),
+            Phase("F camera: bike ride (fast)", 0, "bike", false),
+            Phase("G camera: places (segment)", 0, "places", false),
             Phase("H camera: puppy while recording", 0, "dog", true),
-            Phase("I camera: beach while recording", 0, "beach", true),
+            Phase("I camera: places while recording", 0, "places", true),
         ) else listOf(
             Phase("A tracker only, no filter", source, null, false),
             Phase("B shades, 1 face (fast)", source, "shades", false),
             Phase("C shades, 2 faces (fast)", source * 2, "shades", false),
             Phase("D puppy, 1 face (mesh)", source, "dog", false),
             Phase("E puppy, 2 faces (mesh)", source * 2, "dog", false),
-            Phase("F skydive, 2 faces", source * 2, "skydiver", false),
-            Phase("G beach (segment)", source, "beach", false),
+            Phase("F bike ride, 2 faces", source * 2, "bike", false),
+            Phase("G places (segment)", source, "places", false),
             Phase("H puppy while recording", source, "dog", true),
-            Phase("I beach while recording", source, "beach", true),
+            Phase("I places while recording", source, "places", true),
             Phase("J camera, no filter", 0, null, false),
             Phase("K camera, puppy", 0, "dog", false),
         )
@@ -904,6 +951,6 @@ class MainActivity : Activity() {
         const val CAMERA_RETRY_MS = 3000L
 
         // Android 9's emoji font predates some filters' emoji.
-        val EMOJI_FALLBACK = mapOf("skydiver" to "🎈", "mirror" to "👯", "disco" to "✨")
+        val EMOJI_FALLBACK = mapOf("mirror" to "👯", "disco" to "✨")
     }
 }

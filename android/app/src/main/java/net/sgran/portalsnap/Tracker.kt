@@ -37,7 +37,7 @@ val FULL_FRAME = floatArrayOf(0f, 0f, 1f, 1f)
  * MediaPipe on its own thread, one frame in flight — the shape of tracker.worker.js.
  *
  * Unlike the web app, models are kept once loaded: the gen 1 Portal has 3.8GB and the
- * native runtime has no WASM heap to fit into, so switching from the puppy to the beach
+ * native runtime has no WASM heap to fit into, so switching from the puppy to Places
  * and back costs nothing after the first time. They load on a separate thread so a
  * preload never stalls detection.
  */

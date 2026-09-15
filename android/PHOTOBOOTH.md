@@ -20,7 +20,7 @@ filters where that works, or a supplied image where a photographic look is the p
 | 4 | Monster / Cutie | 936589334645536 | mesh + blendshapes | Canvas doodles, switched by expression | small–medium |
 | 5 | Pixel Hearts | 483283294836303 | mesh + blendshapes | Canvas sprites + particles from an open mouth | medium |
 | 6 | Hamster | 589562750311569 | mesh | eye-enlarge warp patch + soft "3D" props | medium |
-| 7 | Pink Palace | (screenshot 103721) | segment | backdrop image + person cut-out | small, plus art |
+| 7 | Pink Palace | (screenshot 103721) | segment | person cut-out over a picture of a chosen place (built as Places) | small, plus art |
 | 8 | Lemonade | (screenshot 103801) | mesh | face patch warped into a glass, tinted and blurred | medium |
 | 9 | Peas in a Pod | 1434519407443964 | mesh | the face cloned into three peas | medium |
 | 10 | Bike Ride | 3745986732290546 | fast | real 3D park, riders and helmets, face on the head (built) | medium–large |
@@ -398,10 +398,31 @@ It works on two children at once.
 The room replaced by a dreamy pastel-pink architectural interior: arched windows, a staircase,
 bookshelves on a mezzanine, a vase of flowers. The children appear as cut-outs pasted into it,
 head and shoulders, with slightly rough blob-shaped edges and a faint pink colour grade.
-- **Build:** segmentation tier, the same mechanism as Beach, Palace and Moon. Its look is
-  photographic, though, so it needs a backdrop *image* rather than vector art: one the family
-  picks or makes, or an openly licensed render.
-- **Questions:** were there other rooms or scenes in the same effect? Did the backdrop move?
+
+**Built as Places** (`Places.kt`, the "Places" chip). At the user's request it became a set of
+places rather than the one palace, which isn't among them:
+
+- **The places:** Castle, Forest, Waterfall, Circus, Yacht, Beach, North Pole and Moon. They're
+  picked from a second row of chips shown over the bottom of the picture while Places is on,
+  and the choice is remembered between launches.
+- **Pictures:** public-domain and CC0 art from Wikimedia Commons. For each place, the
+  best-looking backdrop was chosen, whether photo, painting or poster, and cropped to the frame
+  (1280×720) so its subject sits beside where the person stands. They're credited in
+  `THIRD-PARTY.md`.
+  - **Castle:** Neuschwanstein, a photochrom print from about 1890–1900.
+  - **Forest:** a sunlit forest path.
+  - **Waterfall:** Tivadar Csontváry Kosztka's *Waterfall of Jajce* (1903).
+  - **Circus:** Cândido de Faria's *Le Cirque Miniature*, a 1908 Pathé poster.
+  - **Yacht:** at the helm of a boat, off an island.
+  - **Beach:** a linen postcard of Palm Beach, Florida.
+  - **North Pole:** three polar bears by a submarine surfaced near the Pole (U.S. Navy).
+  - **Moon:** Harrison Schmitt at Tracy's Rock, on Apollo 17 (NASA).
+- **How:** the segmentation tier's person mask pastes the camera over the picture, which is
+  drawn into the under layer as a bitmap. Pictures decode on first use, and the last two stay
+  loaded.
+- **Replaced:** the old drawn Beach, Palace and Moon backdrops are gone, and so is the cartoon
+  Skydive filter, which Freefall supersedes.
+- **Testing:** `--es place moon` picks a place.
 
 ### 8. Lemonade
 The face appears inside a glass of pink lemonade, seen through the liquid: tinted pink, softly
