@@ -91,7 +91,9 @@ jobs:
           fi
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee certs.txt
-          CERT=$(grep -m1 "certificate SHA-256 digest" certs.txt | awk -F': ' '{print $2}')
+          # The line reads "Signer #1 certificate SHA-256 digest: <hex>" (or "V2 Signer: ..."), so
+          # take what follows the digest label rather than a field count.
+          CERT=$(sed -n 's/.*certificate SHA-256 digest: //p' certs.txt | head -1)
           mkdir dist
           cp "$APK" "dist/PortalSnap-$V.apk"
           (cd dist && sha256sum "PortalSnap-$V.apk" > SHA256SUMS.txt)
