@@ -142,7 +142,7 @@ adb shell pm install -r -g /data/local/tmp/portalsnap.apk
 - **Push, then install:** a streamed `adb install` hung for over 30 minutes on the gen 1 Portal.
 - **Updates** install the same way, over the top. Photos, clips, settings and pairing all stay.
 - **From a debug build:** debug builds are signed with a different key, so the first release
-  needs `adb uninstall net.sgran.portalsnap` before it. That forgets the server pairing and
+  needs `adb uninstall net.sgransoft.portalsnap` before it. That forgets the server pairing and
   settings. Photos and clips in Pictures and Movies stay.
 
 Photos go to `/sdcard/Pictures/PortalSnap` and clips to `/sdcard/Movies/PortalSnap`, and
@@ -184,10 +184,10 @@ export JAVA_HOME=~/Development/portal-tools/jdk17 ANDROID_HOME=~/Development/por
 ./tools/fetch-test-assets.sh           # once: the debug build's test portrait (not committed)
 ./gradlew assembleDebug
 adb -s 192.168.1.77:5555 install -r app/build/outputs/apk/debug/app-debug.apk
-adb -s 192.168.1.77:5555 shell pm grant net.sgran.portalsnap android.permission.CAMERA
-adb -s 192.168.1.77:5555 shell pm grant net.sgran.portalsnap android.permission.RECORD_AUDIO
-adb -s 192.168.1.77:5555 shell pm grant net.sgran.portalsnap android.permission.READ_EXTERNAL_STORAGE
-adb -s 192.168.1.77:5555 shell pm grant net.sgran.portalsnap android.permission.WRITE_EXTERNAL_STORAGE
+adb -s 192.168.1.77:5555 shell pm grant net.sgransoft.portalsnap android.permission.CAMERA
+adb -s 192.168.1.77:5555 shell pm grant net.sgransoft.portalsnap android.permission.RECORD_AUDIO
+adb -s 192.168.1.77:5555 shell pm grant net.sgransoft.portalsnap android.permission.READ_EXTERNAL_STORAGE
+adb -s 192.168.1.77:5555 shell pm grant net.sgransoft.portalsnap android.permission.WRITE_EXTERNAL_STORAGE
 ```
 
 Grant both storage permissions: Android 9 only mounts shared storage writable for an app that
@@ -201,13 +201,13 @@ holds read as well as write. With write alone, saving to Pictures fails.
 Everything a finger can do is also an intent extra:
 
 ```bash
-A="adb -s 192.168.1.77:5555 shell am start -n net.sgran.portalsnap/.MainActivity"
+A="adb -s 192.168.1.77:5555 shell am start -n net.sgransoft.portalsnap/.MainActivity"
 $A --ei faces 1 --es filter dog --ez hud true   # test portrait instead of the camera (debug builds)
 $A --ei faces 2 --es filter bike                # two portraits
 $A --ei faces 0                                 # back to the camera
 $A --es action photo|record|stop|keep|again|album|settings|pair|close|poke
 $A --es filter monster --es action poke         # poke = a stage tap (Monster/Cutie flips)
-$A --es music /sdcard/Android/data/net.sgran.portalsnap/files/beat120.wav   # loop a track for Disco / Pop Art (baked into clips); "stop" stops
+$A --es music /sdcard/Android/data/net.sgransoft.portalsnap/files/beat120.wav   # loop a track for Disco / Pop Art (baked into clips); "stop" stops
 $A --ef jaw 0.8                                 # force jawOpen on test faces (Hearts, Monster's mouth); negative clears
 $A --es filter bike --ef rideDist 1.6           # Bike Ride: hold every rider this many metres away (the portrait never moves); negative clears
 $A --es filter freefall --ef fallDist 0.75      # Freefall: hold every diver this far away; poke (or --ef jaw 0.8) makes them fall
