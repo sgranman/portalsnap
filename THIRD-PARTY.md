@@ -54,6 +54,23 @@ the public domain; the source asks for courtesy attribution:
 Fetched from Wikimedia Commons:
 <https://commons.wikimedia.org/wiki/File:2022_USDA_NAIP_4-Band_8_Bit_Imagery,_New_York_%E2%80%93_m_4207421_ne_18_060_20221029.tif>
 
+## Places backdrops — public domain and CC0
+
+The eight pictures in `android/app/src/main/assets/places/` are Places' backdrops, each cropped
+and scaled to 1280×720 from a file on Wikimedia Commons. All are in the public domain or
+dedicated to it under CC0, so none requires attribution; they are credited here anyway.
+
+| File | Picture | Author | Status | Source |
+|---|---|---|---|---|
+| `castle.jpg` | Neuschwanstein Castle, photochrom print (c. 1890–1900, Library of Congress) | unknown | public domain | <https://commons.wikimedia.org/wiki/File:Neuschwanstein_Castle_LOC_print_rotated.jpg> |
+| `forest.jpg` | Forest Path Sunset | 44833 (Pixabay) | CC0 | <https://commons.wikimedia.org/wiki/File:Forest_Path_Sunset.jpg> |
+| `waterfall.jpg` | Mossy rock mountain and waterfall, Iceland (Unsplash) | Jacek Smoter | CC0 | <https://commons.wikimedia.org/wiki/File:Mossy_rock_mountain_and_waterfall_(Unsplash).jpg> |
+| `circus.jpg` | Chimelong International Circus arena (2025) | Renek78 | CC0 | <https://commons.wikimedia.org/wiki/File:2025_Chimelong_International_Circus_05.jpg> |
+| `yacht.jpg` | Sailing at sunset (Unsplash) | Alin Meceanu | CC0 | <https://commons.wikimedia.org/wiki/File:Alin_Meceanu_2014_(Unsplash).jpg> |
+| `beach.jpg` | Colourful beach huts on a beach (Unsplash) | Arno Smit | CC0 | <https://commons.wikimedia.org/wiki/File:Colorful_beach_huts_on_beach_(Unsplash).jpg> |
+| `northpole.jpg` | Arctic fox in snow (Unsplash) | Jonatan Pie | CC0 | <https://commons.wikimedia.org/wiki/File:Arctic_fox_in_snow_(Unsplash).jpg> |
+| `moon.jpg` | Earthrise, Apollo 8 (NASA, AS08-14-2383) | Bill Anders | public domain | <https://commons.wikimedia.org/wiki/File:Earth-moon.jpg> |
+
 ## Development-only
 
 `puppeteer-core` (Apache-2.0) drives the browser tests. It is a

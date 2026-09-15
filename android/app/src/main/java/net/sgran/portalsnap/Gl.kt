@@ -233,8 +233,8 @@ object Shaders {
     """
 
     // A region of the frame, resampled through an affine map and cut to a feathered
-    // ellipse. Big Head's zoomed head and the skydiver's face in his helmet are both
-    // this. Works in frame pixels with y down, like the filters do.
+    // ellipse. Big Head's zoomed head is this, and Lemonade's glass is a shaped variant.
+    // Works in frame pixels with y down, like the filters do.
     const val PATCH = """
         precision highp float;
         uniform sampler2D uTexture;

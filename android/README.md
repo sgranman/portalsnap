@@ -203,7 +203,7 @@ Everything a finger can do is also an intent extra:
 ```bash
 A="adb -s 192.168.1.77:5555 shell am start -n net.sgran.portalsnap/.MainActivity"
 $A --ei faces 1 --es filter dog --ez hud true   # test portrait instead of the camera (debug builds)
-$A --ei faces 2 --es filter skydiver            # two portraits
+$A --ei faces 2 --es filter bike                # two portraits
 $A --ei faces 0                                 # back to the camera
 $A --es action photo|record|stop|keep|again|album|settings|pair|close|poke
 $A --es filter monster --es action poke         # poke = a stage tap (Monster/Cutie flips)
@@ -211,6 +211,7 @@ $A --es music /sdcard/Android/data/net.sgran.portalsnap/files/beat120.wav   # lo
 $A --ef jaw 0.8                                 # force jawOpen on test faces (Hearts, Monster's mouth); negative clears
 $A --es filter bike --ef rideDist 1.6           # Bike Ride: hold every rider this many metres away (the portrait never moves); negative clears
 $A --es filter freefall --ef fallDist 0.75      # Freefall: hold every diver this far away; poke (or --ef jaw 0.8) makes them fall
+$A --es filter places --es place moon          # Places: castle, forest, waterfall, circus, yacht, beach, northpole or moon
 $A --es server https://portalsnap.example.net   # set the server
 $A --ei rot 180                                 # override camera rotation
 $A --ez bench true                              # the bench above; results in files/bench-*.json and logcat PSNAP_BENCH
@@ -309,7 +310,6 @@ Each of these cost real time, so check here first:
 - **One AudioRecord at a time.** Android 9 hands the mic to a single client, and both the
   beat-reactive filters and the recorder want it. `MicHub` owns the one `AudioRecord` and feeds
   every block to both.
-- **No parachute emoji.** Android 9's emoji font has no 🪂, so the Skydive chip falls back to 🎈.
 - **Bulk transfers stall over USB.** Through usbipd into WSL, small adb commands work but
   large file transfers hang. Use adb over Wi-Fi: run `adb tcpip 5555` once over USB, then
   `adb connect`. It lasts until the Portal reboots.
@@ -326,7 +326,7 @@ Each of these cost real time, so check here first:
    - the preview is upright and mirrored like a mirror
    - stickers land on the face (try Cool, Puppy with the mouth open, Fancy, Big Head)
    - two people get two stickers
-   - Beach cuts a real person out cleanly
+   - Places cuts a real person out cleanly
 3. **Run `--ez bench true`** with a face in view. Rows J and K then measure the real camera
    with a real face.
 4. **Pair with the real server:** tap 🖼️, type its URL, and approve from a phone.
