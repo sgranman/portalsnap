@@ -9,11 +9,10 @@ on:
       - "android/**"
       - "public/models/**"
       - ".github/workflows/android.yml"
+  # Every pull request into main, whatever it touches: main's ruleset requires this check, and a
+  # path filter would leave a web-only pull request waiting on a check that never runs.
   pull_request:
-    paths:
-      - "android/**"
-      - "public/models/**"
-      - ".github/workflows/android.yml"
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -22,6 +21,8 @@ concurrency:
 
 jobs:
   build:
+    # The status check main's ruleset requires is this name.
+    name: Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
