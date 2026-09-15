@@ -36,7 +36,8 @@ Tested on the gen 1 Portal with a real person:
 - **Monster / Cutie:** a nod flips between them, and the voice pitch follows. A nod is a head
   pitch swing of more than 10° that comes back within 1.1s.
 - **Disco and Pop Art:** both react to music in the room. With no beats they fall back to idle
-  timing: Disco bursts every 1.1s, and Pop Art changes look every 2s.
+  timing: Disco keeps its looks moving on a 612ms clock (it has since been rebuilt as Disco Star;
+  see below), and Pop Art changes look every 2s.
 - **Recording:** works with a mic-reactive filter on.
 
 **Hamster** is so far checked only on the test portrait. The eyes use a new `bulge` lens patch
@@ -172,14 +173,60 @@ facing each other, meeting at the centre line. The whole frame is mirrored, room
   kaleidoscope.
 - **Question:** was there only a left/right mirror, or several?
 
-### 2. Disco Dots
-The whole picture washed purple-magenta, with a grid of round LED-like dots over everything.
-The dots vary in brightness as if twinkling, and the person shows through the dots.
-- **Build:** a full-frame shader. Tint toward magenta, then screen-blend a dot grid whose
-  per-cell brightness comes from a hash of the cell and time.
-- **Questions:** did the dots pulse to music or to voices, as an audio-reactive effect? Did they
-  avoid the person (segmentation) or cover everything? The frame suggests everything, dimmer
-  over the face.
+### 2. Disco Star
+First catalogued from a screenshot as "Disco Dots": the whole picture washed purple-magenta
+under a grid of twinkling LED-like dots. The reference video (606034295553604) showed that was
+only one of three looks. It cuts straight between them every two bars of its music, about 4.9s,
+in a loop: dots, star, lasers.
+
+- **LED wall:** round lights, about 50 across, each showing the colour of the picture under it,
+  over a dimmed, tinted view of the room. Star outlines in brighter lights follow the person's
+  head and burst outward from it, one after another. The colour walks amber, pink, purple, red
+  over the look.
+- **Laser star:** a star made of laser beams. A white glowing aura shines from behind it, so its
+  edges read clearly, but the middle of the star is see-through because it blocks the light.
+  The light is smoky, with a rainbow cast.
+- **Laser tunnel:** the room under purple and orange haze, and a set of neon triangles coming
+  out from one in the middle, growing, built with the same laser look.
+
+My first build misread the star and the lasers from the 6fps frames. It filled the star with
+candy clouds and a rainbow fringe, and scattered triangles, Vs and beams. The user corrected all
+three looks. The descriptions above are the corrected versions.
+- **Sound:** its own music with voices over it. There's a steady bass and chord, then a chopped
+  rhythmic section, then the chord again. It repeats every 2.45s (a bar at about 98bpm), and the
+  whole loop is about 24.45s. The one full copy has singing over part of it.
+- **Soundtrack, extracted:** `assets/music/disco-loop.wav`.
+  - **Loop:** 1,078,045 samples (24.4455s, ten bars of about 98.2bpm). It's cut from 1.5s into
+    the clip, where the loop's repeat matches best (0.90 correlation).
+  - **Patch:** the sung stretch, 10.5–15.0s, is replaced with the same music two bars later,
+    aligned to the sample (216,000 samples on), with 80ms equal-power crossfades. Its bass line
+    matches the original there at 0.86–0.99.
+  - **Seam:** the loop's head is crossfaded from what followed its end in the clip.
+  - **Grid:** the first downbeat is 0.465s in. Looks cut every eight beats of that grid.
+  - **Status:** the user cleared it with a copyright checker, so it ships in the repo.
+- **Recording:** the original recorded at about 6fps. It was heavy.
+
+**Build** (`Disco.kt`, `FX_DISCO`):
+
+- **Shader:** one frame shader draws the room, the lights and the smoke.
+  - **LED wall:** samples each cell's centre and lights up to three expanding star outlines
+    around the head.
+  - **Laser star:** shades everything outside a signed-distance pentagram (inner corners at
+    0.382) with smoky light and a rainbow cast, and leaves the inside clear. At the user's request
+    the smoke circles the star in uneven spiral arms, counter-clockwise on the mirrored screen
+    (so clockwise in recordings), and is 50% stronger than the first pass. It pours out of one
+    side of the star at a time, about a third of the way round, and that side travels round the
+    same way about once a look. A faint thin glow keeps the rest of the edge visible.
+- **Canvas:** the laser lines are layered strokes (a wide soft glow, a tighter glow, a pale core).
+  - **Star:** ten beams along the star's outer edges, from each inner corner out past its tip,
+    fading there, at the same angles as the shader's star, so beams and blocked light line up.
+    Nothing crosses the middle: five full crossing beams read as a pentagram, and the user
+    asked for them to go.
+  - **Tunnel:** triangles grow from the screen's middle, thickening as they come.
+- **Beats:** while the soundtrack plays, from its grid (below). Each one starts a new LED burst
+  or tunnel triangle, and looks cut every two bars. Without it, beats come from the mic, with a
+  611ms clock standing in.
+- **Cost:** 30fps on the test portrait, frames about 6.5ms, paint about 1.3ms.
 
 ### 3. Pop Silhouette
 Pop art: the person becomes a flat silhouette filled with an orange-to-yellow gradient, and the
