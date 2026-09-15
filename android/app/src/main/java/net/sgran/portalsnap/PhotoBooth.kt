@@ -369,15 +369,15 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
         val h = Hamster3D()
         val S = f.headSpan
         val sPx = S * f.eyeDist
-        // Fuzzy cups at the top of the head, tops leaning out, openings turned a little outward.
         for (side in intArrayOf(-1, 1)) {
             val m = FloatArray(16)
-            onFace(f, side * S * 0.42f, f.headTopY - S * 0.12f, 0f, m)
-            Matrix.rotateM(m, 0, side * 20f, 0f, 0f, 1f)
-            Matrix.rotateM(m, 0, -side * 25f, 0f, 1f, 0f)
+            // Half moons: tall narrow cups cut flat at the base, openings turned in toward the face.
+            onFace(f, side * S * 0.42f, f.headTopY - S * 0.08f, 0f, m)
+            Matrix.rotateM(m, 0, side * 16f, 0f, 0f, 1f)
+            Matrix.rotateM(m, 0, side * 24f, 0f, 1f, 0f)
             Matrix.rotateM(m, 0, 72f, 1f, 0f, 0f)
-            val r = sPx * 0.15f
-            Matrix.scaleM(m, 0, r, r, r)
+            val r = sPx * 0.12f
+            Matrix.scaleM(m, 0, r * 0.72f, r, r * 1.35f)
             h.ears += m
         }
         onFace(f, f.nose.x, f.nose.y + S * 0.005f, sPx * 0.06f, h.nose)
@@ -431,14 +431,15 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
                 h.leaves += m
             }
         }
-        val pawH = S * u * 0.12f
+        val pawH = S * u * 0.13f
         val py = if (whole) 0.55f * left * lenPx else lenPx * 0.2f
         val half = if (whole) HamsterMeshes.carrotRadius(eaten + 0.55f * left) * lenPx else pawH * 0.35f
         for (side in intArrayOf(-1, 1)) {
             val m = base.copyOf()
-            Matrix.translateM(m, 0, side * (half + pawH * 0.5f), py, -pawH * 0.35f)
-            Matrix.rotateM(m, 0, -side * 24f, 0f, 0f, 1f)
-            Matrix.scaleM(m, 0, pawH, pawH, pawH)
+            Matrix.translateM(m, 0, side * (half + pawH * 0.15f), py, -pawH * 0.6f)
+            Matrix.rotateM(m, 0, -side * 12f, 0f, 0f, 1f)
+            // Mirrored so each paw's fingers reach in toward the carrot.
+            Matrix.scaleM(m, 0, -side * pawH, pawH, pawH)
             h.paws += m
         }
     }

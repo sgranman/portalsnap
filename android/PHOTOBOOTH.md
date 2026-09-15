@@ -402,12 +402,15 @@ It works on two children at once.
 **Props rebuilt in real 3D** (`Hamster3D.kt`) from the reference video (589562750311569), where
 they look like soft 3D renders:
 
-- **Ears:** fuzzy brown cups with pink linings, at the top corners of the head, tops leaning out.
+- **Ears:** half moons at the top corners of the head: tall fuzzy brown cups, cut flat where they meet
+  the head, with pink linings turned in toward the face. The fur is fine, soft and fuzzy at its
+  edges.
 - **Nose:** a glossy pink rounded triangle.
 - **Carrot:** chubby, with ridges, and a three-leaf clover at its wide end. The bites cut
   scalloped chunks off its tip in the shader, showing the paler inside.
-- **Paws:** pink, with finger bulges and furry brown cuffs. They keep holding the leaves once
-  the carrot is gone.
+- **Paws:** each a mitten of three fat, rounded fingers, stacked and bunched, curling over the
+  carrot's front, with a pink palm behind and a fuzzy brown back showing at the outer edge. The
+  user rejected the first egg shapes. They keep holding the leaves once the carrot is gone.
 
 All of the props are meshes in the View3D pass, sharing one shader with fur speckle, gloss and
 ridges. The blush (wide soft pink ovals) and the whiskers (two short ones a side) stay flat,

@@ -112,12 +112,34 @@ object HamsterMeshes {
         o[0] *= 1f - 0.32f * (o[1] / 0.72f)
     }
 
-    /** A paw: an upright oval, three toe bands bulging across its top half. y from -1 to 1. */
-    fun paw() = surface(28, 28) { c, s, v, o ->
-        sphere(c, s, v, 0.72f, 1f, 0.66f, o)
-        val toes = if (o[1] < 0.3f) 1f + 0.05f * max(0f, cos((o[1] + 1f) * 7.0f)) else 1f
-        o[0] *= toes
-        o[2] *= toes
+    /**
+     * A paw's three curled fingers, stacked down local y, each a round-ended sausage reaching
+     * across local x toward +x (where the carrot is) and bowed toward the camera. About 1.6 tall.
+     */
+    fun pawFingers(): ColorMesh {
+        val g = ColorGeo(4096, 8192)
+        val id = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+        // Fat beans bunched into a mitten, overlapping the next, curling toward the camera at the
+        // carrot end so they wrap over its front.
+        for ((y, r, half) in listOf(Triple(-0.44f, 0.38f, 0.3f), Triple(0f, 0.41f, 0.34f), Triple(0.44f, 0.39f, 0.31f))) {
+            g.tube(id, floatArrayOf(-half, y, 0.18f, 0f, y, -0.04f, half, y + 0.02f, -0.14f), 3, r, r * 0.95f, 16, 6)
+        }
+        return ColorMesh(g)
+    }
+
+    /** The paw's palm: a pink body behind the fingers, so nothing shows between them. */
+    fun pawPalm() = surface(24, 18) { c, s, v, o ->
+        sphere(c, s, v, 0.5f, 0.8f, 0.34f, o)
+        o[0] -= 0.05f
+        o[2] += 0.14f
+    }
+
+    /** The furry back of a paw: behind the fingers, out on the side away from the carrot. */
+    fun pawBack() = surface(24, 18) { c, s, v, o ->
+        sphere(c, s, v, 0.58f, 0.88f, 0.42f, o)
+        o[0] -= 0.3f
+        o[1] += 0.16f
+        o[2] += 0.2f
     }
 
     /** The carrot: tip at y 0, wide end at y 1, round the y axis. */
@@ -180,6 +202,8 @@ object HamsterShaders {
         uniform int uMat;
         uniform float uCut;
         uniform float uAlpha;
+        // Parts are cut away below this local z: the ears' flat base against the head.
+        uniform float uClipZ;
         out vec4 outColor;
         const vec3 KEY = vec3(-0.5767, -0.7340, -0.4719);
         const float TIP = ${HamsterMeshes.CARROT_TIP};
@@ -203,11 +227,12 @@ object HamsterShaders {
 
         // Brown fur: dark roots and pale tips, speckled.
         vec3 fur(vec3 p) {
-            float f = noise(p * 14.0) * 0.5 + noise(p * 40.0) * 0.5;
-            return mix(vec3(0.36, 0.22, 0.11), vec3(0.86, 0.68, 0.46), smoothstep(0.32, 0.72, f));
+            float f = noise(p * 60.0) * 0.6 + noise(p * 150.0) * 0.4;
+            return mix(vec3(0.44, 0.31, 0.21), vec3(0.74, 0.60, 0.47), smoothstep(0.25, 0.8, f));
         }
 
         void main() {
+            if (vLocal.z < uClipZ) discard;
             vec3 n = normalize(vNormal);
             vec3 v = normalize(uEye - vWorld);
             bool back = dot(n, v) < 0.0;
@@ -218,6 +243,7 @@ object HamsterShaders {
             float shine = 24.0;
             float fuzz = 0.0;
             if (uMat == 0) {
+                if (hash(floor(gl_FragCoord.xyz) + 0.37) > smoothstep(0.0, 0.45, max(dot(n, v), 0.0)) + 0.35) discard;
                 base = fur(p);
                 spec = 0.04;
                 fuzz = 1.0;
@@ -229,13 +255,11 @@ object HamsterShaders {
                 spec = 0.95;
                 shine = 70.0;
             } else if (uMat == 3) {
-                float groove = smoothstep(0.8, 1.0, -cos((p.y + 1.0) * 7.0)) * step(p.y, 0.3) * step(-0.85, p.y);
-                base = mix(vec3(1.0, 0.64, 0.72), vec3(0.82, 0.40, 0.50), groove * 0.85);
-                float cuff = smoothstep(0.42, 0.6, p.y);
-                base = mix(base, fur(p * 1.6), cuff);
-                fuzz = cuff;
-                spec = 0.35 * (1.0 - cuff);
-                shine = 30.0;
+                // Fingers: soft pink, deeper where they curl away from the camera.
+                // Matte pink, deeper away from the camera and toward the furry outer edge.
+                base = mix(vec3(1.0, 0.62, 0.7), vec3(0.78, 0.4, 0.48), max(smoothstep(-0.1, 0.3, p.z), smoothstep(-0.05, -0.45, p.x) * 0.7));
+                spec = 0.08;
+                shine = 12.0;
             } else if (uMat == 4) {
                 float th = atan(p.z, p.x);
                 // The bites: scallops round the eaten end.
@@ -276,7 +300,9 @@ class HamsterRenderer {
     private val earFur = HamsterMeshes.earFur()
     private val earLining = HamsterMeshes.earLining()
     private val nose = HamsterMeshes.nose()
-    private val paw = HamsterMeshes.paw()
+    private val pawFingers = HamsterMeshes.pawFingers()
+    private val pawBack = HamsterMeshes.pawBack()
+    private val pawPalm = HamsterMeshes.pawPalm()
     private val carrot = HamsterMeshes.carrot()
     private val leaf = HamsterMeshes.leaf()
 
@@ -293,13 +319,22 @@ class HamsterRenderer {
         GLES20.glUniform3fv(program.u("uEye"), 1, View3D.eye, 0)
         GLES20.glUniform1f(program.u("uCut"), 0f)
         GLES20.glUniform1f(program.u("uAlpha"), 1f)
+        GLES20.glUniform1f(program.u("uClipZ"), NO_CLIP)
         for (h in props) {
+            GLES20.glUniform1f(program.u("uClipZ"), EAR_BASE)
             for (e in h.ears) {
                 part(earFur, 0, e)
                 part(earLining, 1, e)
             }
+            GLES20.glUniform1f(program.u("uClipZ"), NO_CLIP)
             part(nose, 2, h.nose)
-            for (w in h.paws) part(paw, 3, w)
+            for (w in h.paws) {
+                part(pawBack, 0, w)
+                part(pawPalm, 3, w)
+                GLES20.glUniformMatrix4fv(program.u("uModel"), 1, false, w, 0)
+                GLES20.glUniform1i(program.u("uMat"), 3)
+                pawFingers.draw(program)
+            }
             h.carrot?.let {
                 GLES20.glUniform1f(program.u("uCut"), h.carrotCut)
                 part(carrot, 4, it)
@@ -313,6 +348,12 @@ class HamsterRenderer {
         GLES20.glDisable(GLES20.GL_DEPTH_TEST)
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+    }
+
+    private companion object {
+        const val NO_CLIP = -100f
+        /** The ears' cups are cut off flat this far below their middle, into a half moon. */
+        const val EAR_BASE = -0.3f
     }
 
     private fun part(mesh: Mesh, material: Int, model: FloatArray) {
