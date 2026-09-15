@@ -72,6 +72,9 @@ class MainActivity : Activity() {
     private lateinit var review: ReviewPanel
     private lateinit var albumPanel: AlbumPanel
     private lateinit var pair: PairPanel
+    private lateinit var settings: SettingsPanel
+    private lateinit var captures: Captures
+    private lateinit var gear: TextView
     private val chips = ArrayList<Pair<Filter?, LinearLayout>>()
 
     private var cameraTexture: SurfaceTexture? = null
@@ -85,7 +88,7 @@ class MainActivity : Activity() {
     private val startedAt = SystemClock.uptimeMillis()
 
     private class Capture(val kind: String, val file: File, val ext: String, val poster: ByteArray? = null) {
-        var savedName: String? = null
+        var saved: Captures.Item? = null
     }
 
     private var pending: Capture? = null
@@ -104,6 +107,7 @@ class MainActivity : Activity() {
         compositor = Compositor(tracker, painter)
         camera = CameraSource(this)
         server = Server(this)
+        captures = Captures(this, server, exec)
         mic = MicHub()
         painter.mic = mic
         Sfx.init()
@@ -121,9 +125,15 @@ class MainActivity : Activity() {
         // Loaded on their own thread: the first tap on the puppy or the beach is instant.
         tracker.preload(Mode.MESH, Mode.SEGMENT)
 
-        val want = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+        // Storage is for kept photos and clips, in the shared Pictures and Movies folders. Android 9
+        // only mounts shared storage writable for an app holding read as well as write.
+        val want = arrayOf(
+            Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE,
+        )
             .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (want.isNotEmpty()) requestPermissions(want.toTypedArray(), 1)
+        exec.execute { captures.migrate() }
 
         ui.post(hudTick)
         ui.postDelayed(logTick, 2000)
@@ -142,6 +152,7 @@ class MainActivity : Activity() {
         syncSource()
         syncMic()
         syncSoundtrack()
+        captures.uploadPending()
     }
 
     override fun onPause() {
@@ -170,6 +181,7 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         when {
             pair.visibility == View.VISIBLE -> pair.close()
+            settings.visibility == View.VISIBLE -> closeSettings()
             albumPanel.visibility == View.VISIBLE -> albumPanel.close()
             review.visibility == View.VISIBLE -> closeReview()
             else -> @Suppress("DEPRECATION") super.onBackPressed()
@@ -179,6 +191,7 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         syncSource()
         syncMic()
+        exec.execute { captures.migrate() }
     }
 
     /* ------------------------------ Source ------------------------------ */
@@ -309,6 +322,15 @@ class MainActivity : Activity() {
             setOnClickListener { hud.visibility = if (hud.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
         }, lp(dp(64), dp(64), Gravity.BOTTOM or Gravity.END))
 
+        // Settings: where captures are kept, and the optional server under Advanced.
+        gear = label("⚙️", 26f).apply {
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            background = rounded(Color.argb(140, 0, 0, 0), dp(999).toFloat())
+            setOnClickListener { openSettings() }
+        }
+        stage.addView(gear, lp(dp(60), dp(60), Gravity.TOP or Gravity.END).apply { rightMargin = dp(18); topMargin = dp(18) })
+
         loadMsg = label("Waking up the camera…", 22f, Palette.DIM).apply { gravity = Gravity.CENTER }
         loader = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -352,12 +374,16 @@ class MainActivity : Activity() {
 
         review = ReviewPanel(this, onKeep = { keep() }, onAgain = { closeReview() }).apply { visibility = View.GONE }
         root.addView(review, lp(MATCH, MATCH))
-        albumPanel = AlbumPanel(this, server, exec, onBack = { albumPanel.close() }, onUnpaired = {
-            albumPanel.close()
-            pair.open { openAlbum() }
-        }).apply { visibility = View.GONE }
+        albumPanel = AlbumPanel(this, captures, exec, onBack = { albumPanel.close() }).apply { visibility = View.GONE }
         root.addView(albumPanel, lp(MATCH, MATCH))
-        pair = PairPanel(this, server, exec, onClose = { immersive() }).apply { visibility = View.GONE }
+        settings = SettingsPanel(this, server, captures, exec, onBack = { closeSettings() }, onPair = {
+            pair.open { captures.uploadPending { ui.post { settings.refresh() } } }
+        }).apply { visibility = View.GONE }
+        root.addView(settings, lp(MATCH, MATCH))
+        pair = PairPanel(this, server, exec, onClose = {
+            settings.refresh()
+            immersive()
+        }).apply { visibility = View.GONE }
         root.addView(pair, lp(MATCH, MATCH))
 
         setContentView(root)
@@ -414,7 +440,8 @@ class MainActivity : Activity() {
             or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
     }
 
-    private fun overlayUp() = review.visibility == View.VISIBLE || albumPanel.visibility == View.VISIBLE || pair.visibility == View.VISIBLE
+    private fun overlayUp() = review.visibility == View.VISIBLE || albumPanel.visibility == View.VISIBLE ||
+        pair.visibility == View.VISIBLE || settings.visibility == View.VISIBLE
 
     private fun live() = compositor.renderFrames.n > 0
 
@@ -557,7 +584,7 @@ class MainActivity : Activity() {
             setColor(Palette.BIG_ALT)
             setStroke(dp(5), Color.WHITE)
         }
-        for (b in listOf(shutter, album)) {
+        for (b in listOf(shutter, album, gear)) {
             b.isEnabled = !on
             b.alpha = if (on) 0.35f else 1f
         }
@@ -570,7 +597,8 @@ class MainActivity : Activity() {
     }
 
     private fun discardPending() {
-        pending?.let { if (it.savedName == null) it.file.delete() }
+        // The cache file is only ever the draft: a kept capture was copied into the album.
+        pending?.file?.delete()
         pending = null
     }
 
@@ -580,30 +608,36 @@ class MainActivity : Activity() {
         immersive()
     }
 
-    // Kept locally first, so a capture is never lost to a network, then sent to the album.
+    // Kept on this Portal first, so a capture never depends on a network. If a server is set up
+    // (Settings, under Advanced) it's then sent there in the background, and retried later if it
+    // can't go now.
     private fun keep() {
         val c = pending ?: return
-        val local = File(getExternalFilesDir("captures"), c.file.name)
-        if (!local.exists()) runCatching { c.file.copyTo(local) }
-        if (!server.configured || !server.paired) {
-            review.say("Pair this Portal to send it to Photos", Palette.BAD)
-            pair.open { keep() }
-            return
-        }
+        if (c.saved != null) return
         review.saving()
         exec.execute {
             try {
-                val name = server.upload(c.file, c.ext)
-                c.savedName = name
-                // The poster is a nicety: a clip that saved is not a failure because its thumbnail wasn't.
-                if (c.poster != null) runCatching {
-                    val pf = File(cacheDir, "poster.jpg").apply { writeBytes(c.poster) }
-                    server.upload(pf, "jpg", forClip = name)
+                val item = captures.save(c.file, c.kind, c.poster)
+                val where = if (captures.shared) "on this Portal" else "inside the app"
+                ui.post {
+                    c.saved = item
+                    if (pending === c) review.saved("Saved $where ✓")
                 }
-                ui.post { if (pending === c) review.saved() }
-            } catch (_: Server.Unpaired) {
-                ui.post { pair.open { keep() } }
+                if (captures.waiting(item) && server.paired) {
+                    ui.post { if (pending === c) review.say("Saved $where ✓  Sending it to your server…", Palette.OK) }
+                    captures.send(item) { ok ->
+                        ui.post {
+                            if (pending !== c) return@post
+                            if (ok) {
+                                review.say("Saved $where and sent to your server ✓", Palette.OK)
+                            } else {
+                                review.say("Saved $where ✓  It'll go to your server when it can.", Palette.OK)
+                            }
+                        }
+                    }
+                }
             } catch (e: Exception) {
+                Log.e(TAG, "keep", e)
                 ui.post { if (pending === c) review.failed(e.message ?: "unknown error") }
             }
         }
@@ -611,11 +645,17 @@ class MainActivity : Activity() {
 
     private fun openAlbum() {
         if (recorder != null) return
-        if (!server.configured || !server.paired) {
-            pair.open { openAlbum() }
-            return
-        }
         albumPanel.open()
+    }
+
+    private fun openSettings() {
+        if (recorder != null) return
+        settings.open()
+    }
+
+    private fun closeSettings() {
+        settings.close()
+        immersive()
     }
 
     /* ---------------------------- Instruments ---------------------------- */
@@ -736,9 +776,11 @@ class MainActivity : Activity() {
             "keep" -> keep()
             "again" -> closeReview()
             "album" -> openAlbum()
+            "settings" -> openSettings()
             "pair" -> pair.open()
             "close" -> {
                 pair.close()
+                settings.close()
                 albumPanel.close()
                 closeReview()
             }

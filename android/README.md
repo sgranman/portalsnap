@@ -18,8 +18,10 @@ and a 32-bit 2GB tab. Native removes all four.
   tracker penalty.
 - **Pairing:** QR and code against the existing `/auth/pair/*` flow, collecting the `psnap`
   cookie.
-- **Server:** upload to `/media` (plus the poster via `?for=`), album grid from `/media/list`,
-  viewer, and two-tap delete.
+- **Photos and clips:** kept on the Portal in `Pictures/PortalSnap` and `Movies/PortalSnap`,
+  where the album reads them, with a viewer and two-tap delete.
+- **Server (optional):** under Settings → Advanced. Once paired, each kept capture is also
+  uploaded to `/media` (plus the poster via `?for=`), and anything that couldn't go is retried.
 
 **Not yet verified:**
 - **Real faces:** everything was checked against a test portrait fed through the pipeline in
@@ -121,7 +123,56 @@ steps:
 | `Tracker.kt` | `tracker.worker.js` |
 | `Recorder.kt` | new: MediaCodec H.264 + AAC → MediaMuxer |
 | `Server.kt` | the fetches in `app.html`, plus `/auth/pair/*` from `pair.html`'s other side |
-| `Ui.kt`, `MainActivity.kt` | the stage, bar, review, album and pairing overlays, in the web app's palette |
+| `Ui.kt`, `MainActivity.kt` | the stage, bar, review, album, settings and pairing overlays, in the web app's palette |
+| `Captures.kt` | new: photos and clips kept on the Portal, and the queue that sends them to a server |
+
+## Installing a release on a Portal
+
+Each release on GitHub (https://github.com/sgranman/portalsnap/releases) has one
+`PortalSnap-x.y.z.apk` for both Portal generations. The Portal needs ADB unlocked first. Then:
+
+```bash
+adb connect 192.168.1.77:5555          # the Portal's address, if it's on Wi-Fi adb
+adb push PortalSnap-0.3.0.apk /data/local/tmp/portalsnap.apk
+adb shell pm install -r -g /data/local/tmp/portalsnap.apk
+```
+
+- **`-g`** grants the camera, microphone and storage permissions at install, so nobody has to
+  answer prompts on the Portal.
+- **Push, then install:** a streamed `adb install` hung for over 30 minutes on the gen 1 Portal.
+- **Updates** install the same way, over the top. Photos, clips, settings and pairing all stay.
+- **From a debug build:** debug builds are signed with a different key, so the first release
+  needs `adb uninstall net.sgran.portalsnap` before it. That forgets the server pairing and
+  settings. Photos and clips in Pictures and Movies stay.
+
+Photos go to `/sdcard/Pictures/PortalSnap` and clips to `/sdcard/Movies/PortalSnap`, and
+`adb pull` copies them to a computer. A server is optional, under Settings (the gear) → Advanced.
+
+## Releases
+
+Two GitHub Actions workflows live in `.github/workflows`:
+
+- **Android build** (`android.yml`) builds the debug APK on every push or pull request that
+  touches `android/` or the models, and keeps the APK on the run for two weeks.
+- **Release APK** (`release.yml`) builds a signed APK and publishes a GitHub Release with the
+  APK and its SHA-256. Start it by pushing a tag (`git tag v0.3.0 && git push origin v0.3.0`)
+  or from Actions → Release APK → Run workflow, typing the version.
+
+The version comes from the tag. The version code is major × 10000 + minor × 100 + patch, so
+each release installs over the one before.
+
+Signing uses one long-lived key that is never committed. CI reads it from four repository
+secrets: `PORTALSNAP_KEYSTORE_BASE64`, `PORTALSNAP_KEYSTORE_PASSWORD`, `PORTALSNAP_KEY_ALIAS`
+and `PORTALSNAP_KEY_PASSWORD`. **Keep a backup of the keystore.** Losing it means the next
+release can't install over the last, and everyone has to uninstall first.
+
+A signed release builds locally with the same variables:
+
+```bash
+PORTALSNAP_KEYSTORE=/path/to/portalsnap-release.jks PORTALSNAP_KEYSTORE_PASSWORD=… \
+  PORTALSNAP_KEY_ALIAS=portalsnap PORTALSNAP_KEY_PASSWORD=… \
+  ./gradlew assembleRelease -PpsnapVersionName=0.3.0 -PpsnapVersionCode=300
+```
 
 ## Building and installing
 
@@ -135,7 +186,12 @@ export JAVA_HOME=~/Development/portal-tools/jdk17 ANDROID_HOME=~/Development/por
 adb -s 192.168.1.77:5555 install -r app/build/outputs/apk/debug/app-debug.apk
 adb -s 192.168.1.77:5555 shell pm grant net.sgran.portalsnap android.permission.CAMERA
 adb -s 192.168.1.77:5555 shell pm grant net.sgran.portalsnap android.permission.RECORD_AUDIO
+adb -s 192.168.1.77:5555 shell pm grant net.sgran.portalsnap android.permission.READ_EXTERNAL_STORAGE
+adb -s 192.168.1.77:5555 shell pm grant net.sgran.portalsnap android.permission.WRITE_EXTERNAL_STORAGE
 ```
+
+Grant both storage permissions: Android 9 only mounts shared storage writable for an app that
+holds read as well as write. With write alone, saving to Pictures fails.
 
 `local.properties` (not committed) holds `sdk.dir`. The APK carries both `arm64-v8a` and
 `armeabi-v7a`, for the second Portal's 32-bit userland.
@@ -149,7 +205,7 @@ A="adb -s 192.168.1.77:5555 shell am start -n net.sgran.portalsnap/.MainActivity
 $A --ei faces 1 --es filter dog --ez hud true   # test portrait instead of the camera (debug builds)
 $A --ei faces 2 --es filter skydiver            # two portraits
 $A --ei faces 0                                 # back to the camera
-$A --es action photo|record|stop|keep|again|album|pair|close|poke
+$A --es action photo|record|stop|keep|again|album|settings|pair|close|poke
 $A --es filter monster --es action poke         # poke = a stage tap (Monster/Cutie flips)
 $A --es music /sdcard/Android/data/net.sgran.portalsnap/files/beat120.wav   # loop a track for Disco / Pop Art (baked into clips); "stop" stops
 $A --ef jaw 0.8                                 # force jawOpen on test faces (Hearts, Monster's mouth); negative clears

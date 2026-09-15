@@ -7,9 +7,11 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.text.InputType
 import android.util.LruCache
 import android.view.Gravity
@@ -22,6 +24,7 @@ import android.widget.FrameLayout
 import android.widget.GridView
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.VideoView
 import com.google.zxing.BarcodeFormat
@@ -30,8 +33,8 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import java.util.concurrent.ExecutorService
 import kotlin.math.roundToInt
 
@@ -76,6 +79,11 @@ fun Context.actionButton(text: String, bg: Int) = label(text, 22f, bold = true).
     setPadding(dp(30), dp(18), dp(30), dp(18))
     gravity = Gravity.CENTER
     isClickable = true
+}
+
+fun Context.smallButton(text: String, bg: Int) = actionButton(text, bg).apply {
+    textSize = 18f
+    setPadding(dp(22), dp(12), dp(22), dp(12))
 }
 
 fun View.enabledLook(on: Boolean) {
@@ -153,9 +161,9 @@ class ReviewPanel(ctx: Context, onKeep: () -> Unit, onAgain: () -> Unit) : Linea
         say("")
     }
 
-    fun saved() {
+    fun saved(text: String) {
         keep.text = "Saved ✓"
-        say("It's in Photos now", Palette.OK)
+        say(text, Palette.OK)
     }
 
     fun failed(why: String) {
@@ -182,12 +190,12 @@ class ReviewPanel(ctx: Context, onKeep: () -> Unit, onAgain: () -> Unit) : Linea
 
 /* -------------------------------- Album --------------------------------- */
 
+/** The photos and clips kept on this Portal, with a viewer and two-tap delete. */
 class AlbumPanel(
     ctx: Context,
-    private val server: Server,
+    private val captures: Captures,
     private val exec: ExecutorService,
     onBack: () -> Unit,
-    private val onUnpaired: () -> Unit,
 ) : FrameLayout(ctx) {
     private val ui = Handler(Looper.getMainLooper())
     private val grid = GridView(ctx)
@@ -197,8 +205,8 @@ class AlbumPanel(
     private val vImage = ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
     private val vVideo = VideoView(ctx)
     private val vDelete = ctx.actionButton("Delete", Palette.DANGER)
-    private var viewing: Server.Item? = null
-    private var items: List<Server.Item> = emptyList()
+    private var viewing: Captures.Item? = null
+    private var items: List<Captures.Item> = emptyList()
     private val thumbs = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
@@ -210,16 +218,7 @@ class AlbumPanel(
             orientation = LinearLayout.VERTICAL
             setPadding(ctx.dp(18), ctx.dp(18), ctx.dp(18), ctx.dp(18))
         }
-        val top = LinearLayout(ctx).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            addView(ctx.label("Photos", 30f, bold = true), LinearLayout.LayoutParams(0, WRAP, 1f))
-            addView(ctx.label("Back to camera", 20f, bold = true).apply {
-                background = rounded(Palette.ALT, ctx.dp(14).toFloat())
-                setPadding(ctx.dp(22), ctx.dp(14), ctx.dp(22), ctx.dp(14))
-                setOnClickListener { onBack() }
-            })
-        }
-        col.addView(top)
+        col.addView(panelHeader(ctx, "Photos", onBack))
         grid.numColumns = GridView.AUTO_FIT
         grid.columnWidth = ctx.dp(200)
         grid.horizontalSpacing = ctx.dp(12)
@@ -263,30 +262,31 @@ class AlbumPanel(
     fun open() {
         visibility = VISIBLE
         if (grid.adapter == null) grid.adapter = adapter
-        help.text = "To get these onto a phone, open ${server.base}/gallery.html there — " +
-            "a new phone pairs at ${server.base}/pair."
-        items = emptyList()
-        adapter.notifyDataSetChanged()
-        note.text = "Looking…"
-        exec.execute {
-            try {
-                val got = server.list()
-                ui.post {
-                    items = got
-                    adapter.notifyDataSetChanged()
-                    note.text = if (got.isEmpty()) "Nothing saved yet. Take a photo and tap Keep it!" else ""
-                }
-            } catch (_: Server.Unpaired) {
-                ui.post { onUnpaired() }
-            } catch (e: Exception) {
-                ui.post { note.text = "Can't reach the album right now." }
-            }
-        }
+        refresh()
+        // Anything that couldn't reach the server before gets another go.
+        captures.uploadPending { ui.post { if (visibility == VISIBLE) adapter.notifyDataSetChanged() } }
     }
 
     fun close() {
         closeViewer()
         visibility = GONE
+    }
+
+    private fun refresh() {
+        help.text = if (captures.shared) {
+            "Kept on this Portal in Pictures/PortalSnap and Movies/PortalSnap."
+        } else {
+            "Kept inside the app, because storage permission is off."
+        }
+        note.text = "Looking…"
+        exec.execute {
+            val got = captures.list()
+            ui.post {
+                items = got
+                adapter.notifyDataSetChanged()
+                note.text = if (got.isEmpty()) "Nothing saved yet. Take a photo and tap Keep it!" else ""
+            }
+        }
     }
 
     private val adapter = object : BaseAdapter() {
@@ -302,15 +302,13 @@ class AlbumPanel(
             val img = tile.getChildAt(0) as ImageView
             val play = tile.getChildAt(1)
             val cap = tile.getChildAt(2) as TextView
-            cap.text = whenLabel(it.at)
-            play.visibility = if (it.kind == "video") VISIBLE else GONE
-            val src = if (it.kind == "video") it.poster else it.url
-            img.tag = src
+            cap.text = whenLabel(it.at) + if (captures.waiting(it)) "  ·  waiting to send" else ""
+            play.visibility = if (it.kind == Captures.VIDEO) VISIBLE else GONE
+            val key = it.file.path
+            img.tag = key
             img.setImageDrawable(null)
-            if (src != null) {
-                val cached = thumbs.get(src)
-                if (cached != null) img.setImageBitmap(cached) else loadThumb(src, img)
-            }
+            val cached = thumbs.get(key)
+            if (cached != null) img.setImageBitmap(cached) else loadThumb(it, img)
             return tile
         }
     }
@@ -334,29 +332,38 @@ class AlbumPanel(
         }
     }
 
-    private fun loadThumb(src: String, into: ImageView) {
+    // A clip's thumbnail is its saved poster, or a frame pulled from the file when there isn't one.
+    private fun loadThumb(item: Captures.Item, into: ImageView) {
+        val key = item.file.path
         exec.execute {
-            val bmp = runCatching { decodeScaled(server.bytes(src), 400) }.getOrNull() ?: return@execute
-            thumbs.put(src, bmp)
-            ui.post { if (into.tag == src) into.setImageBitmap(bmp) }
+            val bmp = runCatching {
+                if (item.kind == Captures.PHOTO) {
+                    decodeFileScaled(item.file, 400)
+                } else {
+                    captures.poster(item)?.let { decodeFileScaled(it, 400) }
+                        ?: @Suppress("DEPRECATION") ThumbnailUtils.createVideoThumbnail(item.file.path, MediaStore.Images.Thumbnails.MINI_KIND)
+                }
+            }.getOrNull() ?: return@execute
+            thumbs.put(key, bmp)
+            ui.post { if (into.tag == key) into.setImageBitmap(bmp) }
         }
     }
 
-    private fun openViewer(it: Server.Item) {
+    private fun openViewer(it: Captures.Item) {
         viewing = it
         vDelete.text = "Delete"
         vDelete.enabledLook(true)
         viewer.visibility = VISIBLE
-        if (it.kind == "video") {
+        if (it.kind == Captures.VIDEO) {
             vImage.visibility = GONE
             vVideo.visibility = VISIBLE
-            vVideo.setVideoURI(Uri.parse(server.absolute(it.url)), server.headers())
+            vVideo.setVideoURI(Uri.fromFile(it.file))
         } else {
             vVideo.visibility = GONE
             vImage.visibility = VISIBLE
             vImage.setImageDrawable(null)
             exec.execute {
-                val bmp = runCatching { decodeScaled(server.bytes(it.url), 1280) }.getOrNull()
+                val bmp = runCatching { decodeFileScaled(it.file, 1280) }.getOrNull()
                 ui.post { if (viewing === it) vImage.setImageBitmap(bmp) }
             }
         }
@@ -371,7 +378,8 @@ class AlbumPanel(
         viewer.visibility = GONE
     }
 
-    // Two taps: the first arms it. A mis-tap on a touchscreen shouldn't cost a photo.
+    // Two taps: the first arms it. A mis-tap on a touchscreen shouldn't cost a photo. A copy
+    // already sent to a server stays there.
     private fun deleteViewing() {
         val it = viewing ?: return
         if (vDelete.text != "Really delete?") {
@@ -380,11 +388,12 @@ class AlbumPanel(
         }
         vDelete.enabledLook(false)
         exec.execute {
-            val ok = runCatching { server.delete(it.url) }.isSuccess
+            val ok = captures.delete(it)
             ui.post {
                 if (ok) {
+                    thumbs.remove(it.file.path)
                     closeViewer()
-                    open()
+                    refresh()
                 } else {
                     vDelete.text = "Delete failed"
                     vDelete.enabledLook(true)
@@ -393,20 +402,166 @@ class AlbumPanel(
         }
     }
 
-    private fun whenLabel(iso: String): String = try {
-        val p = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
-        SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(p.parse(iso.take(19))!!)
-    } catch (_: Exception) {
-        ""
-    }
+    private fun whenLabel(at: Long): String = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(at))
 }
 
-fun decodeScaled(bytes: ByteArray, maxEdge: Int): Bitmap? {
+fun decodeFileScaled(file: File, maxEdge: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    BitmapFactory.decodeFile(file.path, bounds)
     var sample = 1
     while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
-    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+    return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+}
+
+// A panel's title with a "Back to camera" button on the right.
+private fun panelHeader(ctx: Context, title: String, onBack: () -> Unit) = LinearLayout(ctx).apply {
+    gravity = Gravity.CENTER_VERTICAL
+    addView(ctx.label(title, 30f, bold = true), LinearLayout.LayoutParams(0, WRAP, 1f))
+    addView(ctx.label("Back to camera", 20f, bold = true).apply {
+        background = rounded(Palette.ALT, ctx.dp(14).toFloat())
+        setPadding(ctx.dp(22), ctx.dp(14), ctx.dp(22), ctx.dp(14))
+        setOnClickListener { onBack() }
+    })
+}
+
+/* ------------------------------- Settings ------------------------------- */
+
+/**
+ * Where kept photos and clips live, the app's version, and the optional server tucked under
+ * Advanced: its address and pairing, whether new captures are sent there, and sending the ones
+ * that aren't there yet.
+ */
+class SettingsPanel(
+    ctx: Context,
+    private val server: Server,
+    private val captures: Captures,
+    private val exec: ExecutorService,
+    onBack: () -> Unit,
+    private val onPair: () -> Unit,
+) : FrameLayout(ctx) {
+    private val ui = Handler(Looper.getMainLooper())
+    private val storage = ctx.label("", 19f, Palette.DIM)
+    private val about = ctx.label("", 19f, Palette.DIM)
+    private val advancedToggle = ctx.label("", 22f, bold = true)
+    private val advanced = LinearLayout(ctx)
+    private val serverState = ctx.label("", 19f, Palette.DIM)
+    private val setUp = ctx.smallButton("", Palette.ACCENT)
+    private val forget = ctx.smallButton("", Palette.DANGER)
+    private val auto = ctx.smallButton("", Palette.ALT)
+    private val sendAll = ctx.smallButton("", Palette.ALT)
+
+    init {
+        setBackgroundColor(Palette.PANEL)
+        isClickable = true
+        val col = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ctx.dp(28), ctx.dp(18), ctx.dp(28), ctx.dp(28))
+        }
+        col.addView(panelHeader(ctx, "Settings", onBack))
+        col.addView(heading("Photos and clips"), below(20, fill = true))
+        col.addView(storage, below(8, fill = true))
+        col.addView(heading("About"), below(24, fill = true))
+        col.addView(about, below(8, fill = true))
+        advancedToggle.setPadding(0, ctx.dp(10), 0, ctx.dp(10))
+        advancedToggle.setOnClickListener { showAdvanced(advanced.visibility != VISIBLE) }
+        col.addView(advancedToggle, below(24, fill = true))
+        advanced.apply {
+            orientation = LinearLayout.VERTICAL
+            addView(ctx.label(
+                "A PortalSnap server is optional. It keeps a shared album your phones can open, " +
+                    "and this Portal can send what it keeps there as well as keeping its own copy.",
+                17f, Palette.DIM,
+            ), below(0, fill = true))
+            addView(heading("Server"), below(16, fill = true))
+            addView(serverState, below(6, fill = true))
+            addView(LinearLayout(ctx).apply {
+                addView(setUp)
+                addView(forget, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = ctx.dp(12) })
+            }, below(12))
+            addView(auto, below(12))
+            addView(sendAll, below(12))
+        }
+        col.addView(advanced, below(4, fill = true))
+        addView(ScrollView(ctx).apply { addView(col) }, lp(MATCH, MATCH))
+        showAdvanced(false)
+
+        setUp.setOnClickListener { onPair() }
+        forget.setOnClickListener {
+            if (forget.text != "Really forget?") {
+                forget.text = "Really forget?"
+                return@setOnClickListener
+            }
+            server.forget()
+            refresh()
+        }
+        auto.setOnClickListener {
+            captures.autoUpload = !captures.autoUpload
+            refresh()
+        }
+        sendAll.setOnClickListener {
+            sendAll.enabledLook(false)
+            sendAll.text = "Sending…"
+            exec.execute {
+                captures.queueAll()
+                captures.uploadPending { ui.post { refresh() } }
+            }
+        }
+    }
+
+    fun open() {
+        visibility = VISIBLE
+        refresh()
+    }
+
+    fun close() {
+        visibility = GONE
+    }
+
+    fun refresh() {
+        val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?"
+        about.text = "PortalSnap $version"
+        serverState.text = when {
+            !server.configured -> "None set up. Everything stays on this Portal."
+            server.paired -> "${server.base}\nPaired ✓"
+            else -> "${server.base}\nNot paired yet"
+        }
+        setUp.text = if (server.configured) "Pair or change server" else "Set up a server"
+        forget.text = "Forget server"
+        forget.visibility = if (server.configured) VISIBLE else GONE
+        auto.text = "Send new photos and clips there: " + if (captures.autoUpload) "On" else "Off"
+        auto.visibility = if (server.configured) VISIBLE else GONE
+        exec.execute {
+            val items = captures.list()
+            val photos = items.count { it.kind == Captures.PHOTO }
+            val clips = items.size - photos
+            val unsent = captures.notSent(items)
+            ui.post {
+                storage.text = if (captures.shared) {
+                    "${count(photos, "photo")} in Pictures/PortalSnap and ${count(clips, "clip")} in Movies/PortalSnap, on this " +
+                        "Portal. They stay even if the app is removed. To copy them to a computer:\n" +
+                        "adb pull /sdcard/Pictures/PortalSnap\nadb pull /sdcard/Movies/PortalSnap"
+                } else {
+                    "${count(photos, "photo")} and ${count(clips, "clip")}, kept inside the app because storage permission is " +
+                        "off. They'd be deleted if the app were removed."
+                }
+                sendAll.text = "Send the ${count(unsent, "capture")} not there yet"
+                sendAll.visibility = if (server.configured && server.paired && unsent > 0) VISIBLE else GONE
+                sendAll.enabledLook(true)
+            }
+        }
+    }
+
+    private fun showAdvanced(on: Boolean) {
+        advanced.visibility = if (on) VISIBLE else GONE
+        advancedToggle.text = if (on) "Advanced  ▾" else "Advanced  ▸"
+    }
+
+    private fun heading(text: String) = context.label(text, 22f, bold = true)
+
+    private fun below(dp: Int, fill: Boolean = false) =
+        LinearLayout.LayoutParams(if (fill) MATCH else WRAP, WRAP).apply { topMargin = context.dp(dp) }
+
+    private fun count(n: Int, what: String) = "$n $what" + if (n == 1) "" else "s"
 }
 
 /* --------------------------------- Pair --------------------------------- */
@@ -465,16 +620,10 @@ class PairPanel(
         val serverRow = LinearLayout(ctx).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(url, LayoutParams(ctx.dp(560), WRAP))
-            addView(ctx.actionButton("Connect", Palette.ACCENT).apply {
-                textSize = 18f
-                setPadding(ctx.dp(22), ctx.dp(12), ctx.dp(22), ctx.dp(12))
-                setOnClickListener { connect() }
-            }, LayoutParams(WRAP, WRAP).apply { leftMargin = ctx.dp(12) })
-            addView(ctx.actionButton("Not now", Palette.ALT).apply {
-                textSize = 18f
-                setPadding(ctx.dp(22), ctx.dp(12), ctx.dp(22), ctx.dp(12))
-                setOnClickListener { close() }
-            }, LayoutParams(WRAP, WRAP).apply { leftMargin = ctx.dp(12) })
+            addView(ctx.smallButton("Connect", Palette.ACCENT).apply { setOnClickListener { connect() } },
+                LayoutParams(WRAP, WRAP).apply { leftMargin = ctx.dp(12) })
+            addView(ctx.smallButton("Not now", Palette.ALT).apply { setOnClickListener { close() } },
+                LayoutParams(WRAP, WRAP).apply { leftMargin = ctx.dp(12) })
         }
         addView(serverRow, LayoutParams(WRAP, WRAP).apply { topMargin = ctx.dp(18) })
         url.setOnEditorActionListener { _, _, _ -> connect(); true }

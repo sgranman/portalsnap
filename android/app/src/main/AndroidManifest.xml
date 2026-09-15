@@ -4,17 +4,23 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Kept photos and clips go to the shared Pictures and Movies folders, so they outlive the
+         app and can be copied off. Both Portals are Android 9 or 10, where this is the way in. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
     <uses-feature android:name="android.hardware.camera.any" android:required="true" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
 
-    <!-- Cleartext allowed: a home server on the LAN is a normal place for the album to live. -->
+    <!-- Cleartext allowed: a home server on the LAN is a normal place for the album to live.
+         Legacy storage: the gen 2 Portal is Android 10, which would otherwise scope file access. -->
     <application
         android:label="PortalSnap"
         android:icon="@mipmap/ic_launcher"
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
+        android:requestLegacyExternalStorage="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
 
         <activity

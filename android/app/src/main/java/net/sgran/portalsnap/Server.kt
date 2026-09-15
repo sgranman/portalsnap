@@ -36,6 +36,11 @@ class Server(ctx: Context) {
 
     fun headers(): Map<String, String> = cookie?.let { mapOf("Cookie" to it) } ?: emptyMap()
 
+    /** Forgets the server and this Portal's pairing with it. */
+    fun forget() {
+        prefs.edit().remove("base").remove("cookie").apply()
+    }
+
     fun absolute(path: String) = if (path.startsWith("http")) path else base + path
 
     fun startPairing(): Pairing {

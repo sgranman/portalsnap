@@ -1,0 +1,122 @@
+# Builds a signed release APK and publishes it as a GitHub Release.
+#
+# Two ways in:
+#   - push a tag like v0.3.0
+#   - Actions > Release APK > Run workflow, typing a version like 0.3.0 (this creates the tag)
+#
+# The version code is major*10000 + minor*100 + patch, so every release installs over the last.
+# The signing key comes from four repository secrets: PORTALSNAP_KEYSTORE_BASE64 (the keystore,
+# base64), PORTALSNAP_KEYSTORE_PASSWORD, PORTALSNAP_KEY_ALIAS and PORTALSNAP_KEY_PASSWORD.
+name: Release APK
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, like 0.3.0 (creates the tag v0.3.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then V="$INPUT"; else V="$GITHUB_REF_NAME"; fi
+          V="${V#v}"
+          if ! [[ "$V" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::The version has to look like 1.2.3, not '$V'"
+            exit 1
+          fi
+          CODE=$(( BASH_REMATCH[1] * 10000 + BASH_REMATCH[2] * 100 + BASH_REMATCH[3] ))
+          echo "name=$V" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Releasing $V (version code $CODE)"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Write out the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PORTALSNAP_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::The PORTALSNAP_KEYSTORE_BASE64 secret isn't set, so there's nothing to sign with"
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Build the signed APK
+        working-directory: android
+        env:
+          PORTALSNAP_KEYSTORE: ${{ runner.temp }}/release.jks
+          PORTALSNAP_KEYSTORE_PASSWORD: ${{ secrets.PORTALSNAP_KEYSTORE_PASSWORD }}
+          PORTALSNAP_KEY_ALIAS: ${{ secrets.PORTALSNAP_KEY_ALIAS }}
+          PORTALSNAP_KEY_PASSWORD: ${{ secrets.PORTALSNAP_KEY_PASSWORD }}
+        run: >-
+          ./gradlew --no-daemon assembleRelease
+          -PpsnapVersionName=${{ steps.version.outputs.name }}
+          -PpsnapVersionCode=${{ steps.version.outputs.code }}
+
+      - name: Check the signature and package it
+        id: package
+        env:
+          V: ${{ steps.version.outputs.name }}
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          if [ ! -f "$APK" ]; then
+            echo "::error::No signed APK came out (is the key set up right?)"
+            ls android/app/build/outputs/apk/release/ || true
+            exit 1
+          fi
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee certs.txt
+          CERT=$(grep -m1 "certificate SHA-256 digest" certs.txt | awk -F': ' '{print $2}')
+          mkdir dist
+          cp "$APK" "dist/PortalSnap-$V.apk"
+          (cd dist && sha256sum "PortalSnap-$V.apk" > SHA256SUMS.txt)
+          echo "cert=$CERT" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.version.outputs.name }}
+          CERT: ${{ steps.package.outputs.cert }}
+        run: |
+          cat > notes.md <<EOF
+          One APK for both Meta Portal generations. It needs a Portal with ADB unlocked. Then:
+
+          \`\`\`
+          adb push PortalSnap-$V.apk /data/local/tmp/portalsnap.apk
+          adb shell pm install -r -g /data/local/tmp/portalsnap.apk
+          \`\`\`
+
+          \`-g\` grants the camera, microphone and storage permissions up front. Updates install the
+          same way, over the top. The SHA-256 checksum is in SHA256SUMS.txt, and the APK is signed
+          with the certificate whose SHA-256 digest is \`$CERT\`.
+          EOF
+          gh release create "v$V" dist/* \
+            --title "PortalSnap $V" \
+            --notes-file notes.md \
+            --generate-notes \
+            --target "$GITHUB_SHA"
