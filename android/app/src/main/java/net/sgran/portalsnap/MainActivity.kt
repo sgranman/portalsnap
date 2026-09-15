@@ -645,6 +645,8 @@ class MainActivity : Activity() {
         put("micSilent", mic.silent)
         put("segPct", r1(compositor.segShare * 100.0))
         put("segCrop", r1(compositor.segCrop * 100.0))
+        put("segModel", if (tracker.segMulticlass) "multiclass" else "landscape")
+        put("synced", compositor.synced)
         put("loadMs", JSONObject().apply { Mode.entries.forEach { m -> tracker.loadMs(m)?.let { put(m.name, it) } } })
         put("nativeHeapMB", Debug.getNativeHeapAllocatedSize() / 1_000_000)
         tracker.lastError?.let { put("error", it) }
@@ -717,6 +719,11 @@ class MainActivity : Activity() {
             getSharedPreferences("tracker", MODE_PRIVATE).edit()
                 .putString("segDelegate", it).putBoolean("segGpuBad", false).putBoolean("segGpuTrying", false).commit()
             Log.i(TAG, "segmenter delegate set to $it; restart to apply")
+        }
+        // Which segmentation model: landscape (small, 256x144) or multiclass (256x256). Next start.
+        i.getStringExtra("segModel")?.let {
+            getSharedPreferences("tracker", MODE_PRIVATE).edit().putString("segModel", it).commit()
+            Log.i(TAG, "segmentation model set to $it; restart to apply")
         }
         if (i.hasExtra("jaw")) painter.debugJaw = i.getFloatExtra("jaw", -1f).takeIf { it >= 0f }
         when (i.getStringExtra("action")) {

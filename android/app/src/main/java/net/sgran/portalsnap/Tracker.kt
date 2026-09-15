@@ -54,6 +54,13 @@ class Tracker(private val ctx: Context) {
 
     @Volatile var mode = Mode.FAST
         private set
+    /** The segmentation model's input size, and whether it's the multiclass one. */
+    @Volatile var segInputW = 256
+        private set
+    @Volatile var segInputH = 144
+        private set
+    @Volatile var segMulticlass = false
+        private set
     @Volatile var ready = false
         private set
     @Volatile var busy = false
@@ -141,10 +148,13 @@ class Tracker(private val ctx: Context) {
                         // time and the shaders can snap to the picture. The category mask was a
                         // hard 256x144 staircase.
                         val masks = task.segmentForVideo(img, ts).confidenceMasks().orElse(null)
-                        val cm = masks?.lastOrNull()
+                        // The multiclass model's first mask is background; the person is everything
+                        // else. The landscape model has one mask, the person.
+                        val fromBackground = segMulticlass && masks != null && masks.size > 1
+                        val cm = if (fromBackground) masks!![0] else masks?.lastOrNull()
                         if (cm != null) {
                             val fb = ByteBufferExtractor.extract(cm).order(ByteOrder.nativeOrder()).asFloatBuffer()
-                            mask = toFrame(fb, cm.width, cm.height, jobRoi)
+                            mask = toFrame(fb, cm.width, cm.height, jobRoi, fromBackground)
                             mw = MASK_GRID_W
                             mh = MASK_GRID_H
                         }
@@ -192,7 +202,7 @@ class Tracker(private val ctx: Context) {
     // a finer grid (bilinear), so everything downstream stays in frame space and simply gets more
     // detail where the person is. Outside the crop is room: the crop's own top corners say what
     // room reads as, whichever way round the model's mask runs.
-    private fun toFrame(src: FloatBuffer, sw: Int, sh: Int, roi: FloatArray): ByteArray {
+    private fun toFrame(src: FloatBuffer, sw: Int, sh: Int, roi: FloatArray, invert: Boolean = false): ByteArray {
         val gw = MASK_GRID_W
         val gh = MASK_GRID_H
         val out = ByteArray(gw * gh)
@@ -203,6 +213,7 @@ class Tracker(private val ctx: Context) {
         val c = conf
         src.position(0)
         src.get(c, 0, n)
+        if (invert) for (i in 0 until n) c[i] = 1f - c[i]
         val room = ((c[0] + c[sw - 1]) / 2 * 255f).coerceIn(0f, 255f).toInt().toByte()
         java.util.Arrays.fill(out, room)
         val ox = roi[0] * gw
@@ -263,6 +274,16 @@ class Tracker(private val ctx: Context) {
     // stays on the CPU. adb's `--es segDelegate cpu|gpu|auto` chooses explicitly.
     private fun loadSegmenter(): Model? {
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // Which model: the small landscape one (256x144), or the heavier multiclass one (256x256,
+        // with hair as its own class). adb's `--es segModel multiclass|landscape`.
+        segMulticlass = prefs.getString(SEG_MODEL, "landscape") == "multiclass"
+        // It isn't shipped (830ms a frame on the gen 1 Portal's CPU); it works if dropped into assets.
+        if (segMulticlass && ctx.assets.list("")?.contains("selfie_multiclass_256x256.tflite") != true) {
+            Log.w(TAG, "multiclass segmentation model isn't in assets; using landscape")
+            segMulticlass = false
+        }
+        segInputW = 256
+        segInputH = if (segMulticlass) 256 else 144
         if (prefs.getBoolean(SEG_GPU_TRYING, false)) {
             Log.w(TAG, "segmenter GPU attempt didn't survive last time; staying on CPU")
             prefs.edit().putBoolean(SEG_GPU_BAD, true).putBoolean(SEG_GPU_TRYING, false).commit()
@@ -287,6 +308,7 @@ class Tracker(private val ctx: Context) {
         const val SEG_GPU_TRYING = "segGpuTrying"
         const val SEG_GPU_BAD = "segGpuBad"
         const val SEG_GPU_PROVEN = 10L
+        const val SEG_MODEL = "segModel"
     }
 
     private fun build(m: Mode, d: Delegate): Model? {
@@ -315,7 +337,7 @@ class Tracker(private val ctx: Context) {
                 Mode.SEGMENT -> ImageSegmenter.createFromOptions(
                     ctx,
                     ImageSegmenter.ImageSegmenterOptions.builder()
-                        .setBaseOptions(base("selfie_segmenter_landscape.tflite"))
+                        .setBaseOptions(base(if (segMulticlass) "selfie_multiclass_256x256.tflite" else "selfie_segmenter_landscape.tflite"))
                         .setRunningMode(RunningMode.VIDEO)
                         .setOutputCategoryMask(false)
                         .setOutputConfidenceMasks(true)

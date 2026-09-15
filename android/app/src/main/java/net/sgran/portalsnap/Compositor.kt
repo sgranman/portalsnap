@@ -35,6 +35,11 @@ private const val CAMERA_MIRRORS = true
 // How far each segmentation result moves the smoothed mask (1 = no smoothing).
 private const val MASK_SMOOTH = 0.75f
 
+// Cut-out filters show each frame only once its own mask is back, so the cut-out never trails
+// the picture; if a mask takes longer than this, the frame goes out anyway.
+private const val SYNC_CUTOUT = true
+private const val SYNC_TIMEOUT_MS = 250L
+
 // The segmenter's crop: never tighter than this share of the frame on either side; the person's
 // bounds grown by these; the model's view stretched no more than this; and the whole frame when
 // fewer than this many (every-other) mask pixels are person.
@@ -67,7 +72,20 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private lateinit var pPop: Program
     private lateinit var pDisco: Program
     private lateinit var pPopArt: Program
+    // The camera draws into frame. With a cut-out filter, each frame waits (held) for its own
+    // mask while the camera moves on to the other buffer; composites read shown, the frame going
+    // out.
     private lateinit var frame: Fbo
+    private lateinit var frameA: Fbo
+    private lateinit var frameB: Fbo
+    private lateinit var shown: Fbo
+    private var held: Fbo? = null
+    private var heldAt = 0L
+    private var lastOutAt = 0L
+    private var freshSinceSubmit = false
+    /** True while cut-out frames wait for their own masks. */
+    @Volatile var synced = false
+        private set
     private lateinit var comp: Fbo
     private lateinit var under: CanvasLayer
     private lateinit var over: CanvasLayer
@@ -152,7 +170,10 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             pPop = Program(Shaders.VERTEX, Shaders.FX_POP)
             pDisco = Program(Shaders.VERTEX, Shaders.FX_DISCO)
             pPopArt = Program(Shaders.VERTEX, Shaders.FX_POP_ART)
-            frame = Fbo(FRAME_W, FRAME_H)
+            frameA = Fbo(FRAME_W, FRAME_H)
+            frameB = Fbo(FRAME_W, FRAME_H)
+            frame = frameA
+            shown = frameA
             comp = Fbo(FRAME_W, FRAME_H)
             comp.attachDepth()
             under = CanvasLayer(handler)
@@ -245,7 +266,24 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private fun onTrack(r: TrackResult) {
         val now = SystemClock.uptimeMillis()
         val mask = r.mask
-        if (mask != null) uploadMask(mask, r.maskW, r.maskH, now) else painter.onFaces(r.faces, r.mode, now)
+        if (mask != null) {
+            uploadMask(mask, r.maskW, r.maskH, now)
+            val h = held
+            if (h != null) {
+                held = null
+                try {
+                    // The newest frame that came in while that one waited goes to the segmenter
+                    // first, so its inference runs while this one composites and waits on the
+                    // screen. Doing them one after the other halved Pop Art's frame rate.
+                    if (freshSinceSubmit && syncWanted()) submitHeld(now)
+                    output(h, now)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "render failed", e)
+                }
+            }
+        } else {
+            painter.onFaces(r.faces, r.mode, now)
+        }
     }
 
     private fun render() {
@@ -259,51 +297,95 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             frame.bind()
             if (testFaces > 0) drawTest(now) else drawCamera()
 
-            // 2. The tracker's copy, only when it is idle.
+            // 2. With a cut-out filter, this frame waits for its own mask and onTrack shows it,
+            //    so the cut-out always matches the picture; frames that arrive while the
+            //    segmenter is busy are dropped. Otherwise the tracker gets a copy when it's idle,
+            //    and the frame goes out now with the latest results.
+            if (syncWanted()) {
+                synced = true
+                freshSinceSubmit = true
+                val h = held
+                if (h == null) {
+                    submitHeld(now)
+                    // Nothing waiting and the segmenter still busy (a slow model, or a result
+                    // that never came): don't freeze; show this frame with the last mask.
+                    if (held == null && now - lastOutAt > SYNC_TIMEOUT_MS) output(frame, now)
+                } else if (now - heldAt > SYNC_TIMEOUT_MS) {
+                    // The segmenter is slow or stuck: show the held frame rather than freeze.
+                    held = null
+                    output(h, now)
+                    submitHeld(now)
+                }
+                return
+            }
+            synced = false
+            held = null
             feedTracker()
-
-            // 3. Filters.
-            val latency = (tracker.lastGrabMs + tracker.lastInferMs).toFloat()
-            val plan = painter.paint(now, latency, now - maskAt < 800, under, over)
-            val out = if (plan.composite) {
-                composite(plan)
-                comp
-            } else {
-                frame
-            }
-            lastOut = out
-
-            photo?.let {
-                photo = null
-                capture(out, 92, it)
-            }
-
-            // 4. Screen, mirrored like a mirror.
-            if (win != null) {
-                screen(out)
-                egl.swap(win)
-            }
-
-            // 5. Encoder, unmirrored, the way the room looked.
-            val enc = encoder
-            if (enc != null) {
-                egl.makeCurrent(enc)
-                GLES20.glViewport(0, 0, FRAME_W, FRAME_H)
-                GLES20.glDisable(GLES20.GL_BLEND)
-                drawTexture(out.tex, Program.IDENTITY, Program.IDENTITY)
-                egl.presentationTime(enc, System.nanoTime())
-                egl.swap(enc)
-                recRate.tick()
-                recorder?.voiceRatio = painter.voice
-            }
-
-            renderRate.tick()
-            renderFrames.inc()
+            output(frame, now)
         } catch (e: Throwable) {
             Log.e(TAG, "render failed", e)
         } finally {
             frameMs.add((SystemClock.elapsedRealtimeNanos() - t0) / 1e6)
         }
+    }
+
+    // 3 to 5 for one camera frame: filters, then the screen and the encoder.
+    private fun output(src: Fbo, now: Long) {
+        shown = src
+        lastOutAt = now
+        val win = window
+        if (win != null) egl.makeCurrent(win) else egl.makePbufferCurrent()
+
+        // 3. Filters.
+        val latency = (tracker.lastGrabMs + tracker.lastInferMs).toFloat()
+        val plan = painter.paint(now, latency, now - maskAt < 800, under, over)
+        val out = if (plan.composite) {
+            composite(plan)
+            comp
+        } else {
+            src
+        }
+        lastOut = out
+
+        photo?.let {
+            photo = null
+            capture(out, 92, it)
+        }
+
+        // 4. Screen, mirrored like a mirror.
+        if (win != null) {
+            screen(out)
+            egl.swap(win)
+        }
+
+        // 5. Encoder, unmirrored, the way the room looked.
+        val enc = encoder
+        if (enc != null) {
+            egl.makeCurrent(enc)
+            GLES20.glViewport(0, 0, FRAME_W, FRAME_H)
+            GLES20.glDisable(GLES20.GL_BLEND)
+            drawTexture(out.tex, Program.IDENTITY, Program.IDENTITY)
+            egl.presentationTime(enc, System.nanoTime())
+            egl.swap(enc)
+            recRate.tick()
+            recorder?.voiceRatio = painter.voice
+        }
+
+        renderRate.tick()
+        renderFrames.inc()
+    }
+
+    private fun syncWanted() =
+        SYNC_CUTOUT && painter.active?.tier == Mode.SEGMENT && tracker.mode == Mode.SEGMENT && tracker.ready
+
+    // Sends the frame just drawn to the segmenter and holds it until its mask comes back; the
+    // camera draws its next frames into the other buffer.
+    private fun submitHeld(now: Long) {
+        if (!feedTracker()) return
+        held = frame
+        heldAt = now
+        freshSinceSubmit = false
+        frame = if (frame === frameA) frameB else frameA
     }
 
     private fun drawCamera() {
@@ -386,16 +468,19 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         }
     }
 
-    private fun feedTracker() {
-        if (tracker.busy || !tracker.ready) return
+    private fun feedTracker(): Boolean {
+        if (tracker.busy || !tracker.ready) return false
         val m = tracker.mode
         val t0 = SystemClock.elapsedRealtimeNanos()
+        // The segmenter's input follows its model; the face tiers keep their measured sizes.
+        val iw = if (m == Mode.SEGMENT) tracker.segInputW else m.inputW
+        val ih = if (m == Mode.SEGMENT) tracker.segInputH else m.inputH
         var target = small
-        if (target == null || target.w != m.inputW || target.h != m.inputH) {
+        if (target == null || target.w != iw || target.h != ih) {
             target?.release()
-            target = Fbo(m.inputW, m.inputH)
+            target = Fbo(iw, ih)
             small = target
-            smallBuf = ByteBuffer.allocateDirect(m.inputW * m.inputH * 4).order(ByteOrder.nativeOrder())
+            smallBuf = ByteBuffer.allocateDirect(iw * ih * 4).order(ByteOrder.nativeOrder())
         }
         // Mipmapped, so a 4x downscale averages pixels instead of skipping them.
         frame.generateMipmaps()
@@ -417,7 +502,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
         val buf = smallBuf!!
         target.read(buf)
-        tracker.submit(buf, target.w, target.h, (SystemClock.elapsedRealtimeNanos() - t0) / 1e6, if (crop) segRoi else FULL_FRAME)
+        return tracker.submit(buf, target.w, target.h, (SystemClock.elapsedRealtimeNanos() - t0) / 1e6, if (crop) segRoi else FULL_FRAME)
     }
 
     private fun composite(plan: Plan) {
@@ -427,7 +512,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             drawFx(fx)
         } else if (plan.base) {
             GLES20.glDisable(GLES20.GL_BLEND)
-            drawTexture(frame.tex, Program.IDENTITY, Program.IDENTITY)
+            drawTexture(shown.tex, Program.IDENTITY, Program.IDENTITY)
         } else {
             GLES20.glClearColor(0f, 0f, 0f, 1f)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
@@ -445,7 +530,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTex)
             GLES20.glUniform1i(pMask.u("uMask"), 1)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, frame.tex)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, shown.tex)
             GLES20.glUniform1i(pMask.u("uTexture"), 0)
             GLES20.glUniform2f(pMask.u("uTexel"), 1.5f / maskW, 1.5f / maskH)
             pMask.drawQuad()
@@ -454,7 +539,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         for (p in plan.patches) {
             pPatch.use()
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, frame.tex)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, shown.tex)
             GLES20.glUniform1i(pPatch.u("uTexture"), 0)
             GLES20.glUniform2f(pPatch.u("uSize"), FRAME_W.toFloat(), FRAME_H.toFloat())
             GLES20.glUniform2f(pPatch.u("uCentre"), p.cx, p.cy)
@@ -484,7 +569,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         if (plan.glasses.isNotEmpty() && !glassFailed) {
             try {
                 val r = glassRenderer ?: GlassRenderer().also { glassRenderer = it }
-                r.draw(plan.glasses, frame.tex)
+                r.draw(plan.glasses, shown.tex)
             } catch (e: Throwable) {
                 glassFailed = true
                 Log.e(TAG, "3D glass pass failed; turning it off", e)
@@ -508,7 +593,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             FrameFx.DISCO -> pDisco
             FrameFx.POP_ART -> pPopArt
             else -> {
-                drawTexture(frame.tex, Program.IDENTITY, Program.IDENTITY)
+                drawTexture(shown.tex, Program.IDENTITY, Program.IDENTITY)
                 return
             }
         }
@@ -563,7 +648,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glUniform2f(p.u("uDrift"), q[16], q[17])
         }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, frame.tex)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, shown.tex)
         GLES20.glUniform1i(p.u("uTexture"), 0)
         p.drawQuad()
     }
@@ -722,8 +807,11 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             val e = 0.02f
             if ((bx0 <= r[0] + e && r[0] > e) || (bx1 >= r[0] + r[2] - e && r[0] + r[2] < 1f - e)) cw *= 1.3f
             if ((by0 <= r[1] + e && r[1] > e) || (by1 >= r[1] + r[3] - e && r[1] + r[3] < 1f - e)) ch *= 1.3f
-            cw = maxOf(cw, ch / SEG_ROI_MAX_STRETCH).coerceIn(SEG_ROI_MIN, 1f)
-            ch = maxOf(ch, cw / SEG_ROI_MAX_STRETCH).coerceIn(SEG_ROI_MIN, 1f)
+            // The crop's natural shape is the model's input shape, in 0..1 units: 16:9 is 1,
+            // square is 0.5625.
+            val natural = tracker.segInputW.toFloat() / tracker.segInputH * FRAME_H / FRAME_W
+            cw = maxOf(cw, ch * natural / SEG_ROI_MAX_STRETCH).coerceIn(SEG_ROI_MIN, 1f)
+            ch = maxOf(ch, cw / (natural * SEG_ROI_MAX_STRETCH)).coerceIn(SEG_ROI_MIN, 1f)
             cx = ((bx0 + bx1) / 2 - cw / 2).coerceIn(0f, 1f - cw)
             cy = (by0 - (by1 - by0) * 0.12f - 0.03f).coerceIn(0f, 1f - ch)
         }

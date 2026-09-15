@@ -218,6 +218,16 @@ Each of these cost real time, so check here first:
   - Per-sample `FloatBuffer` reads there cost more than the model (67ms a result), so it copies
     in bulk and precomputes per-column positions. Segmentation then takes about 18ms at
     ~27Hz on Beach, where it was about 27ms at ~21Hz.
+- **Cut-outs are frame-synced.** With a segment filter, each camera frame waits for its own
+  mask before it's composited (`Compositor.submitHeld` and `onTrack`). Frames that arrive while
+  the segmenter is busy are dropped, so the output runs at the segmentation rate (about 25fps on
+  the test portrait) and the cut-out never trails a moving arm. After 250ms without a mask, the
+  frame goes out anyway. The original Photo Booth recorded at about 21fps, which is probably
+  the same trade.
+- **The multiclass segmenter is too heavy.** `selfie_multiclass_256x256` has hair as its own
+  class. It took about 830ms a frame on the gen 1 Portal's CPU (the landscape model takes 18ms),
+  and MediaPipe's GPU path aborts. So it isn't shipped. `--es segModel multiclass` still works
+  if its `.tflite` is dropped into `app/src/main/assets`.
 - **Encoders get the decoder role.** `MediaCodec.configure(format, null, null, 0)` on any
   H.264 encoder, hardware or software, fails with -1010 after ACodec logs `Failed to set
   standard component role 'video_decoder.avc'`. Passing `CONFIGURE_FLAG_ENCODE` and an
