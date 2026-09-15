@@ -405,18 +405,18 @@ places rather than the one palace, which isn't among them:
 - **The places:** Castle, Forest, Waterfall, Circus, Yacht, Beach, North Pole and Moon. They're
   picked from a second row of chips shown over the bottom of the picture while Places is on,
   and the choice is remembered between launches.
-- **Pictures:** public-domain and CC0 art from Wikimedia Commons. For each place, the
-  best-looking backdrop was chosen, whether photo, painting or poster, and cropped to the frame
-  (1280×720) so its subject sits beside where the person stands. They're credited in
-  `THIRD-PARTY.md`.
+- **Pictures:** public-domain and CC0 images from Wikimedia Commons, cropped to the frame
+  (1280×720) so each subject sits beside where the person stands, and credited in
+  `THIRD-PARTY.md`. The first set mixed photos, paintings and posters. The user kept Castle and
+  Forest and asked for scenic real photos for the rest, choosing each from a shortlist of four.
   - **Castle:** Neuschwanstein, a photochrom print from about 1890–1900.
   - **Forest:** a sunlit forest path.
-  - **Waterfall:** Tivadar Csontváry Kosztka's *Waterfall of Jajce* (1903).
-  - **Circus:** Cândido de Faria's *Le Cirque Miniature*, a 1908 Pathé poster.
-  - **Yacht:** at the helm of a boat, off an island.
-  - **Beach:** a linen postcard of Palm Beach, Florida.
-  - **North Pole:** three polar bears by a submarine surfaced near the Pole (U.S. Navy).
-  - **Moon:** Harrison Schmitt at Tracy's Rock, on Apollo 17 (NASA).
+  - **Waterfall:** a waterfall on a mossy Icelandic mountainside.
+  - **Circus:** the Chimelong International Circus arena, lit with fountains of sparks.
+  - **Yacht:** a sailboat heeling at sunset off a rocky coast.
+  - **Beach:** a row of colourful beach huts.
+  - **North Pole:** an arctic fox in the snow.
+  - **Moon:** Earthrise over the Moon's horizon, from Apollo 8 (NASA).
 - **How:** the segmentation tier's person mask pastes the camera over the picture, which is
   drawn into the under layer as a bitmap. Pictures decode on first use, and the last two stay
   loaded.

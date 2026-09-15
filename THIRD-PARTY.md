@@ -64,12 +64,12 @@ dedicated to it under CC0, so none requires attribution; they are credited here 
 |---|---|---|---|---|
 | `castle.jpg` | Neuschwanstein Castle, photochrom print (c. 1890–1900, Library of Congress) | unknown | public domain | <https://commons.wikimedia.org/wiki/File:Neuschwanstein_Castle_LOC_print_rotated.jpg> |
 | `forest.jpg` | Forest Path Sunset | 44833 (Pixabay) | CC0 | <https://commons.wikimedia.org/wiki/File:Forest_Path_Sunset.jpg> |
-| `waterfall.jpg` | *Waterfall of Jajce* (1903) | Tivadar Csontváry Kosztka | public domain | <https://commons.wikimedia.org/wiki/File:Waterfall_of_Jajce_1903.jpg> |
-| `circus.jpg` | *Le Cirque Miniature* (1908) | Cândido Aragonez de Faria | public domain | <https://commons.wikimedia.org/wiki/File:Le_Cirque_Miniature_-_C%C3%A2ndido_de_Faria_-_1908.jpg> |
-| `yacht.jpg` | At the helm (2015, Unsplash) | Cosmic Timetraveler | CC0 | <https://commons.wikimedia.org/wiki/File:Cosmic_Timetraveler_2015-06-24_(Unsplash).jpg> |
-| `beach.jpg` | Beach Scene at Tropical Palm Beach, Florida (linen postcard) | unknown | public domain | <https://commons.wikimedia.org/wiki/File:11957_-_Beach_Scene_at_Tropical_Palm_Beach,_Florida_front.jpg> |
-| `northpole.jpg` | Polar bears near the North Pole (U.S. Navy) | Chief Yeoman Alphonso Braggs | public domain | <https://commons.wikimedia.org/wiki/File:Polar_bears_near_north_pole.jpg> |
-| `moon.jpg` | Harrison H. Schmitt and Tracy's Rock, Apollo 17 (NASA; photomontage) | Eugene A. Cernan; montage by Grunpfnul | public domain | <https://commons.wikimedia.org/wiki/File:Apollo_17_Harrison_H._Schmitt_and_Tracy%27s_Rock_-_AS17-140-21493%2BAS17-140-21497_2025.jpg> |
+| `waterfall.jpg` | Mossy rock mountain and waterfall, Iceland (Unsplash) | Jacek Smoter | CC0 | <https://commons.wikimedia.org/wiki/File:Mossy_rock_mountain_and_waterfall_(Unsplash).jpg> |
+| `circus.jpg` | Chimelong International Circus arena (2025) | Renek78 | CC0 | <https://commons.wikimedia.org/wiki/File:2025_Chimelong_International_Circus_05.jpg> |
+| `yacht.jpg` | Sailing at sunset (Unsplash) | Alin Meceanu | CC0 | <https://commons.wikimedia.org/wiki/File:Alin_Meceanu_2014_(Unsplash).jpg> |
+| `beach.jpg` | Colourful beach huts on a beach (Unsplash) | Arno Smit | CC0 | <https://commons.wikimedia.org/wiki/File:Colorful_beach_huts_on_beach_(Unsplash).jpg> |
+| `northpole.jpg` | Arctic fox in snow (Unsplash) | Jonatan Pie | CC0 | <https://commons.wikimedia.org/wiki/File:Arctic_fox_in_snow_(Unsplash).jpg> |
+| `moon.jpg` | Earthrise, Apollo 8 (NASA, AS08-14-2383) | Bill Anders | public domain | <https://commons.wikimedia.org/wiki/File:Earth-moon.jpg> |
 
 ## Development-only
 
