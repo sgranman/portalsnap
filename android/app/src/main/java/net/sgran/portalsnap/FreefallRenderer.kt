@@ -68,6 +68,11 @@ object FallShaders {
                 float dens = smoothstep(0.3, 0.6, n);
                 // Gone from rays looking steeply down, where wrapping it round us would swirl.
                 col = mix(col, cloudColor(0.55 + (n - above) * 9.0 + (n - 0.5) * 0.8), dens * uWall * smoothstep(-0.9, -0.55, d.y));
+                // A nearer, wispier layer: bigger shapes rushing up past it about three times as fast.
+                vec2 fp = vec2(atan(d.x, -d.z) * 0.32 + 0.41, d.y / h * 0.32 - uClock * 0.34);
+                float fn = clouds(fp);
+                float fd = smoothstep(0.55, 0.82, fn) * 0.85;
+                col = mix(col, cloudColor(0.8 + (fn - clouds(fp + vec2(0.0, 0.03))) * 8.0), fd * uWall * smoothstep(-0.9, -0.55, d.y));
             }
             gl_FragColor = vec4(mix(col, vec3(1.0), uWhite), 1.0);
         }
@@ -204,6 +209,8 @@ object FallShaders {
         uniform vec2 uCentre;
         uniform vec2 uReach;
         uniform float uRoll;
+        uniform float uTime;
+        uniform float uWind;
         out vec4 outColor;
         $LIGHT
         void main() {
@@ -211,7 +218,16 @@ object FallShaders {
             float d = pow(pow(abs(q.x), 2.4) + pow(abs(q.y), 2.4), 1.0 / 2.4);
             float mask = 1.0 - smoothstep(0.84, 1.0, d);
             if (mask <= 0.0) discard;
-            vec2 o = vec2(q.x, -q.y) * uReach;
+            // The wind in the mouth: cheeks and lips stretched out toward the helmet, with ripples
+            // running back across the cheeks. Sampling nearer the middle spreads the picture outward.
+            float cheek = smoothstep(0.12, 0.5, abs(q.x)) * (1.0 - smoothstep(0.05, 0.45, q.y)) * (1.0 - smoothstep(0.75, 1.0, abs(q.x)))
+                * (1.0 - smoothstep(0.75, 1.0, -q.y));
+            float lips = (1.0 - smoothstep(0.0, 0.25, abs(q.y + 0.46))) * (1.0 - smoothstep(0.25, 0.65, abs(q.x)));
+            vec2 st = q;
+            st.x *= 1.0 - (0.2 * cheek + 0.14 * lips) * uWind;
+            st.x += sin(abs(q.x) * 14.0 - uTime * 30.0) * 0.022 * cheek * sign(q.x) * uWind;
+            st.y += sin(abs(q.x) * 11.0 - uTime * 24.0 + 1.3) * 0.018 * cheek * uWind;
+            vec2 o = vec2(st.x, -st.y) * uReach;
             float c = cos(uRoll);
             float s = sin(uRoll);
             vec2 px = uCentre + vec2(c * o.x - s * o.y, s * o.x + c * o.y);
@@ -294,6 +310,8 @@ class FreefallRenderer(assets: AssetManager) {
             GLES20.glUniform2f(pFace.u("uCentre"), h.faceX, h.faceY)
             GLES20.glUniform2f(pFace.u("uReach"), h.reachX, h.reachY)
             GLES20.glUniform1f(pFace.u("uRoll"), h.roll)
+            GLES20.glUniform1f(pFace.u("uTime"), f.clock)
+            GLES20.glUniform1f(pFace.u("uWind"), f.wind)
             face.draw(pFace)
         }
         GLES20.glDepthMask(true)

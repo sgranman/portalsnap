@@ -553,6 +553,8 @@ How it's built:
   - **Cloud wall:** blue sky with a wall of cloud wrapped round the fall line, rushing upward and
     lit from above. The clouds come from a 256² tiling noise texture made at start-up. The wall
     fades from rays looking steeply down, where the wrap would swirl.
+  - **Near layer:** at the user's request, a nearer, wispier layer of bigger cloud shapes in front
+    of the wall, rushing up about three and a half times as fast on screen.
   - **Below:** the ground photo on a plane 3.2km down, through haze, with a cloud deck in
     between that closes in as the fall goes on.
 - **Ground:** a public-domain USDA NAIP aerial photo of New York farmland (2022), 2048² and laid
@@ -560,6 +562,13 @@ How it's built:
 - **Diver:** rebuilt every frame from tubes, ellipsoids and boxes (`ColorGeo`, with colour alpha
   as gloss): the suit, a harness with a chest buckle, the pack, gloves with white cuffs, bent
   legs and boots.
+  - **Body tilt:** the user couldn't see the body or feet, so it tips 32° down behind the head,
+    pivoting at the neck (`DiverParts.BODY_TILT`). The torso, harness and buckle now show below
+    the chin. Tipping it the other way hid everything behind the helmet.
+  - **Legs:** splayed, with the shins up, so the boots stick out behind.
+- **Wind in the face:** at the user's request, the face shader stretches the cheeks and lips out
+  toward the helmet by sampling nearer the middle, and runs ripples back across the cheeks. It
+  flaps harder during the fall (`Fall3D.wind`), and the ripples speed up with the cloud clock.
 - **Helmet:** an ellipsoid shell, cut open at the face and underneath by its shader, which also
   paints the panels, trim, cheek guards and inner padding. The face window sits inside, pulled
   2cm nearer so the padding behind it never wins the depth test.

@@ -129,6 +129,7 @@ object Freefall : Filter("freefall", "Freefall", "☁️", Mode.MESH) {
         fall.wall = if (falling) 1f - smooth(0.35f, 1.1f, t) else 1f
         fall.groundShow = 1f - fall.wall
         fall.deckY = if (falling) -(1200f + (8f - 1200f) * smooth(1.2f, 2.05f, t)) else -1200f
+        fall.wind = if (falling) 1.6f else 1f
         fall.white = when {
             t < 0f -> 0f
             t < BACK -> smooth(WHITE_IN, WHITE_FULL, t)
@@ -195,7 +196,7 @@ object Freefall : Filter("freefall", "Freefall", "☁️", Mode.MESH) {
         h.reachY = r.reachY
         h.roll = r.faceRoll
         fall.heads += h
-        DiverParts.body(fall.body, m, h.model, sin(clock * 11f + r.phase) * 0.012f)
+        DiverParts.body(fall.body, m, h.model, sin(clock * 11f + r.phase) * 0.012f, DiverParts.BODY_TILT)
     }
 }
 
@@ -239,6 +240,8 @@ class Fall3D {
     var deckY = -1200f
     /** The white-out, 0 to 1. */
     var white = 0f
+    /** How hard the wind flaps the cheeks. */
+    var wind = 1f
     /** Divers' bodies, already in world space. Colour alpha is gloss. */
     val body = ColorGeo(8192, 16384)
     val heads = ArrayList<DiverHead>()
@@ -255,6 +258,8 @@ object DiverParts {
     const val FACE_HALF_W = 0.105f
     const val FACE_HALF_H = 0.14f
     const val FACE_Y = -0.035f
+    /** Degrees the body tips down behind the head from the neck, so the camera sees the harness and legs. */
+    const val BODY_TILT = -32f
 
     private const val SUIT = 0x2345d6
     private const val CUFF = 0xe6e8ea
@@ -267,7 +272,12 @@ object DiverParts {
     private const val STRAP = 0x55575a
 
     /** The body through [m], the chin strap through [head]; [flap] ruffles the arms in the wind. */
-    fun body(g: ColorGeo, m: FloatArray, head: FloatArray, flap: Float) {
+    fun body(g: ColorGeo, diver: FloatArray, head: FloatArray, flap: Float, tilt: Float) {
+        // The body pivots at the neck: a negative tilt drops it below the head, into view.
+        val m = diver.copyOf()
+        Matrix.translateM(m, 0, 0f, -0.2f, -0.12f)
+        Matrix.rotateM(m, 0, tilt, 1f, 0f, 0f)
+        Matrix.translateM(m, 0, 0f, 0.2f, 0.12f)
         g.color(SUIT, 0.8f)
         g.tube(m, floatArrayOf(0f, -0.22f, -0.06f, 0f, -0.25f, -0.22f), 2, 0.085f, 0.1f, 10)
         g.ellipsoid(m, 0f, -0.25f, -0.58f, 0.2f, 0.12f, 0.36f, 16, 10)
@@ -304,15 +314,15 @@ object DiverParts {
                 g.tube(m, floatArrayOf(wx + sd * 0.15f, wy + 0.08f, z, wx + sd * 0.2f, wy + 0.13f - k * 0.01f, z + (k - 1.5f) * 0.015f), 2, 0.018f, 0.015f, 6)
             }
             g.tube(m, floatArrayOf(wx + sd * 0.09f, wy + 0.05f, -0.35f, wx + sd * 0.14f, wy + 0.07f, -0.31f), 2, 0.017f, 0.015f, 6)
-            // Legs trailing behind, knees bent, feet up.
-            val hip = floatArrayOf(sd * 0.11f, -0.28f, -0.9f)
-            val knee = floatArrayOf(sd * 0.24f, -0.34f, -1.28f)
-            val ankle = floatArrayOf(sd * 0.28f, -0.12f - flap, -1.5f)
+            // Legs trailing behind and splayed, knees bent, shins up, so the boots stick out.
+            val hip = floatArrayOf(sd * 0.12f, -0.28f, -0.9f)
+            val knee = floatArrayOf(sd * 0.34f, -0.36f, -1.22f)
+            val ankle = floatArrayOf(sd * 0.44f, -0.08f - flap, -1.36f)
             g.color(SUIT, 0.8f)
             g.tube(m, floatArrayOf(hip[0], hip[1], hip[2], knee[0], knee[1], knee[2]), 2, 0.09f, 0.075f, 10)
             g.ellipsoid(m, knee[0], knee[1], knee[2], 0.075f, 0.075f, 0.075f, 10, 7)
             g.tube(m, floatArrayOf(knee[0], knee[1], knee[2], ankle[0], ankle[1], ankle[2]), 2, 0.075f, 0.058f, 10)
-            g.color(BOOT, 0.5f).ellipsoid(m, ankle[0], ankle[1] + 0.03f, ankle[2] - 0.02f, 0.06f, 0.1f, 0.065f, 10, 7)
+            g.color(BOOT, 0.5f).ellipsoid(m, ankle[0], ankle[1] + 0.04f, ankle[2] - 0.02f, 0.068f, 0.12f, 0.075f, 10, 7)
         }
         // The helmet's padded chin strap, under the chin.
         g.color(STRAP, 0.2f).tube(
