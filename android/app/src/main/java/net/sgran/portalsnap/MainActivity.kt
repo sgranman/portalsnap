@@ -711,6 +711,13 @@ class MainActivity : Activity() {
         i.getStringExtra("filter")?.let { id -> selectFilter(FILTERS.firstOrNull { it.id == id }) }
         if (i.hasExtra("hud")) hud.visibility = if (i.getBooleanExtra("hud", false)) View.VISIBLE else View.GONE
         i.getStringExtra("music")?.let { playMusic(it) }
+        // Where the segmenter runs: cpu, gpu or auto (GPU unless it failed before). Takes effect
+        // the next time the app starts, and forgets any earlier GPU failure.
+        i.getStringExtra("segDelegate")?.let {
+            getSharedPreferences("tracker", MODE_PRIVATE).edit()
+                .putString("segDelegate", it).putBoolean("segGpuBad", false).putBoolean("segGpuTrying", false).commit()
+            Log.i(TAG, "segmenter delegate set to $it; restart to apply")
+        }
         if (i.hasExtra("jaw")) painter.debugJaw = i.getFloatExtra("jaw", -1f).takeIf { it >= 0f }
         when (i.getStringExtra("action")) {
             "photo" -> takePhoto()

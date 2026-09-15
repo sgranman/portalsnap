@@ -152,12 +152,22 @@ class Tracker(private val ctx: Context) {
                     }
                 }
                 img.close()
-                model?.let { it.successes++ }
+                model?.let {
+                    it.successes++
+                    if (m == Mode.SEGMENT && it.delegate == "GPU" && it.successes == SEG_GPU_PROVEN) {
+                        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(SEG_GPU_TRYING, false).apply()
+                        Log.i(TAG, "segmenter proven on GPU")
+                    }
+                }
             } catch (e: Throwable) {
                 lastError = e.message
                 Log.w(TAG, "inference failed on $delegate", e)
                 // A GPU delegate can accept the graph and still fail on its first frame.
                 if (model != null && model.delegate == "GPU" && model.successes == 0L) {
+                    if (m == Mode.SEGMENT) {
+                        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                            .putBoolean(SEG_GPU_TRYING, false).putBoolean(SEG_GPU_BAD, true).apply()
+                    }
                     val cpu = build(m, Delegate.CPU)
                     models[m] = CompletableFuture.completedFuture(cpu)
                     current = cpu
@@ -242,12 +252,42 @@ class Tracker(private val ctx: Context) {
     private var colX1 = IntArray(0)
     private var colT = FloatArray(0)
 
-    // The segmenter runs on the CPU. On the gen 1 Portal's Adreno 540, converting its GPU
-    // category mask aborts the whole process (image_frame.cc: "ImageFormat::UNKNOWN !=
-    // format_") — a native CHECK, so there is no exception to fall back from. The model is
-    // tiny and fed 256x144, so the CPU costs little.
     private fun load(m: Mode): Model? =
-        if (m == Mode.SEGMENT) build(m, Delegate.CPU) else build(m, Delegate.GPU) ?: build(m, Delegate.CPU)
+        if (m == Mode.SEGMENT) loadSegmenter() else build(m, Delegate.GPU) ?: build(m, Delegate.CPU)
+
+    // The segmenter on the GPU, with a safety net. With category masks, the GPU path aborted
+    // the whole process on the gen 1 Portal's Adreno 540 (image_frame.cc: "ImageFormat::UNKNOWN
+    // != format_"): a native CHECK, with no exception to fall back from. Confidence masks may
+    // convert cleanly, so the attempt is written down before it starts and cleared after
+    // SEG_GPU_PROVEN good results. If the app dies in between, the next launch finds the note and
+    // stays on the CPU. adb's `--es segDelegate cpu|gpu|auto` chooses explicitly.
+    private fun loadSegmenter(): Model? {
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(SEG_GPU_TRYING, false)) {
+            Log.w(TAG, "segmenter GPU attempt didn't survive last time; staying on CPU")
+            prefs.edit().putBoolean(SEG_GPU_BAD, true).putBoolean(SEG_GPU_TRYING, false).commit()
+        }
+        // CPU unless asked: confidence masks abort in the same conversion on the gen 1 Portal
+        // (tried 2026-09-14), and "auto" would cost every new Portal one crash before the note
+        // above steers it back.
+        val choice = prefs.getString(SEG_DELEGATE, "cpu")
+        val tryGpu = choice == "gpu" || (choice == "auto" && !prefs.getBoolean(SEG_GPU_BAD, false))
+        if (tryGpu) {
+            prefs.edit().putBoolean(SEG_GPU_TRYING, true).commit()
+            val gpu = build(Mode.SEGMENT, Delegate.GPU)
+            if (gpu != null) return gpu
+            prefs.edit().putBoolean(SEG_GPU_TRYING, false).putBoolean(SEG_GPU_BAD, true).commit()
+        }
+        return build(Mode.SEGMENT, Delegate.CPU)
+    }
+
+    private companion object {
+        const val PREFS = "tracker"
+        const val SEG_DELEGATE = "segDelegate"
+        const val SEG_GPU_TRYING = "segGpuTrying"
+        const val SEG_GPU_BAD = "segGpuBad"
+        const val SEG_GPU_PROVEN = 10L
+    }
 
     private fun build(m: Mode, d: Delegate): Model? {
         val t0 = SystemClock.elapsedRealtime()
