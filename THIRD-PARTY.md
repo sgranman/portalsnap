@@ -6,7 +6,7 @@ standard library alone. What follows is vendored, committed on purpose, and
 redistributed under its own terms.
 
 Why vendored at all: a discontinued device on an aging browser should not depend
-on third-party hosts staying reachable. See *Vendored assets* in the README for
+on third-party hosts staying reachable. See *Vendored assets* in BUILD-JOURNAL.md for
 the refresh recipes.
 
 ## MediaPipe Tasks Vision — Apache-2.0

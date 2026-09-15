@@ -55,7 +55,7 @@ discarded, then 8s measured.
 | Puppy **while recording** | mesh, GPU | 38.1 ms | 52.0 | 16.6 fps | 30.3 | **30 fps** |
 | Beach **while recording** | segment, CPU | 25.8 ms | 40.1 | 25.3 fps | 30.3 | **30.5 fps** |
 
-For comparison, the web app on its own Portal (README, "Where this stands"):
+For comparison, the web app on its own Portal (BUILD-JOURNAL.md, "Where this stands"):
 
 | | web: fast tier | native: fast tier |
 |---|---|---|
