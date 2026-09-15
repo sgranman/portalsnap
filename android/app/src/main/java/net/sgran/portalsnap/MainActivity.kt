@@ -78,8 +78,11 @@ class MainActivity : Activity() {
     private lateinit var captures: Captures
     private lateinit var gear: TextView
     private val chips = ArrayList<Pair<Filter?, LinearLayout>>()
-    private lateinit var placeBar: HorizontalScrollView
-    private lateinit var placeRow: LinearLayout
+    private val groupChips = ArrayList<Pair<FilterGroup, LinearLayout>>()
+    // The second row over the bottom of the picture, and what it's showing: Places or a FilterGroup.
+    private lateinit var subBar: HorizontalScrollView
+    private lateinit var subRow: LinearLayout
+    private var subFor: Any? = null
 
     private var cameraTexture: SurfaceTexture? = null
     private var openedCamera = false
@@ -341,19 +344,15 @@ class MainActivity : Activity() {
         }
         stage.addView(gear, lp(dp(60), dp(60), Gravity.TOP or Gravity.END).apply { rightMargin = dp(18); topMargin = dp(18) })
 
-        // Places' second row: where to go, over the bottom of the picture while Places is on.
-        placeRow = LinearLayout(this).apply { setPadding(dp(14), dp(10), dp(14), dp(12)) }
-        for ((i, place) in Places.PLACES.withIndex()) {
-            placeRow.addView(placeChip(i, place), LinearLayout.LayoutParams(dp(96), dp(76)).apply { if (i > 0) leftMargin = dp(8) })
-        }
-        placeBar = HorizontalScrollView(this).apply {
+        // The second row, over the bottom of the picture: Places' places, or the filters in a group.
+        subRow = LinearLayout(this).apply { setPadding(dp(14), dp(10), dp(14), dp(12)) }
+        subBar = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(170, 0, 0, 0), Color.TRANSPARENT))
-            addView(placeRow)
+            addView(subRow)
             visibility = View.GONE
         }
-        stylePlaces()
-        stage.addView(placeBar, lp(MATCH, WRAP, Gravity.BOTTOM))
+        stage.addView(subBar, lp(MATCH, WRAP, Gravity.BOTTOM))
 
         loadMsg = label("Waking up the camera…", 22f, Palette.DIM).apply { gravity = Gravity.CENTER }
         loader = LinearLayout(this).apply {
@@ -379,12 +378,23 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(4), dp(14), dp(4))
         }
-        // Room above and below the chips inside the scroller, which clips: the selected chip rises
-        // 3dp, and its outline used to lose its top edge against the bar.
-        val strip = LinearLayout(this).apply { setPadding(0, dp(6), 0, dp(6)) }
+        // Room above and below the chips, drawn into: the selected chip rises 3dp, and its outline
+        // lost its top edge. Padding alone didn't do it, because a layout clips its children to its
+        // padding unless told not to.
+        val strip = LinearLayout(this).apply {
+            setPadding(0, dp(6), 0, dp(6))
+            clipToPadding = false
+        }
         strip.addView(chip(null, "🚫", "None"))
         for (f in FILTERS) {
-            strip.addView(chip(f, emojiOr(f.emoji, EMOJI_FALLBACK[f.id] ?: "✨"), f.name), LinearLayout.LayoutParams(dp(96), dp(96)).apply { leftMargin = dp(10) })
+            // A group's one chip stands where its first member would.
+            val group = GROUPS.firstOrNull { f in it.members }
+            val c = when {
+                group == null -> chip(f, emojiOr(f.emoji, EMOJI_FALLBACK[f.id] ?: "✨"), f.name)
+                group.members[0] === f -> groupChip(group)
+                else -> continue
+            }
+            strip.addView(c, LinearLayout.LayoutParams(dp(96), dp(96)).apply { leftMargin = dp(10) })
         }
         styleChips(null)
         bar.addView(HorizontalScrollView(this).apply {
@@ -428,18 +438,58 @@ class MainActivity : Activity() {
         return c
     }
 
-    private fun placeChip(i: Int, place: Places.Place) = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER
-        addView(label(emojiOr(place.emoji, "📍"), 28f).apply { gravity = Gravity.CENTER; includeFontPadding = false })
-        addView(label(place.name, 12f, Palette.DIM, bold = true).apply { gravity = Gravity.CENTER })
-        setOnClickListener { selectPlace(i) }
+    private fun groupChip(g: FilterGroup): LinearLayout {
+        val c = chip(null, emojiOr(g.emoji, "✨"), g.name)
+        chips.removeAt(chips.size - 1)
+        c.setOnClickListener { selectFilter(memberOf(g)) }
+        groupChips += Pair(g, c)
+        return c
     }
 
-    private fun stylePlaces() {
-        for (k in 0 until placeRow.childCount) {
-            val c = placeRow.getChildAt(k) as LinearLayout
-            val on = k == Places.current
+    // The member a group's chip opens: the one used last, remembered between launches.
+    private fun memberOf(g: FilterGroup): Filter {
+        val id = getSharedPreferences("groups", MODE_PRIVATE).getString(g.id, null)
+        return g.members.firstOrNull { it.id == id } ?: g.members[0]
+    }
+
+    private fun subChip(emoji: String, name: String, onTap: () -> Unit) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        addView(label(emoji, 28f).apply { gravity = Gravity.CENTER; includeFontPadding = false })
+        addView(label(name, 12f, Palette.DIM, bold = true).apply { gravity = Gravity.CENTER })
+        setOnClickListener { onTap() }
+    }
+
+    // Places' places while Places is on, a group's filters while one of them is on, nothing
+    // otherwise. The row is rebuilt only when that changes.
+    private fun syncSubRow(active: Filter?) {
+        val want: Any? = if (active === Places) Places else GROUPS.firstOrNull { active in it.members }
+        if (want !== subFor) {
+            subFor = want
+            subRow.removeAllViews()
+            val items: List<Triple<String, String, () -> Unit>> = when (want) {
+                is FilterGroup -> want.members.map { f -> Triple(emojiOr(f.emoji, EMOJI_FALLBACK[f.id] ?: "✨"), f.name) { selectFilter(f) } }
+                Places -> Places.PLACES.mapIndexed { i, p -> Triple(emojiOr(p.emoji, "📍"), p.name) { selectPlace(i) } }
+                else -> emptyList()
+            }
+            for ((i, item) in items.withIndex()) {
+                subRow.addView(subChip(item.first, item.second, item.third), LinearLayout.LayoutParams(dp(96), dp(76)).apply { if (i > 0) leftMargin = dp(8) })
+            }
+            subBar.scrollTo(0, 0)
+        }
+        subBar.visibility = if (want == null) View.GONE else View.VISIBLE
+        styleSubRow(active)
+    }
+
+    private fun styleSubRow(active: Filter?) {
+        val selected = when (val s = subFor) {
+            is FilterGroup -> s.members.indexOf(active)
+            Places -> Places.current
+            else -> -1
+        }
+        for (k in 0 until subRow.childCount) {
+            val c = subRow.getChildAt(k) as LinearLayout
+            val on = k == selected
             c.background = rounded(if (on) Palette.CHIP_ON else Color.argb(160, 25, 27, 38), dp(18).toFloat(), dp(3), if (on) Palette.ACCENT else Color.TRANSPARENT)
             (c.getChildAt(1) as TextView).setTextColor(if (on) Color.WHITE else Palette.DIM)
         }
@@ -449,16 +499,18 @@ class MainActivity : Activity() {
     private fun selectPlace(i: Int) {
         Places.current = i
         getSharedPreferences("places", MODE_PRIVATE).edit().putInt("place", i).apply()
-        stylePlaces()
+        styleSubRow(painter.active)
     }
 
     private fun styleChips(active: Filter?) {
-        for ((f, c) in chips) {
-            val on = f === active
-            c.background = rounded(if (on) Palette.CHIP_ON else Palette.CHIP, dp(22).toFloat(), dp(3), if (on) Palette.ACCENT else Color.TRANSPARENT)
-            c.translationY = if (on) -dp(3).toFloat() else 0f
-            (c.getChildAt(1) as TextView).setTextColor(if (on) Color.WHITE else Palette.DIM)
-        }
+        for ((f, c) in chips) styleChip(c, f === active)
+        for ((g, c) in groupChips) styleChip(c, active in g.members)
+    }
+
+    private fun styleChip(c: LinearLayout, on: Boolean) {
+        c.background = rounded(if (on) Palette.CHIP_ON else Palette.CHIP, dp(22).toFloat(), dp(3), if (on) Palette.ACCENT else Color.TRANSPARENT)
+        c.translationY = if (on) -dp(3).toFloat() else 0f
+        (c.getChildAt(1) as TextView).setTextColor(if (on) Color.WHITE else Palette.DIM)
     }
 
     private fun bigButton(emoji: String, bg: Int, border: Int = Color.WHITE) = label(emoji, 34f).apply {
@@ -499,7 +551,8 @@ class MainActivity : Activity() {
 
     private fun selectFilter(f: Filter?) {
         styleChips(f)
-        placeBar.visibility = if (f === Places) View.VISIBLE else View.GONE
+        syncSubRow(f)
+        f?.let { ff -> GROUPS.firstOrNull { ff in it.members }?.let { g -> getSharedPreferences("groups", MODE_PRIVATE).edit().putString(g.id, ff.id).apply() } }
         painter.active = f
         syncMic()
         syncSoundtrack()
