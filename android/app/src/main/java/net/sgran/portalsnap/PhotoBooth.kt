@@ -140,9 +140,12 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
     private val hearts = Particles(600)
     private val colors = intArrayOf(hex("#f23a4d"), hex("#ff5cae"), hex("#3a8dff"), hex("#ffc93c"))
     private val debt = HashMap<Int, Float>()
-    // When each person's hearts last set off the little piano run.
-    private val runAt = HashMap<Int, Long>()
-    private const val RUN_AGAIN_MS = 1600L
+    // While hearts pour out, a piano walks down the white keys, a note every NOTE_MS, and starts
+    // again from the top when it runs out of keyboard or after the mouths have been shut a moment.
+    private const val NOTE_MS = 120L
+    private var noteAt = 0L
+    private var noteKey = 0
+    private var pouringAt = -1_000_000L
     private val pix = Paint() // no anti-aliasing: pixel art wants hard edges
 
     // 7 x 6, '#' body, '+' highlight.
@@ -160,14 +163,7 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
             val open = f.bs("jawOpen")
             if (open < 0.2f) {
                 debt[f.id] = 0f
-                runAt.remove(f.id)
                 continue
-            }
-            // The hearts start pouring out: a quick run down the piano, again if the mouth stays open.
-            val last = runAt[f.id]
-            if (last == null || d.t - last > RUN_AGAIN_MS) {
-                runAt[f.id] = d.t
-                Sfx.play("piano", 0.5f, rnd(0.98f, 1.02f))
             }
             var owed = (debt[f.id] ?: 0f) + d.dt / 1000f * (16f + open * 45f)
             val lip = toPixels(f, f.mouth.x, f["lipBottom"]?.y ?: f.mouth.y)
@@ -179,7 +175,15 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
             debt[f.id] = owed
         }
         if (debt.size > 6) debt.clear()
-        if (runAt.size > 6) runAt.clear()
+        if (faces.any { it.bs("jawOpen") >= 0.2f }) {
+            if (d.t - pouringAt > 400) noteKey = 0
+            pouringAt = d.t
+            if (d.t - noteAt >= NOTE_MS) {
+                noteAt = d.t
+                Sfx.play("key$noteKey", 0.42f)
+                noteKey = (noteKey + 1) % Sfx.HEART_KEYS.size
+            }
+        }
         hearts.step(d.dt, gravity = 460f)
     }
 

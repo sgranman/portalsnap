@@ -377,11 +377,15 @@ It works on two children at once.
   after the head moves.
 - **Question:** did the hearts come out only while the mouth was open, or was the stream always
   on and just stronger when open?
-- **Sound (added at the user's request, 2026-09-15):** when the hearts start pouring out, a quick
-  run down a bright little piano plays: E6, D6, C6, A5, G5, 75ms apart, ringing over each other.
-  It's synthesized in `Sfx` (`piano`) from a few stretched partials and a hammer tick. It plays
-  again every 1.6s while the mouth stays open, and it's baked into clips. The reference video's
-  own notes couldn't be picked out from under the voices, so this is a match by ear.
+- **Sound (added at the user's request, 2026-09-15):** for as long as hearts are pouring out, a
+  bright little piano walks down the white keys from C6 to C4. It plays one note every 120ms and
+  goes back to the top when it runs out of keyboard, or after the mouths have been shut for
+  0.4s. Every note is synthesized at its own pitch in `Sfx` (`key0`–`key14`, a few stretched
+  partials and a hammer tick). None is pitch-shifted, so it all stays in C major. It's baked
+  into clips.
+  - **First version:** a five-note run every 1.6s with a slight random pitch. The user found it
+    too short, and it drifted out of key.
+  - **Reference:** the video's own notes couldn't be picked out from under the voices.
 
 ### 6. Hamster
 A hamster or mouse face:
