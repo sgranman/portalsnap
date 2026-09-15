@@ -326,18 +326,46 @@ If hair edges ever need more, the next step is running the model through TensorF
 GPU delegate.
 
 ### 4. Monster / Cutie (one effect, two moods)
-Hand-drawn doodle face paint that changes with expression. Both frames come from the same
-video, 1s and 4s in.
-- **Monster:** cream horns on the forehead, thick angry eyebrows over the eyes, black X marks
-  with pink scribbled blush on the cheeks, and a huge black fanged mouth with a pink tongue
-  drawn over an open mouth.
-- **Cutie:** round white bear ears with pink insides, little lash strokes at the eye corners,
-  and pink heart blush on the cheeks.
-- **Build:** mesh tier with blendshapes, drawn in Canvas in a doodle style (black outlines,
-  flat fills), much like the existing filters. The switch is expression-driven. Probable
-  triggers are `jawOpen` plus `browDownLeft/Right` or `mouthFrownLeft/Right` for Monster, and
-  a smile for Cutie. It should cross-fade between the moods, not snap.
-- **Question:** which expression flipped it: an open mouth, a frown, or both?
+Doodle face paint in two moods. It was first built from two frames. At the user's request it was
+redrawn from the full reference video (936589334645536), which showed the following.
+
+- **Monster:**
+  - Cream horns with brushy black outlines, tips leaning outward.
+  - Thick tapered black brows sloping down to the nose, with a small frown crease between them.
+  - A big black pupil with a white glint over each enlarged eye, and a thin line under it.
+  - Black X marks on the outer cheeks, with a bold pink zigzag scribble for blush.
+  - Closed mouth: a brushy frown line with five white fangs hanging from it.
+  - Open mouth: a rounded black cup with fangs top and bottom, and a long pink tongue with a
+    crease and a glint drooping past the chin.
+- **Cutie:** soft white round ears with pink insides, grainy pink hearts on the cheeks, three
+  short black dashes at each eye's outer corner, and enlarged eyes.
+- **Both:** the eyes are morphed bigger.
+- **Poof:** switching plays a poof sound. A pink cloud of circles swells over the face, opens into
+  a ring with the new look already showing through, and breaks into pink specks that drift up and
+  fade, about 0.7s in all.
+- **Voice:** both are pitch-shifted. Measured from harmonic spacing, the monster is about 170 Hz and
+  the cutie about 500 Hz, so about 0.6x and 1.7x of a child's voice. The monster keeps strong
+  harmonics up to 2 kHz, so the formants stay put while the pitch moves.
+- **What flips it:** in the clip, the switches follow the head turning away and back.
+
+**Build** (`Monster.kt`):
+
+- **Units:** the art is measured in pupil units from the reference, and drawn scaled by the
+  face's own pupil distance. The first pass used face units, whose unit is the outer eye corners,
+  and came out 1.5x too big.
+- **Eyes:** a bulge lens over each eye in both moods, as Hamster's.
+- **Strokes:** brows, crease and lip line are filled brush strokes tapering to points.
+- **Switch:** a nod or a tap. The new look appears 180ms in, once the cloud covers the face, then
+  pops. The trigger was left as the nod; turning away and back, as in the clip, would be a small
+  change.
+- **Sound:** a synthesized soft puff (swelling filtered noise over a faint low thump). A first try
+  with bubbly tones and a chime sounded metallic to the user.
+- **Voice: tried and reverted.** A formant-preserving TD-PSOLA shifter was built to match:
+  pitch detected on a 16 kHz copy, two-period grains centred on each pulse, and ratios of 0.6 and
+  1.7. On a synthetic vowel it held the formants where the granular shifter drags them (880 Hz to
+  670 Hz at 0.6x). On the user's real voice it sounded far worse than the original. So the
+  original granular `PitchShifter.kt` and its 0.72 and 1.6 ratios are back. A synthetic test isn't
+  enough for voice work; any next attempt needs a real recorded voice to compare against first.
 
 ### 5. Pixel Hearts
 8-bit pixel-art hearts. Small yellow hearts sit on the cheeks, and when the mouth opens a

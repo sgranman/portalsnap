@@ -26,6 +26,7 @@ object Sfx {
         started = true
         thread(name = "sfx") {
             clips["bloop"] = Mixer.Clip(bloop(), RATE)
+            clips["poof"] = Mixer.Clip(poof(), RATE)
             clips["clink1"] = Mixer.Clip(clink(5L, 2400f), RATE)
             clips["clink2"] = Mixer.Clip(clink(7L, 2900f), RATE)
             clips["clink3"] = Mixer.Clip(clink(13L, 3500f), RATE)
@@ -57,6 +58,32 @@ object Sfx {
         var peak = 1e-6f
         for (v in out) peak = max(peak, abs(v))
         return ShortArray(n) { (out[it] / peak * 0.7f * 32767f).toInt().toShort() }
+    }
+
+    // Monster/Cutie's poof: a soft puff of air. Noise swells in over 15ms and dies away over about
+    // a quarter of a second, darkening as it goes, over a faint low thump. No tones: the first
+    // version had a cluster of them and a chime, and the user heard it as metallic.
+    private fun poof(): ShortArray {
+        val rng = Random(31L)
+        val n = (RATE * 0.5f).toInt()
+        val out = FloatArray(n)
+        var lp1 = 0f
+        var lp2 = 0f
+        var thump = 0.0
+        for (i in 0 until n) {
+            val t = i.toFloat() / RATE
+            val env = min(1f, t / 0.015f) * exp(-t / 0.09f)
+            val cut = 250f + 2200f * exp(-t / 0.06f)
+            val k = exp(-2f * PI.toFloat() * cut / RATE)
+            lp1 = (1 - k) * (rng.nextFloat() * 2 - 1) + k * lp1
+            lp2 = (1 - k) * lp1 + k * lp2
+            out[i] = lp2 * env * 3f
+            thump += 2 * PI * (90f + 60f * exp(-t / 0.03f)) / RATE
+            out[i] += sin(thump).toFloat() * min(1f, t / 0.004f) * exp(-t / 0.05f) * 0.35f
+        }
+        var peak = 1e-6f
+        for (v in out) peak = max(peak, abs(v))
+        return ShortArray(n) { (out[it] / peak * 0.8f * 32767f).toInt().toShort() }
     }
 
     // A bubble's bloop: a sine that sweeps up as the bubble's cavity shrinks, with a quick
