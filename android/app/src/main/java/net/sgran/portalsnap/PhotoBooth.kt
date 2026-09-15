@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import android.opengl.Matrix
 import java.util.Random
 import kotlin.math.abs
 import kotlin.math.cos
@@ -139,6 +140,9 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
     private val hearts = Particles(600)
     private val colors = intArrayOf(hex("#f23a4d"), hex("#ff5cae"), hex("#3a8dff"), hex("#ffc93c"))
     private val debt = HashMap<Int, Float>()
+    // When each person's hearts last set off the little piano run.
+    private val runAt = HashMap<Int, Long>()
+    private const val RUN_AGAIN_MS = 1600L
     private val pix = Paint() // no anti-aliasing: pixel art wants hard edges
 
     // 7 x 6, '#' body, '+' highlight.
@@ -156,7 +160,14 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
             val open = f.bs("jawOpen")
             if (open < 0.2f) {
                 debt[f.id] = 0f
+                runAt.remove(f.id)
                 continue
+            }
+            // The hearts start pouring out: a quick run down the piano, again if the mouth stays open.
+            val last = runAt[f.id]
+            if (last == null || d.t - last > RUN_AGAIN_MS) {
+                runAt[f.id] = d.t
+                Sfx.play("piano", 0.5f, rnd(0.98f, 1.02f))
             }
             var owed = (debt[f.id] ?: 0f) + d.dt / 1000f * (16f + open * 45f)
             val lip = toPixels(f, f.mouth.x, f["lipBottom"]?.y ?: f.mouth.y)
@@ -168,6 +179,7 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
             debt[f.id] = owed
         }
         if (debt.size > 6) debt.clear()
+        if (runAt.size > 6) runAt.clear()
         hearts.step(d.dt, gravity = 460f)
     }
 
@@ -240,7 +252,6 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
     private val crumbs = Particles(200)
     private val crumbColors = intArrayOf(hex("#f5872a"), hex("#ffb35c"), hex("#e06a14"))
     private val crumbPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val biteEdge = Path()
 
     override fun update(d: Draw, faces: List<Face>) {
         for (f in faces) {
@@ -293,16 +304,19 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
         }
     }
 
+    override val usesUnder = true
+
+    // Blush and whiskers are flat on the face, under the 3D props (Hamster3D.kt).
+    override fun under(d: Draw, f: Face) {
+        inFaceSpace(d.c, f) {
+            cheeks(d.c, d.pen)
+            whiskers(d.c, d.pen, f, f.headSpan)
+        }
+    }
+
     override fun draw(d: Draw, f: Face) {
         eyes(d, f)
-        inFaceSpace(d.c, f) {
-            val S = f.headSpan
-            ears(d.c, d.pen, f, S)
-            cheeks(d.c, d.pen)
-            whiskers(d.c, d.pen, f, S)
-            carrot(d, f, S)
-            nose(d.c, d.pen, f, S)
-        }
+        d.hamsters += props(d, f)
     }
 
     // Each eye's middle and width from its two corners. The outer corners sit at the face's
@@ -320,210 +334,112 @@ object Hamster : Filter("hamster", "Hamster", "🐹", Mode.MESH, voice = 1.45f) 
         }
     }
 
-    private fun ears(c: Canvas, p: Pen, f: Face, S: Float) {
-        for (side in intArrayOf(-1, 1)) {
-            val r = S * 0.16f
-            val x = side * S * 0.42f
-            val y = f.headTopY + S * 0.04f
-            // Fuzz: one path of uneven tufts round the rim, shadowed, under a smooth ear.
-            p.newPath().apply {
-                for (k in 0 until 22) {
-                    val a = k * TAU / 22
-                    val tuft = r * (if (k % 3 == 0) 0.13f else 0.09f)
-                    addCircle(x + cos(a) * r * 0.97f, y + sin(a) * r * 0.97f, tuft, Path.Direction.CW)
-                }
-            }
-            p.lift(0.04f)
-            c.drawPath(p.path, p.fill(hex("#8f5b2e")))
-            p.unlift()
-            c.drawCircle(x, y, r, p.fill(RadialGradient(
-                x - r * 0.3f, y - r * 0.35f, r * 1.35f,
-                intArrayOf(hex("#dba36b"), hex("#a8703d"), hex("#7a4b24")), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP,
-            )))
-            // The inner ear is a cup: lit low, shadowed toward the top.
-            val iw = r * 0.55f
-            val ih = r * 0.62f
-            val iy = y + r * 0.12f
-            c.drawOval(p.rect(x, iy, iw, ih), p.fill(RadialGradient(
-                x, iy + ih * 0.35f, ih * 1.3f,
-                intArrayOf(hex("#ffc9d5"), hex("#f29bb2"), hex("#c9667f")), floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP,
-            )))
-        }
-    }
-
+    // Soft pink ovals across the cheeks, low enough to stay clear of the eye lenses.
     private fun cheeks(c: Canvas, p: Pen) {
         for (side in intArrayOf(-1, 1)) {
-            val x = side * 0.64f
-            val y = 0.55f
-            val r = 0.24f
-            c.drawCircle(x, y, r, p.fill(RadialGradient(
-                x, y, r, intArrayOf(rgba(255, 110, 140, 0.6f), rgba(255, 110, 140, 0f)), null, Shader.TileMode.CLAMP,
+            val save = c.save()
+            c.translate(side * 0.6f, 0.56f)
+            c.scale(1.5f, 1f)
+            c.drawCircle(0f, 0f, 0.22f, p.fill(RadialGradient(
+                0f, 0f, 0.22f, intArrayOf(rgba(255, 96, 120, 0.62f), rgba(255, 96, 120, 0.3f), rgba(255, 96, 120, 0f)),
+                floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP,
             )))
+            c.restoreToCount(save)
         }
     }
 
+    // Two short white whiskers a side, starting just past the blush and fanning out.
     private fun whiskers(c: Canvas, p: Pen, f: Face, S: Float) {
-        val nx = f.nose.x
-        val ny = f.nose.y
-        val reach = abs(f.earL.x - f.earR.x) * 0.5f
-        val whisker = p.stroke(rgba(255, 255, 255, 0.95f), 0.02f)
+        val whisker = p.stroke(rgba(255, 255, 255, 0.95f), 0.018f)
         whisker.strokeCap = Paint.Cap.ROUND
-        p.lift(0.03f)
+        p.lift(0.02f)
         for (side in intArrayOf(-1, 1)) {
-            for (i in 0 until 3) {
-                val y = ny + S * (0.05f + i * 0.06f)
-                p.newPath().apply {
-                    moveTo(nx + side * S * 0.13f, y)
-                    quadTo(
-                        nx + side * reach * 0.5f, y - S * (0.03f - i * 0.03f),
-                        nx + side * reach * 0.8f, y - S * (0.07f - i * 0.08f),
-                    )
-                }
-                c.drawPath(p.path, whisker)
+            for (i in 0 until 2) {
+                val x0 = side * S * 0.42f
+                val y0 = f.nose.y + S * (0.03f + i * 0.05f)
+                val a = -0.12f + i * 0.28f
+                c.drawLine(x0, y0, x0 + side * cos(a) * S * 0.17f, y0 + sin(a) * S * 0.17f, whisker)
             }
         }
         p.unlift()
     }
 
-    private fun nose(c: Canvas, p: Pen, f: Face, S: Float) {
-        val nx = f.nose.x
-        val ny = f.nose.y + S * 0.01f
-        val rw = S * 0.08f
-        val rh = S * 0.058f
-        p.lift(0.04f)
-        c.drawOval(p.rect(nx, ny, rw, rh), p.fill(RadialGradient(
-            nx - rw * 0.3f, ny - rh * 0.5f, rw * 1.5f,
-            intArrayOf(hex("#ffd6e0"), hex("#f27b9b"), hex("#b9435f")), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP,
-        )))
-        p.unlift()
-        c.drawOval(p.rect(nx - rw * 0.32f, ny - rh * 0.42f, rw * 0.3f, rh * 0.2f), p.fill(rgba(255, 255, 255, 0.9f)))
+    // The 3D props for one face: ears, nose, and the carrot in its paws.
+    private fun props(d: Draw, f: Face): Hamster3D {
+        val h = Hamster3D()
+        val S = f.headSpan
+        val sPx = S * f.eyeDist
+        // Fuzzy cups at the top of the head, tops leaning out, openings turned a little outward.
+        for (side in intArrayOf(-1, 1)) {
+            val m = FloatArray(16)
+            onFace(f, side * S * 0.42f, f.headTopY - S * 0.12f, 0f, m)
+            Matrix.rotateM(m, 0, side * 20f, 0f, 0f, 1f)
+            Matrix.rotateM(m, 0, -side * 25f, 0f, 1f, 0f)
+            Matrix.rotateM(m, 0, 72f, 1f, 0f, 0f)
+            val r = sPx * 0.15f
+            Matrix.scaleM(m, 0, r, r, r)
+            h.ears += m
+        }
+        onFace(f, f.nose.x, f.nose.y + S * 0.005f, sPx * 0.06f, h.nose)
+        val nr = sPx * 0.075f
+        Matrix.scaleM(h.nose, 0, nr, nr, nr)
+        carrot(d, f, h)
+        return h
     }
 
-    // Tip up at the lower lip, wide end down over the chin, leaves hanging below. Bites come off
-    // the tip end, and what's left slides up so the bitten edge stays at the lips.
-    private fun carrot(d: Draw, f: Face, S: Float) {
-        val c = d.c
-        val p = d.pen
+    // Tip up at the lower lip, wide end down over the chin, a clover of leaves below, two paws
+    // holding it. Bites come off the tip, and what's left slides up so the bitten edge stays at the
+    // lips; once it's gone the paws are left holding the leaves until they fade.
+    private fun carrot(d: Draw, f: Face, h: Hamster3D) {
+        val S = f.headSpan
+        val u = f.eyeDist
         val st = carrots[f.id]
         val eaten = st?.eaten ?: 0f
-        val leafAlpha = if (st != null && st.bites == BITES) 1f - (d.t - st.finishedAt).toFloat() / GONE_FADE_MS else 1f
-        if (leafAlpha <= 0f) return
+        h.leafAlpha = if (st != null && st.bites == BITES) 1f - (d.t - st.finishedAt).toFloat() / GONE_FADE_MS else 1f
 
         val open = f.bs("jawOpen")
         val lip = f["lipBottom"]?.y ?: f.mouth.y
         val chin = f["chin"]?.y ?: (f.mouth.y + 0.5f)
         val chewing = ((open - 0.08f) * 4f).coerceIn(0f, 1f)
         val wiggle = sin(d.t / 55f) * 0.08f * chewing
-        val len = max(S * 0.3f, (chin - lip) * 0.75f + S * 0.1f)
-        val tipW = S * 0.04f
-        val endW = S * 0.13f
-        val cut = len * eaten
+        val lenPx = max(S * 0.3f, (chin - lip) * 0.75f + S * 0.1f) * u
         // A fresh carrot pops in from the lips: overshoot, then settle.
         val k = if (st == null || st.bornAt == 0L) 1f else ((d.t - st.bornAt) / 280f).coerceIn(0f, 1f)
         val grow = max(0.01f, 1f + 2.70158f * (k - 1) * (k - 1) * (k - 1) + 1.70158f * (k - 1) * (k - 1))
 
-        val save = c.save()
-        c.translate(f.mouth.x, lip - S * 0.02f)
-        c.rotate(deg(-0.16f + wiggle))
-        c.scale(grow, grow)
-        c.translate(0f, -cut)
+        val base = FloatArray(16)
+        onFace(f, f.mouth.x, lip - S * 0.02f, S * u * 0.14f, base)
+        Matrix.rotateM(base, 0, deg(-0.16f + wiggle), 0f, 0f, 1f)
+        Matrix.scaleM(base, 0, grow, grow, grow)
 
-        p.lift(0.04f)
-        val leafLen = S * 0.2f
-        val leaf = p.fill(LinearGradient(0f, 0f, 0f, leafLen, hex("#72d65c"), hex("#2e923c"), Shader.TileMode.CLAMP))
-        leaf.alpha = (255 * leafAlpha.coerceIn(0f, 1f)).toInt()
-        for (i in -1..1) {
-            val s = c.save()
-            c.translate(0f, len - endW * 0.1f)
-            c.rotate(deg(i * 0.5f + wiggle * 0.5f))
-            p.newPath().apply {
-                moveTo(-S * 0.025f, 0f)
-                quadTo(-S * 0.055f, leafLen * 0.6f, 0f, leafLen)
-                quadTo(S * 0.055f, leafLen * 0.6f, S * 0.025f, 0f)
-                close()
+        val left = 1f - eaten
+        val whole = eaten < 0.98f
+        if (whole) {
+            val m = base.copyOf()
+            Matrix.translateM(m, 0, 0f, -eaten * lenPx, 0f)
+            Matrix.scaleM(m, 0, lenPx, lenPx, lenPx)
+            h.carrot = m
+            h.carrotCut = eaten
+        }
+        if (h.leafAlpha > 0f) {
+            val ls = S * u * 0.085f
+            for (i in -1..1) {
+                val m = base.copyOf()
+                Matrix.translateM(m, 0, 0f, left * lenPx * 0.97f, -ls * 0.2f)
+                Matrix.rotateM(m, 0, i * 50f + deg(wiggle) * 0.5f, 0f, 0f, 1f)
+                Matrix.scaleM(m, 0, ls, ls, ls)
+                h.leaves += m
             }
-            c.drawPath(p.path, leaf)
-            c.restoreToCount(s)
         }
-        p.unlift()
-
-        // Only the leaves are left once the last bite has gone down.
-        if (eaten >= 0.98f) {
-            c.restoreToCount(save)
-            return
-        }
-
-        val clipped = c.save()
-        if (cut > 0f) {
-            // What a bite leaves: scallops dipping into the carrot.
-            val w = endW * 1.3f
-            biteEdge.reset()
-            biteEdge.moveTo(-w, len * 2)
-            biteEdge.lineTo(-w, cut)
-            for (i in 0 until 3) {
-                val x0 = -w + i * (2 * w / 3)
-                biteEdge.quadTo(x0 + w / 3, cut + S * 0.09f, x0 + 2 * w / 3, cut)
-            }
-            biteEdge.lineTo(w, len * 2)
-            biteEdge.close()
-            c.clipPath(biteEdge)
-        }
-
-        p.newPath().apply {
-            moveTo(-tipW, 0f)
-            quadTo(0f, -tipW * 1.8f, tipW, 0f)
-            quadTo(endW * 0.9f, len * 0.55f, endW, len)
-            quadTo(0f, len + endW * 0.45f, -endW, len)
-            quadTo(-endW * 0.9f, len * 0.55f, -tipW, 0f)
-            close()
-        }
-        p.lift(0.04f)
-        c.drawPath(p.path, p.fill(LinearGradient(
-            -endW, 0f, endW, 0f, intArrayOf(hex("#ffc47e"), hex("#f5872a"), hex("#c8520d")), floatArrayOf(0.1f, 0.5f, 1f), Shader.TileMode.CLAMP,
-        )))
-        p.unlift()
-        if (cut > 0f) {
-            // The paler inside shows along the bite.
-            c.clipPath(p.path)
-            c.drawPath(biteEdge, p.stroke(hex("#ffd8a6"), S * 0.035f))
-        }
-
-        val ridge = p.stroke(rgba(160, 64, 8, 0.5f), 0.016f)
-        ridge.strokeCap = Paint.Cap.ROUND
-        for (i in 0 until 4) {
-            val k = 0.22f + i * 0.2f
-            val y = len * k
-            val half = tipW + (endW - tipW) * k
-            val side = if (i % 2 == 0) -1f else 1f
-            c.drawLine(side * half * 0.95f, y, side * half * 0.3f, y + S * 0.012f, ridge)
-        }
-        c.restoreToCount(clipped)
-
-        // Paws on either side of what's left, toes over the carrot's edge.
-        val py = cut + (len - cut) * 0.42f
-        val half = tipW + (endW - tipW) * (py / len)
+        val pawH = S * u * 0.12f
+        val py = if (whole) 0.55f * left * lenPx else lenPx * 0.2f
+        val half = if (whole) HamsterMeshes.carrotRadius(eaten + 0.55f * left) * lenPx else pawH * 0.35f
         for (side in intArrayOf(-1, 1)) {
-            val pw = S * 0.065f
-            val ph = S * 0.08f
-            val px = side * (half + pw * 0.5f)
-            val s = c.save()
-            c.translate(px, py)
-            c.rotate(deg(-side * 0.45f)) // tops leaning in, as if gripping from below
-            p.lift(0.04f)
-            c.drawOval(p.rect(0f, 0f, pw, ph), p.fill(RadialGradient(
-                -pw * 0.3f, -ph * 0.4f, ph * 1.4f,
-                intArrayOf(hex("#ffd9e2"), hex("#f7a3b8"), hex("#d9708c")), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP,
-            )))
-            p.unlift()
-            val toeLine = p.stroke(hex("#d27891"), 0.01f)
-            for (j in -1..1) {
-                val tx = -side * pw * 0.78f
-                val ty = j * ph * 0.42f - ph * 0.15f
-                c.drawCircle(tx, ty, pw * 0.24f, p.fill(hex("#ffd0dc")))
-                c.drawCircle(tx, ty, pw * 0.24f, toeLine)
-            }
-            c.restoreToCount(s)
+            val m = base.copyOf()
+            Matrix.translateM(m, 0, side * (half + pawH * 0.5f), py, -pawH * 0.35f)
+            Matrix.rotateM(m, 0, -side * 24f, 0f, 0f, 1f)
+            Matrix.scaleM(m, 0, pawH, pawH, pawH)
+            h.paws += m
         }
-        c.restoreToCount(save)
     }
 }

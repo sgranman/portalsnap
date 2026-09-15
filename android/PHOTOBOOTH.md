@@ -377,6 +377,11 @@ It works on two children at once.
   after the head moves.
 - **Question:** did the hearts come out only while the mouth was open, or was the stream always
   on and just stronger when open?
+- **Sound (added at the user's request, 2026-09-15):** when the hearts start pouring out, a quick
+  run down a bright little piano plays: E6, D6, C6, A5, G5, 75ms apart, ringing over each other.
+  It's synthesized in `Sfx` (`piano`) from a few stretched partials and a hammer tick. It plays
+  again every 1.6s while the mouth stays open, and it's baked into clips. The reference video's
+  own notes couldn't be picked out from under the voices, so this is a match by ear.
 
 ### 6. Hamster
 A hamster or mouse face:
@@ -393,6 +398,21 @@ It works on two children at once.
   - **Carrot and paws:** anchored below the mouth, moving with it.
 - **Questions:** did the carrot move, as if being eaten or nibbled when the mouth moved? Were the
   cheeks puffed too, as a warp?
+
+**Props rebuilt in real 3D** (`Hamster3D.kt`) from the reference video (589562750311569), where
+they look like soft 3D renders:
+
+- **Ears:** fuzzy brown cups with pink linings, at the top corners of the head, tops leaning out.
+- **Nose:** a glossy pink rounded triangle.
+- **Carrot:** chubby, with ridges, and a three-leaf clover at its wide end. The bites cut
+  scalloped chunks off its tip in the shader, showing the paler inside.
+- **Paws:** pink, with finger bulges and furry brown cuffs. They keep holding the leaves once
+  the carrot is gone.
+
+All of the props are meshes in the View3D pass, sharing one shader with fur speckle, gloss and
+ridges. The blush (wide soft pink ovals) and the whiskers (two short ones a side) stay flat,
+drawn under the props. The bite mechanics are unchanged. On the test portrait it runs at 30fps,
+about 10ms a frame.
 
 ### 7. Pink Palace
 The room replaced by a dreamy pastel-pink architectural interior: arched windows, a staircase,

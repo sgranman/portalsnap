@@ -102,6 +102,7 @@ class Plan {
     var pods: List<Pod3D> = emptyList()
     var rides: List<Ride3D> = emptyList()
     var falls: List<Fall3D> = emptyList()
+    var hamsters: List<Hamster3D> = emptyList()
 
     fun reset() {
         composite = false
@@ -115,6 +116,7 @@ class Plan {
         pods = emptyList()
         rides = emptyList()
         falls = emptyList()
+        hamsters = emptyList()
     }
 }
 
@@ -180,6 +182,7 @@ class Painter {
             draw.pods.clear()
             draw.rides.clear()
             draw.falls.clear()
+            draw.hamsters.clear()
             val m = mic
             draw.level = m?.level ?: 0f
             draw.beat = m?.beatPulse(now) ?: 0f
@@ -248,6 +251,7 @@ class Painter {
                     plan.pods = ArrayList(draw.pods)
                     plan.rides = ArrayList(draw.rides)
                     plan.falls = ArrayList(draw.falls)
+                    plan.hamsters = ArrayList(draw.hamsters)
                     return plan
                 }
                 idle(under, over)
@@ -298,6 +302,7 @@ class Painter {
             plan.pods = ArrayList(draw.pods)
             plan.rides = ArrayList(draw.rides)
             plan.falls = ArrayList(draw.falls)
+            plan.hamsters = ArrayList(draw.hamsters)
             return plan
         } finally {
             paintMs.add((SystemClock.elapsedRealtimeNanos() - t0) / 1e6)

@@ -10,6 +10,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * Short sound effects for the filters. They're synthesized when the app starts rather than
@@ -32,6 +33,7 @@ object Sfx {
             clips["clink3"] = Mixer.Clip(clink(13L, 3500f), RATE)
             clips["whoosh"] = Mixer.Clip(whoosh(), RATE)
             clips["wind"] = Mixer.Clip(wind(), RATE)
+            clips["piano"] = Mixer.Clip(pianoRun(), RATE)
         }
     }
 
@@ -61,6 +63,38 @@ object Sfx {
             out[i] = lp2 * env(t)
         }
         return out
+    }
+
+    // Pixel Hearts' flourish: a quick run down a pentatonic scale on a bright little piano. Each note
+    // is a handful of partials, stretched a touch sharp the way a stiff string's are, dying away at
+    // their own rates after a felt tick of hammer, and the notes ring on over each other.
+    private fun pianoRun(): ShortArray {
+        val notes = floatArrayOf(1318.5f, 1174.7f, 1046.5f, 880f, 784f)
+        val step = 0.075f
+        val ring = 0.6f
+        val n = (RATE * (step * (notes.size - 1) + ring)).toInt()
+        val out = FloatArray(n)
+        val rng = Random(53L)
+        for ((i, f0) in notes.withIndex()) {
+            val start = (RATE * step * i).toInt()
+            val len = min((RATE * ring).toInt(), n - start)
+            for (k in 1..6) {
+                val fk = f0 * k * sqrt(1f + 0.0004f * k * k)
+                if (fk > RATE / 2.2f) break
+                val amp = 1f / k.toFloat().pow(1.4f)
+                val tau = 0.35f / k.toFloat().pow(0.8f)
+                val w = (2 * PI * fk / RATE).toFloat()
+                for (j in 0 until len) {
+                    val t = j.toFloat() / RATE
+                    out[start + j] += amp * exp(-t / tau) * sin(w * j) * min(1f, t / 0.002f)
+                }
+            }
+            val tick = RATE / 200
+            for (j in 0 until tick) out[start + j] += 0.15f * (rng.nextFloat() * 2 - 1) * (1f - j.toFloat() / tick)
+        }
+        var peak = 1e-6f
+        for (v in out) peak = max(peak, abs(v))
+        return ShortArray(n) { (out[it] / peak * 0.6f * 32767f).toInt().toShort() }
     }
 
     // Freefall's wind: dark rushing air with slow gusts, a brighter layer breathing on top of it.
