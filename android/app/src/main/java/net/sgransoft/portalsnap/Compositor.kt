@@ -20,6 +20,7 @@ import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.sin
 import android.graphics.Matrix as GfxMatrix
@@ -33,8 +34,27 @@ private val IDENTITY_3X3 = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
 // The camera's buffers arrive mirrored with no flip in their transform (gen 1 Portal, camera 0).
 private const val CAMERA_MIRRORS = true
 
-// How far each segmentation result moves the smoothed mask (1 = no smoothing).
-private const val MASK_SMOOTH = 0.75f
+/** GLSL's smoothstep: 0 below [a], 1 above [b], eased between. */
+private fun smoothstep(a: Float, b: Float, x: Float): Float {
+    val t = ((x - a) / (b - a)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
+}
+
+// How far each segmentation result moves the smoothed mask (1 = no smoothing). Two of them, so a
+// still edge could be averaged harder than a moving one: a still edge that moves would be the
+// model boiling rather than the person. Measured on a frozen frame (`--ez freeze`), it does not
+// boil — the mask is identical frame to frame, and what looked like boiling was the subject
+// moving. So both start at the same rate and the mechanism sits idle, ready if a noisier camera
+// ever needs it; `--ef maskStill` turns it down. MASK_MOVE_LO and _HI are the confidence gap the
+// two are chosen between.
+private const val MASK_SMOOTH_STILL = 0.75f
+private const val MASK_SMOOTH_MOVE = 0.75f
+private const val MASK_MOVE_LO = 0.25f
+private const val MASK_MOVE_HI = 0.60f
+// A pixel already counted as person keeps the benefit of the doubt by this much, and one that
+// isn't has to clear it. Stops the edge's pixels toggling across the halfway mark frame by frame,
+// which is what walks the crop's bounds about.
+private const val MASK_HYSTERESIS = 0.08f
 
 // Cut-out filters show each frame only once its own mask is back, so the cut-out never trails
 // the picture; if a mask takes longer than this, the frame goes out anyway.
@@ -141,6 +161,40 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private var personMask = ByteArray(0)
     private var maskEma = FloatArray(0)
     private var maskInverted = false
+    // adb's dials (MainActivity.applyIntent), so these can be turned with someone actually
+    // standing in front of the Portal. The defaults are the constants above.
+    @Volatile var maskStill = MASK_SMOOTH_STILL
+    @Volatile var maskMove = MASK_SMOOTH_MOVE
+    /**
+     * Where the cut-out's edge falls, and how hard camera colour snaps it: see Shaders.MASK.
+     * The edge used to run 0.45-0.75, chosen to keep the model's soft edge from leaning out into
+     * the room. That erodes: a raised hand lost its thumb, because a thing one or two mask texels
+     * wide never reaches 0.45 once its neighbourhood is averaged in. Measured on a frozen frame,
+     * moving the edge down to 0.30 pushes a strong boundary (hair against a window) out by only
+     * three to six pixels, which is far less than it gives back on thin things.
+     */
+    @Volatile var cutLo = 0.30f
+    @Volatile var cutHi = 0.60f
+    @Volatile var cutColour = 60f
+    /**
+     * How much a pixel's own mask sample outweighs its neighbours. Raising it was meant to hold
+     * thin things together; measured, it does the opposite — the edge gets smoother and loses
+     * detail (1659px of boundary at 1, 1539px at 8), because the colour-weighted neighbourhood
+     * is where the detail was coming from. Left at what it always was.
+     */
+    @Volatile var cutCentre = 2f
+    /** Show the segmenter the whole frame instead of a crop around the person. */
+    @Volatile var segFullFrame = false
+    /**
+     * Hold the picture still while everything downstream keeps running: the segmenter goes on
+     * re-reading the same frame, so two models or two settings can be compared on one input
+     * instead of on a person who has moved between the shots. The frame is kept in its own
+     * buffer because the camera's two swap under it.
+     */
+    @Volatile var freeze = false
+    /** Draw the cut-out itself, white on black, instead of the picture. For measuring it. */
+    @Volatile var maskView = false
+    private var frozen: Fbo? = null
     // The part of the frame the segmenter looks at next (x, y, w, h in 0..1, y down): around the
     // person, so the model's few pixels go to their outline instead of the room.
     private val segRoi = floatArrayOf(0f, 0f, 1f, 1f)
@@ -308,9 +362,26 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             val win = window
             if (win != null) egl.makeCurrent(win) else egl.makePbufferCurrent()
 
-            // 1. The upright, unmirrored frame.
+            // 1. The upright, unmirrored frame. Frozen, the first one is kept and copied into
+            //    every frame after it, so both swap buffers carry the same picture.
+            val keep = if (freeze) frozen ?: Fbo(FRAME_W, FRAME_H).also {
+                it.bind()
+                if (testFaces > 0) drawTest(now) else drawCamera()
+                frozen = it
+                Log.i(TAG, "frame frozen")
+            } else null
             frame.bind()
-            if (testFaces > 0) drawTest(now) else drawCamera()
+            if (keep != null) {
+                GLES20.glDisable(GLES20.GL_BLEND)
+                drawTexture(keep.tex, Program.IDENTITY, Program.IDENTITY)
+            } else {
+                frozen?.let {
+                    it.release()
+                    frozen = null
+                    Log.i(TAG, "frame unfrozen")
+                }
+                if (testFaces > 0) drawTest(now) else drawCamera()
+            }
 
             // 2. With a cut-out filter, this frame waits for its own mask and onTrack shows it,
             //    so the cut-out always matches the picture; frames that arrive while the
@@ -549,6 +620,8 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, shown.tex)
             GLES20.glUniform1i(pMask.u("uTexture"), 0)
             GLES20.glUniform2f(pMask.u("uTexel"), 1.5f / maskW, 1.5f / maskH)
+            GLES20.glUniform4f(pMask.u("uCut"), cutLo, cutHi, cutColour, cutCentre)
+            GLES20.glUniform1f(pMask.u("uShowMask"), if (maskView) 1f else 0f)
             pMask.drawQuad()
         }
 
@@ -695,6 +768,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE6)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, groundDark?.tex ?: 0)
             GLES20.glUniform1i(p.u("uGroundDark"), 6)
+            GLES20.glUniform4f(p.u("uCut"), cutLo, cutHi, cutColour, cutCentre)
             GLES20.glUniform2f(p.u("uMaskTexel"), 1f / maxOf(1, maskW), 1f / maxOf(1, maskH))
             GLES20.glUniform2f(p.u("uSize"), FRAME_W.toFloat(), FRAME_H.toFloat())
             val q = fx.q
@@ -792,18 +866,29 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         }
         buf!!.clear()
         if (personMask.size != n) personMask = ByteArray(n)
-        // Smoothed over time, so the edge holds still between results instead of boiling.
+        // Smoothed over time, so the edge holds still between results instead of boiling. How
+        // hard is decided per pixel: see MASK_SMOOTH_STILL.
         val fresh = maskEma.size != n || now - maskAt > 500
         if (maskEma.size != n) maskEma = FloatArray(n)
-        val k = if (fresh) 1f else MASK_SMOOTH
+        val still = maskStill
+        val move = maskMove
         var person = 0
         for (i in 0 until n) {
             var v = (bytes[i].toInt() and 255) / 255f
             if (maskInverted) v = 1f - v
-            val e = maskEma[i] + (v - maskEma[i]) * k
+            val was = maskEma[i]
+            val k = if (fresh) {
+                1f
+            } else {
+                val d = abs(v - was)
+                still + (move - still) * smoothstep(MASK_MOVE_LO, MASK_MOVE_HI, d)
+            }
+            val e = was + (v - was) * k
             maskEma[i] = e
             buf.put((e * 255f).toInt().toByte())
-            if (e > 0.5f) {
+            // Hysteresis: what counted as person last time has an easier bar than what didn't.
+            val on = if (personMask[i].toInt() != 0) e > 0.5f - MASK_HYSTERESIS else e > 0.5f + MASK_HYSTERESIS
+            if (on) {
                 personMask[i] = 1
                 person++
             } else {
@@ -835,6 +920,17 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     // the crop keeps the frame's 16:9. It grows at once (an arm swinging in must not be cut off)
     // and shrinks or pans gently. With nobody found, the whole frame.
     private fun nextSegRoi(mask: ByteArray, w: Int, h: Int) {
+        // The crop comes from the last mask, and everything outside it is taken to be room, so a
+        // mask that is wrong makes a crop that keeps it wrong. This pins it open to tell that
+        // apart from the model simply being wrong.
+        if (segFullFrame) {
+            segRoi[0] = 0f
+            segRoi[1] = 0f
+            segRoi[2] = 1f
+            segRoi[3] = 1f
+            segCrop = 1f
+            return
+        }
         var minX = w
         var maxX = -1
         var minY = h
@@ -900,17 +996,28 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         } ?: return
         testTex = genTexture(GLES20.GL_TEXTURE_2D)
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
-        val u0 = 0.15f
-        val u1 = 0.85f
-        val v0 = 0f
-        val v1 = 0.5f
+        testW = bmp.width
+        testH = bmp.height
+        bmp.recycle()
+        setTestCrop(0.15f, 0.85f, 0f, 0.5f)
+        hasTestImage = true
+    }
+
+    private var testW = 0
+    private var testH = 0
+
+    /**
+     * Which part of the test portrait fills the frame, in 0..1 of the bitmap. The default is its
+     * head and shoulders; `--es testRect` reaches further down it, to the folded hands, which is
+     * where a cut-out's fine detail can actually be judged.
+     */
+    fun setTestCrop(u0: Float, u1: Float, v0: Float, v1: Float) = handler.post {
         // The bitmap's top row is t = 0, so a quad's bottom edge samples v1.
         GlMatrix.setIdentityM(testCrop, 0)
         GlMatrix.translateM(testCrop, 0, u0, v1, 0f)
         GlMatrix.scaleM(testCrop, 0, u1 - u0, -(v1 - v0), 1f)
-        testAspect = (bmp.width * (u1 - u0)) / (bmp.height * (v1 - v0))
-        bmp.recycle()
-        hasTestImage = true
+        testAspect = (testW * (u1 - u0)) / (testH * (v1 - v0))
+        Log.i(TAG, "test crop u %.2f-%.2f v %.2f-%.2f aspect %.2f".format(u0, u1, v0, v1, testAspect))
     }
 
     private companion object {
