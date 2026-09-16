@@ -103,6 +103,7 @@ class Plan {
     var rides: List<Ride3D> = emptyList()
     var falls: List<Fall3D> = emptyList()
     var hamsters: List<Hamster3D> = emptyList()
+    var aviators: List<Aviators3D> = emptyList()
 
     fun reset() {
         composite = false
@@ -117,6 +118,7 @@ class Plan {
         rides = emptyList()
         falls = emptyList()
         hamsters = emptyList()
+        aviators = emptyList()
     }
 }
 
@@ -129,6 +131,8 @@ class Painter {
     @Volatile var mic: MicHub? = null
     /** adb's `--ef jaw`: pretend the mouth is this open, for testing on a still portrait. */
     @Volatile var debugJaw: Float? = null
+    /** adb's `--ef turn`: pretend every head is turned this many degrees, for the same reason. */
+    @Volatile var debugTurn: Float? = null
     @Volatile var voice = 1f
         private set
     @Volatile var liveFaces = 0
@@ -183,6 +187,7 @@ class Painter {
             draw.rides.clear()
             draw.falls.clear()
             draw.hamsters.clear()
+            draw.aviators.clear()
             val m = mic
             draw.level = m?.level ?: 0f
             draw.beat = m?.beatPulse(now) ?: 0f
@@ -252,13 +257,14 @@ class Painter {
                     plan.rides = ArrayList(draw.rides)
                     plan.falls = ArrayList(draw.falls)
                     plan.hamsters = ArrayList(draw.hamsters)
+                    plan.aviators = ArrayList(draw.aviators)
                     return plan
                 }
                 idle(under, over)
                 return plan
             }
 
-            val faces = live.map { buildFace(it, debugJaw) }
+            val faces = live.map { buildFace(it, debugJaw, debugTurn) }
             if (faces.size > 1) {
                 faces.sortedBy { it.cx }.forEachIndexed { i, face -> face.rank = i }
                 faces.forEach { it.count = faces.size }
@@ -303,6 +309,7 @@ class Painter {
             plan.rides = ArrayList(draw.rides)
             plan.falls = ArrayList(draw.falls)
             plan.hamsters = ArrayList(draw.hamsters)
+            plan.aviators = ArrayList(draw.aviators)
             return plan
         } finally {
             paintMs.add((SystemClock.elapsedRealtimeNanos() - t0) / 1e6)

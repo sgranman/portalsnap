@@ -105,6 +105,30 @@ function perEar(ctx, face, fn, pull) {
 
 /* ------------------------------- Dog ------------------------------- */
 
+// One floppy ear in its own units: the root at the origin, one ear-length down
+// and one half-width out to the side (+x). A start point, then cubic segments.
+// A rounded fold over the top, widest low down, a round lobe at the bottom.
+const EAR = [-0.45, 0.02,
+  -0.35, -0.2, 0.6, -0.24, 0.8, -0.02,
+  1.2, 0.3, 1.3, 0.78, 0.9, 0.97,
+  0.5, 1.12, -0.4, 1.08, -0.7, 0.85,
+  -1.0, 0.6, -0.7, 0.25, -0.45, 0.02];
+const EAR_INNER = [-0.1, 0.2,
+  0.35, 0.12, 0.78, 0.38, 0.74, 0.7,
+  0.7, 0.93, 0.2, 0.99, -0.3, 0.86,
+  -0.58, 0.62, -0.46, 0.32, -0.1, 0.2];
+
+// Scaled by hand rather than through the transform, so the shadow's offset
+// stays in face units.
+function earPath(c, pts, w, l) {
+  c.beginPath();
+  c.moveTo(pts[0] * w, pts[1] * l);
+  for (let i = 2; i < pts.length; i += 6) {
+    c.bezierCurveTo(pts[i] * w, pts[i + 1] * l, pts[i + 2] * w, pts[i + 3] * l, pts[i + 4] * w, pts[i + 5] * l);
+  }
+  c.closePath();
+}
+
 const dog = {
   // Mesh tier: the tongue keys off jawOpen, and blendshapes exist only there.
   // Kitty, Royal and Big Head are on it too now.
@@ -114,22 +138,29 @@ const dog = {
       const S = face.headSpan;
       const sway = Math.sin(t / 500) * 0.05;
 
-      // Radii, not diameters — `ellipse` takes radii, and these were written as
-      // though it took widths, so every ear was drawn twice the intended size.
-      // Rendered against the canonical face, each one stood taller than the whole
-      // head. A floppy ear hangs below where it attaches, which is what the
-      // downward centre offset is for.
+      // Floppy ears hung from high on the sides of the skull, above the hairline,
+      // falling outward to about the eyes. They were ovals hung off the temples,
+      // which put them over the cheeks and read as blobs rather than ears.
       lift(c, face, 0.05);
-      perEar(c, face, (cc) => {
-        cc.rotate(0.30 + sway);
-        const w = S * 0.115, h = S * 0.235;
-        cc.fillStyle = "#7d4f24";
-        ellipse(cc, w * 0.25, h * 0.82, w, h);
-        cc.fill();
-        cc.fillStyle = "#5a3517";
-        ellipse(cc, w * 0.30, h * 0.88, w * 0.55, h * 0.72);
-        cc.fill();
-      });
+      const len = S * 0.5, half = S * 0.14;
+      for (const side of [-1, 1]) {
+        c.save();
+        c.translate(side * S * 0.36, face.headTopY - S * 0.2);
+        c.scale(side, 1);
+        c.rotate(-0.38 - sway);
+        const fur = c.createLinearGradient(0, 0, 0, len);
+        fur.addColorStop(0, "#8f5d2e");
+        fur.addColorStop(1, "#6a4120");
+        c.fillStyle = fur;
+        earPath(c, EAR, half, len);
+        c.fill();
+        unlift(c);
+        c.fillStyle = "rgba(74,42,18,.85)";
+        earPath(c, EAR_INNER, half, len);
+        c.fill();
+        lift(c, face, 0.05);
+        c.restore();
+      }
       unlift(c);
 
       // Snout seated on measured points rather than offset from the nose tip by
@@ -259,63 +290,187 @@ const cat = {
 
 /* ---------------------------- Sunglasses ---------------------------- */
 
+// Gold aviators, modelled in 3D and projected by hand — the Portal's browser
+// has no business running WebGL for a pair of glasses, but flat art can't do
+// the one thing that makes glasses look worn: arms that run back along the
+// head and vanish behind it when it turns. Same model as the Android app's
+// Aviators3D.kt.
+//
+// Glasses units: one unit is the eye distance, origin between the eyes, x
+// along the eye line, y down, z away from the camera.
+const AV = {
+  lensX: 0.42, lensY: 0.07, halfW: 0.33, halfH: 0.285, lensZ: -0.30,
+  // The right-hand lens's outline as (u, v), u outward to the temple and v
+  // down, both -1..1: straight across the top, a rounded corner at the temple,
+  // deepest on the nose side.
+  ctrl: [-0.80, -0.93, -0.20, -1.00, 0.50, -0.98, 0.92, -0.84, 1.00, -0.45,
+         0.95, 0.10, 0.72, 0.58, 0.30, 0.90, -0.25, 1.00, -0.68, 0.88,
+         -0.93, 0.50, -1.00, 0.00, -0.97, -0.56]
+};
+
+// The outline sampled round a closed Catmull-Rom curve, once.
+const AV_OUTLINE = (() => {
+  const k = AV.ctrl, n = k.length / 2, N = 36, out = [];
+  for (let s = 0; s < N; s++) {
+    const f = s * n / N, i = Math.floor(f), t = f - i, t2 = t * t;
+    const pt = [];
+    for (let a = 0; a < 2; a++) {
+      const p0 = k[((i - 1 + n) % n) * 2 + a], p1 = k[(i % n) * 2 + a];
+      const p2 = k[((i + 1) % n) * 2 + a], p3 = k[((i + 2) % n) * 2 + a];
+      pt.push(0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (3 * p1 - p0 - 3 * p2 + p3) * t2 * t));
+    }
+    out.push(pt);
+  }
+  return out;
+})();
+
+// A lens bows toward the camera in the middle, wraps back toward the temple
+// and tips its bottom in toward the cheek.
+const avX = (side, u) => side * (AV.lensX + u * AV.halfW);
+const avY = v => AV.lensY + v * AV.halfH;
+const avZ = (u, v) => AV.lensZ + 0.05 * (u * u + u) + 0.03 * (v * v + v);
+
+// How a pair sits on one face: the turn, and a projection into face space.
+function avPose(face) {
+  // The nose's offset from the ear midpoint over the half-span is about
+  // 1.75 tan(turn) on a real head: the nose tip stands that far forward of
+  // the ears for their width.
+  const turn = -Math.atan((face.yaw || 0) / 1.75);
+  const cs = Math.cos(turn), sn = Math.sin(turn);
+  // Eye distance is measured flat, so a turned head's is short by cos(turn).
+  const unit = 1 / Math.max(0.6, cs);
+  const half = Math.max(0.72, Math.min(1.05, (face.headSpan || face.earSpan) / 2));
+  // The head the arms hide behind: centre and radii, in glasses units. Its
+  // sides stop just inside the arms, so from the front they sit on its edge.
+  const C = [0, 0.25, 0.85], R = [half - 0.03, 1.35, 0.95];
+  // The direction to the camera, turned into glasses units.
+  const d = [sn / R[0], 0, -cs / R[2]];
+  return {
+    half,
+    at: (x, y, z) => [(cs * x + sn * z) * unit, y * unit],
+    hidden(x, y, z) {
+      const q = [(x - C[0]) / R[0], (y - C[1]) / R[1], (z - C[2]) / R[2]];
+      const a = d[0] * d[0] + d[2] * d[2];
+      const b = 2 * (q[0] * d[0] + q[1] * d[1] + q[2] * d[2]);
+      const c = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] - 1;
+      if (c < 0) return true;
+      const disc = b * b - 4 * a * c;
+      return disc >= 0 && (-b + Math.sqrt(disc)) / (2 * a) > 0;
+    }
+  };
+}
+
+// A 3D polyline, smoothed and cut where the head is in front of it; each
+// visible run is stroked with the current style.
+function avStroke(c, pose, pts) {
+  const fine = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    for (let k = 0; k < 6; k++) {
+      const t = k / 6;
+      fine.push(pts[i].map((v, j) => v + (pts[i + 1][j] - v) * t));
+    }
+  }
+  fine.push(pts[pts.length - 1]);
+  let open = false;
+  c.beginPath();
+  for (const p of fine) {
+    if (pose.hidden(p[0], p[1], p[2])) { open = false; continue; }
+    const [x, y] = pose.at(p[0], p[1], p[2]);
+    if (open) c.lineTo(x, y); else c.moveTo(x, y);
+    open = true;
+  }
+  c.stroke();
+}
+
+// Gold wire: a dark line under a bright one, which reads as round metal.
+function avGold(c, pose, pts, w) {
+  c.strokeStyle = "#7a5616";
+  c.lineWidth = w * 1.5;
+  avStroke(c, pose, pts);
+  c.strokeStyle = "#f2cd72";
+  c.lineWidth = w * 0.7;
+  avStroke(c, pose, pts.map(p => [p[0], p[1] - w * 0.25, p[2]]));
+}
+
 const shades = {
   id: "shades", name: "Cool", emoji: "😎", needsMesh: false,
   draw(ctx, face) {
-    inFaceSpace(ctx, face, c => {
-      const S = face.earSpan;
-      const lensW = S * 0.34, lensH = S * 0.26, gap = S * 0.09;
+    const pose = avPose(face);
+    const w = pose.half;
+    ctx.save();
+    ctx.translate(face.cx, face.cy);
+    ctx.rotate(face.angle);
+    ctx.scale(face.eyeDist, face.eyeDist);
+    const c = ctx;
+    c.lineCap = "round";
+    c.lineJoin = "round";
 
-      lift(c, face, 0.05);
-      c.fillStyle = "rgba(14,14,20,.9)";
-      c.strokeStyle = "#f3c93f";
-      c.lineWidth = S * 0.028;
-      c.lineJoin = "round";
+    // Arms first, since everything else is in front of them: straight back
+    // along the side of the head, over the ear and down behind it.
+    for (const side of [-1, 1]) {
+      const hinge = w + 0.01;
+      avGold(c, pose, [[side * hinge, -0.15, -0.13], [side * (w + 0.02), -0.14, 0.3],
+        [side * (w + 0.02), -0.12, 0.7], [side * (w - 0.02), -0.07, 0.97]], 0.03);
+      // Its tip, dark plastic over the bend, which tucks in behind the ear.
+      c.strokeStyle = "#1c1712";
+      c.lineWidth = 0.065;
+      avStroke(c, pose, [[side * (w + 0.02), -0.11, 0.84], [side * (w - 0.02), -0.07, 0.97],
+        [side * (w - 0.12), 0.1, 1.1], [side * (w - 0.18), 0.32, 1.12]]);
+    }
 
-      for (const side of [-1, 1]) {
-        const x = side * (gap / 2 + lensW / 2);
-        // Rounded rectangle reads more like modern shades than an oval.
-        const r = lensH * 0.42;
+    for (const side of [-1, 1]) {
+      const rim = AV_OUTLINE.map(([u, v]) => pose.at(avX(side, u), avY(v), avZ(u, v)));
+      const top = pose.at(side * AV.lensX, avY(-1), AV.lensZ);
+      const bottom = pose.at(side * AV.lensX, avY(1), AV.lensZ);
+      const lens = () => {
         c.beginPath();
-        c.moveTo(x - lensW / 2 + r, -lensH / 2);
-        c.lineTo(x + lensW / 2 - r, -lensH / 2);
-        c.quadraticCurveTo(x + lensW / 2, -lensH / 2, x + lensW / 2, -lensH / 2 + r);
-        c.lineTo(x + lensW / 2, lensH / 2 - r);
-        c.quadraticCurveTo(x + lensW / 2, lensH / 2, x + lensW / 2 - r, lensH / 2);
-        c.lineTo(x - lensW / 2 + r, lensH / 2);
-        c.quadraticCurveTo(x - lensW / 2, lensH / 2, x - lensW / 2, lensH / 2 - r);
-        c.lineTo(x - lensW / 2, -lensH / 2 + r);
-        c.quadraticCurveTo(x - lensW / 2, -lensH / 2, x - lensW / 2 + r, -lensH / 2);
+        rim.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
         c.closePath();
-        c.fill(); c.stroke();
+      };
 
-        c.save();
-        c.clip();
-        c.fillStyle = "rgba(255,255,255,.22)";
-        c.beginPath();
-        c.moveTo(x - lensW * 0.5, lensH * 0.5);
-        c.lineTo(x - lensW * 0.1, -lensH * 0.5);
-        c.lineTo(x + lensW * 0.1, -lensH * 0.5);
-        c.lineTo(x - lensW * 0.3, lensH * 0.5);
-        c.closePath(); c.fill();
-        c.restore();
-      }
+      // Near black at the top, a see-through brown at the bottom.
+      lift(c, face, 0.05);
+      const g = c.createLinearGradient(top[0], top[1], bottom[0], bottom[1]);
+      g.addColorStop(0, "rgba(14,12,12,.95)");
+      g.addColorStop(0.35, "rgba(26,20,17,.92)");
+      g.addColorStop(1, "rgba(92,62,38,.62)");
+      c.fillStyle = g;
+      lens();
+      c.fill();
       unlift(c);
 
+      // A soft diagonal sweep of light, the way a curved lens catches a room.
+      c.save();
+      lens();
+      c.clip();
+      const cx = (top[0] + bottom[0]) / 2, cy = (top[1] + bottom[1]) / 2;
+      c.fillStyle = "rgba(255,255,255,.16)";
       c.beginPath();
-      c.moveTo(-gap / 2, -lensH * 0.12);
-      c.quadraticCurveTo(0, -lensH * 0.34, gap / 2, -lensH * 0.12);
-      c.stroke();
+      c.moveTo(cx - 0.34, cy + 0.3); c.lineTo(cx - 0.06, cy - 0.34);
+      c.lineTo(cx + 0.08, cy - 0.34); c.lineTo(cx - 0.2, cy + 0.3);
+      c.closePath(); c.fill();
+      c.fillStyle = "rgba(255,255,255,.1)";
+      c.beginPath();
+      c.moveTo(cx - 0.1, cy + 0.3); c.lineTo(cx + 0.14, cy - 0.34);
+      c.lineTo(cx + 0.19, cy - 0.34); c.lineTo(cx - 0.05, cy + 0.3);
+      c.closePath(); c.fill();
+      c.restore();
 
-      // Temples run to the real ear points.
-      for (const ear of [face.earR, face.earL]) {
-        const side = ear.x < 0 ? -1 : 1;
-        c.beginPath();
-        c.moveTo(side * (gap / 2 + lensW), -lensH * 0.18);
-        c.quadraticCurveTo(side * (gap / 2 + lensW * 1.5), -lensH * 0.3, ear.x * 0.92, ear.y);
-        c.stroke();
-      }
-    });
+      // The rim, then the end piece from its top corner back to the hinge.
+      const loop = AV_OUTLINE.map(([u, v]) => [avX(side, u), avY(v), avZ(u, v)]);
+      loop.push(loop[0], loop[1]);
+      avGold(c, pose, loop, 0.03);
+      avGold(c, pose, [[avX(side, 0.9), avY(-0.78), avZ(0.9, -0.78)],
+        [side * (w - 0.03), -0.155, -0.22], [side * (w + 0.01), -0.15, -0.13]], 0.036);
+    }
+
+    // The double bridge: a straight bar across the tops, an arch below it.
+    const tz = avZ(-0.8, -0.93), ty = avY(-0.93) - 0.01;
+    avGold(c, pose, [[-0.2, ty, tz], [0, ty - 0.004, tz - 0.02], [0.2, ty, tz]], 0.03);
+    const lz = avZ(-0.99, -0.35), ly = avY(-0.35), lx = AV.lensX - 0.99 * AV.halfW - 0.01;
+    avGold(c, pose, [[-lx, ly, lz], [-0.055, ly - 0.06, lz - 0.025], [0, ly - 0.075, lz - 0.03],
+      [0.055, ly - 0.06, lz - 0.025], [lx, ly, lz]], 0.03);
+    ctx.restore();
   }
 };
 
@@ -331,8 +486,11 @@ const crown = {
       const cx = (face.earR.x + face.earL.x) / 2;
       const w = S * 0.92, h = S * 0.42;
 
+      // The band's bottom edge sits up in the hair, a seventh of a head above
+      // the top of the forehead. Hung from the forehead itself, the band sat on
+      // the brows.
       c.save();
-      c.translate(cx, face.headTopY + h * 0.15);
+      c.translate(cx, face.headTopY - S * 0.14 - h * 0.42);
 
       lift(c, face, 0.06);
       const g = c.createLinearGradient(0, -h, 0, h * 0.5);
@@ -457,8 +615,9 @@ const mustache = {
       const S = face.headSpan;
       const cx = (face.earR.x + face.earL.x) / 2;
 
+      // The brim rides above the forehead, in the hair, rather than across it.
       c.save();
-      c.translate(cx, face.headTopY);
+      c.translate(cx, face.headTopY - S * 0.1);
       lift(c, face, 0.06);
       c.fillStyle = "#191922";
       const brimW = S * 1.02, brimH = S * 0.07;
@@ -466,7 +625,7 @@ const mustache = {
       c.fill();
       // Was 0.62 of a head width tall, which ran off the top of a 16:9 frame
       // once the brim sat at the real hairline instead of above it.
-      const crownW = S * 0.56, crownH = S * 0.34;
+      const crownW = S * 0.6, crownH = S * 0.34;
       c.fillRect(-crownW / 2, -crownH, crownW, crownH);
       ellipse(c, 0, -crownH, crownW / 2, brimH * 0.8);
       c.fill();

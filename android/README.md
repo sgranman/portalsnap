@@ -63,6 +63,9 @@ For comparison, the web app on its own Portal (BUILD-JOURNAL.md, "Where this sta
 | while recording | ~52 ms, 13.5–14 fps | unchanged: the encoder reads the GPU frame |
 | frame grab for the tracker | 10–15 ms | 1.2–2.3 ms |
 
+Cool has since become 3D aviators on the mesh tier, so rows B and C of the bench now run
+Googly, the fast tier's plain sticker, instead.
+
 Rows A, J and K of that bench file have their tier mislabelled: "no filter" kept whatever
 tier was last loaded. The bench now selects the fast tier explicitly. K ran the mesh with
 nobody in front of the real camera, and 10.6ms is what the mesh costs with no face to landmark.
@@ -209,6 +212,7 @@ $A --es action photo|record|stop|keep|again|album|settings|pair|close|poke
 $A --es filter monster --es action poke         # poke = a stage tap (Monster/Cutie flips)
 $A --es music /sdcard/Android/data/net.sgransoft.portalsnap/files/beat120.wav   # loop a track for Disco / Pop Art (baked into clips); "stop" stops
 $A --ef jaw 0.8                                 # force jawOpen on test faces (Hearts, Monster's mouth); negative clears
+$A --es filter shades --ef turn 30              # Cool: pretend every head is turned 30° (the arms hide behind it); 999 clears
 $A --es filter bike --ef rideDist 1.6           # Bike Ride: hold every rider this many metres away (the portrait never moves); negative clears
 $A --es filter freefall --ef fallDist 0.75      # Freefall: hold every diver this far away; poke (or --ef jaw 0.8) makes them fall
 $A --es filter places --es place moon          # Places: castle, forest, waterfall, circus, yacht, beach, northpole or moon

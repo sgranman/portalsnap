@@ -993,6 +993,8 @@ class MainActivity : Activity() {
             Log.i(TAG, "segmenter sees ${if (compositor.segFullFrame) "the whole frame" else "a crop"}")
         }
         if (i.hasExtra("jaw")) painter.debugJaw = i.getFloatExtra("jaw", -1f).takeIf { it >= 0f }
+        // `--ef turn 30`: every head turned this many degrees (Cool's arms); 999 clears.
+        if (i.hasExtra("turn")) painter.debugTurn = i.getFloatExtra("turn", 999f).takeIf { it in -90f..90f }
         if (i.hasExtra("rideDist")) BikeRide.debugDist = i.getFloatExtra("rideDist", -1f).takeIf { it > 0f }
         if (i.hasExtra("fallDist")) Freefall.debugDist = i.getFloatExtra("fallDist", -1f).takeIf { it > 0f }
         when (i.getStringExtra("action")) {
@@ -1033,7 +1035,7 @@ class MainActivity : Activity() {
         val source = if (compositor.hasTestImage && !onCamera) 1 else 0
         val phases = if (onCamera) listOf(
             Phase("A camera: tracker only (fast)", 0, null, false),
-            Phase("B camera: shades (fast)", 0, "shades", false),
+            Phase("B camera: googly (fast)", 0, "googly", false),
             Phase("D camera: puppy (mesh)", 0, "dog", false),
             Phase("F camera: bike ride (fast)", 0, "bike", false),
             Phase("G camera: places (segment)", 0, "places", false),
@@ -1041,8 +1043,8 @@ class MainActivity : Activity() {
             Phase("I camera: places while recording", 0, "places", true),
         ) else listOf(
             Phase("A tracker only, no filter", source, null, false),
-            Phase("B shades, 1 face (fast)", source, "shades", false),
-            Phase("C shades, 2 faces (fast)", source * 2, "shades", false),
+            Phase("B googly, 1 face (fast)", source, "googly", false),
+            Phase("C googly, 2 faces (fast)", source * 2, "googly", false),
             Phase("D puppy, 1 face (mesh)", source, "dog", false),
             Phase("E puppy, 2 faces (mesh)", source * 2, "dog", false),
             Phase("F bike ride, 2 faces", source * 2, "bike", false),

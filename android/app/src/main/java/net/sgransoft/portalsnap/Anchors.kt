@@ -3,6 +3,7 @@ package net.sgransoft.portalsnap
 import com.google.mediapipe.tasks.vision.facedetector.FaceDetectorResult
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.hypot
 
 /** The three tracker tiers, and the frame size each is fed (the web app's measured sizes). */
@@ -20,6 +21,8 @@ class FaceAnchors(
     val blendshapes: Map<String, Float>,
     val dense: Boolean,
     val pitch: Float? = null,
+    /** Head turn in degrees about the frame's y axis, as View3D turns things; mesh tier only. */
+    val turn: Float? = null,
 )
 
 /**
@@ -76,8 +79,14 @@ object Anchors {
             // Per face and parallel to the landmark list: face 1 reads index 1.
             val bs = shapes?.getOrNull(i)?.associate { it.categoryName() to it.score() } ?: emptyMap()
             // Forward-vector y of the head pose; layout-agnostic up to sign, which Nod ignores.
-            val pitch = poses?.getOrNull(i)?.let { m -> Math.toDegrees(asin(m[9].coerceIn(-1f, 1f).toDouble())).toFloat() }
-            out += FaceAnchors(pts, bs, true, pitch)
+            val pose = poses?.getOrNull(i)
+            val pitch = pose?.let { m -> Math.toDegrees(asin(m[9].coerceIn(-1f, 1f).toDouble())).toFloat() }
+            // Column-major (checked on a Portal: the translation is m12..m14, and m12 grows as the
+            // face moves right). The face's forward vector is its third column, in a camera space with y up
+            // and z toward the viewer. View3D has y down and z away, so (m8, m9, m10) is (m8, -m9,
+            // -m10) there, and a turn of a about y takes (0, 0, -1) to (-sin a, 0, -cos a).
+            val turn = pose?.let { m -> Math.toDegrees(atan2(-m[8], m[10]).toDouble()).toFloat() }
+            out += FaceAnchors(pts, bs, true, pitch, turn)
         }
         return capped(out, max)
     }

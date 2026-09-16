@@ -213,6 +213,9 @@ await setFace("still");
 const eye = await at("eyeR"), chin = await at("chin"), top = await at("headTop");
 const temR = await at("templeR"), temL = await at("templeL");
 const headW = temL.x - temR.x;
+// One eye distance, as a height in the frame (the stub's frame is 16:9).
+const eyeL = await at("eyeL");
+const unitY = (eyeL.x - eye.x) * 16 / 9;
 
 await pickFilter("Puppy");
 await sleep(1200);
@@ -223,8 +226,12 @@ await sleep(1200);
   // The bug: ears drawn on the cheek anchors, 0.22 face units below the eye line.
   check("puppy: ears reach above the eye line", s && s.minY < eye.y - 0.02,
     s ? "top of ink " + s.minY.toFixed(3) + " vs eye " + eye.y.toFixed(3) : "no ink");
-  check("puppy: nothing floats above the top of the head", s && s.minY > top.y - 0.06,
+  // Floppy ears hang from high on the skull, so they start above the forehead's
+  // top, but the skull itself ends about two thirds of an eye width above that.
+  check("puppy: ears hang from above the forehead", s && s.minY < top.y,
     s ? "top of ink " + s.minY.toFixed(3) + " vs head top " + top.y.toFixed(3) : "no ink");
+  check("puppy: nothing floats above the top of the skull", s && s.minY > top.y - unitY * 0.75,
+    s ? "top of ink " + s.minY.toFixed(3) + " vs skull top " + (top.y - unitY * 0.65).toFixed(3) : "no ink");
   check("puppy: ears stay near the width of the head", s && s.maxX - s.minX < headW * 1.35,
     s ? "ink width " + (s.maxX - s.minX).toFixed(3) + " vs head " + headW.toFixed(3) : "no ink");
   check("puppy: the drawing is centred on the face", s && Math.abs(s.cx - 0.5) < 0.03,
@@ -249,8 +256,12 @@ await sleep(1200);
   const s = await inkStats();
   check("royal: the crown sits above the brows, not on the face",
     s && s.aboveEye > 0.95, s ? "above eye line " + (s.aboveEye * 100).toFixed(0) + "%" : "no ink");
+  // The band rests up in the hair: above the top of the forehead, which is where
+  // it used to sit, and below the top of the skull.
+  check("royal: the crown sits in the hair, not on the forehead",
+    s && s.maxY < top.y, s ? "bottom of ink " + s.maxY.toFixed(3) + " vs head top " + top.y.toFixed(3) : "no ink");
   check("royal: the crown does not float off the head",
-    s && s.maxY > top.y - 0.02, s ? "bottom of ink " + s.maxY.toFixed(3) + " vs head top " + top.y.toFixed(3) : "no ink");
+    s && s.maxY > top.y - unitY * 0.4, s ? "bottom of ink " + s.maxY.toFixed(3) + " vs head top " + top.y.toFixed(3) : "no ink");
 }
 
 await pickFilter("Cool");
@@ -259,6 +270,10 @@ await sleep(900);
   const s = await inkStats();
   check("cool: the lenses sit on the eye line", s && Math.abs(s.cy - eye.y) < 0.04,
     s ? "centroid y " + s.cy.toFixed(3) + " vs eye " + eye.y.toFixed(3) : "no ink");
+  // Seen from the front, the arms run straight back along the sides of the
+  // head, so nothing of them shows beyond it.
+  check("cool: from the front the arms stay at the sides of the head", s && s.maxX - s.minX < headW * 1.12,
+    s ? "ink width " + (s.maxX - s.minX).toFixed(3) + " vs head " + headW.toFixed(3) : "no ink");
 }
 
 await pickFilter("Fancy");
