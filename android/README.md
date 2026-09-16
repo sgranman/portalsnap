@@ -269,9 +269,10 @@ Each of these cost real time, so check here first:
   on the newest MediaPipe (`tasks-vision:1.0.0`, July 2026), so there is no upgrade to wait for.
   The GPU is still an opt-in with `--es segDelegate gpu` (or `auto`, or `cpu`; it takes effect
   on the next launch). A note is written before each GPU attempt and cleared after 10 good
-  results, so a crash puts the next launch back on the CPU. A real GPU path would mean running
-  the `.tflite` through TensorFlow Lite's own GPU delegate and reading its output tensor
-  directly, bypassing MediaPipe's conversion.
+  results, so a crash puts the next launch back on the CPU. Running the `.tflite` through
+  TensorFlow Lite's own GPU delegate and reading its output tensor directly does bypass that
+  conversion — and turns out to hit a different wall, a MediaPipe custom op these models carry;
+  see "The GPU works; MediaPipe's models are what can't use it" below.
 - **Segment edges need help.** The category mask is a hard 256x144 staircase under a 1280x720
   frame. The segmenter now returns confidence masks instead. `Compositor.uploadMask` smooths
   them over time and fixes their polarity. The `MASK` and `FX_POP_ART` shaders snap the soft edge
@@ -299,6 +300,46 @@ Each of these cost real time, so check here first:
   and 4% on a torso, and the two masks are hard to tell apart by eye. `--es segModel general`
   keeps it available; landscape stays the default. `selfie_multiclass_256x256` measures 695ms a
   frame on a gen 2 Portal's CPU, confirming the gen 1 figure below, and is not shipped.
+- **The GPU works; MediaPipe's models are what can't use it.** Tried 2026-09-16, on the branch
+  `spike/tflite-direct-segmenter`, which runs a model through TensorFlow Lite's own interpreter
+  and reads the mask out of the output tensor instead of letting MediaPipe convert it.
+
+  The delegate is fine. DeepLab v3 runs at 33-38ms on the GPU against 134-161ms on the CPU, on
+  both Portals — so the aborts above were never the Adreno or the driver. What stops the selfie
+  models is that they carry a MediaPipe custom op, `Convolution2DTransposeBias`, which stock
+  TFLite has no registration for: `Node number 244 failed to prepare`. MediaPipe's runtime knows
+  it, nothing else does. Registering it would mean building their C++ op ourselves.
+
+  Two models do run on the GPU, and both are worse than what ships. `selfie_multiclass_256x256`
+  has no custom op and goes from 785ms on the CPU to 65.8ms on the GPU — a twelvefold win, and
+  still far past the ~40ms a 25fps cut-out can afford, on the *faster* Portal. DeepLab v3 is fast
+  enough but segments worse: measured on one frozen frame against the shipping model, it claims
+  more of the picture (30.0% against 25.8%) with a shorter boundary (1647px against 1685px),
+  which is a fatter, smoother blob. Its masks bulge past the head and lose the hair contour the
+  selfie segmenter keeps. It is a 21-class scene segmenter; person is a by-product.
+
+  Worth recording because it is easy to assume otherwise: the selfie segmenter is good at this
+  job, and the two alternatives that can be obtained and run are both worse than it.
+- **NNAPI is no use on either Portal, for different reasons.** A gen 1 has no
+  `android.hardware.neuralnetworks` service at all — `lshal` lists none — so TFLite's NNAPI
+  delegate falls back to a reference implementation and takes 599ms where XNNPACK takes 161ms.
+  A gen 2 has the full Qualcomm stack, `qti-default`, `qti-gpu` and `qti-dsp` up to NNAPI 1.2,
+  and still fails: `ANEURALNETWORKS_OP_FAILED` on DeepLab, and the custom op on the selfie
+  models. Check `lshal | grep neuralnetworks` before spending time here. The Hexagon delegate is
+  a separate matter again: it needs Qualcomm's skeleton libraries, which are not redistributable
+  through Maven, and quantized models, which these are not.
+- **Going direct is faster on the CPU, for the same model.** TensorFlow Lite applies XNNPACK by
+  itself — "replacing 246 out of 246 nodes" — and MediaPipe apparently does not. End to end,
+  including converting the frame to float and reading the mask back, the landscape model costs
+  16.2ms against MediaPipe's 22.4 on a gen 1 and 12.6 against ~23 on a gen 2; the square model
+  costs about what the landscape one costs through MediaPipe. It is a real 28-45% saving and it
+  is not shipped, because it buys headroom the app is not short of at the price of a second
+  inference runtime in the APK. If a model ever arrives that needs the GPU, this is the way in.
+- **PP-HumanSeg is the candidate nobody has tried.** Purpose-built for portrait segmentation on
+  teleconferencing video, Apache-2.0, with an explicitly ultra-lightweight mobile variant and a
+  connectivity-aware loss aimed at the fragmenting seen here. It needs converting from Paddle
+  through ONNX to TFLite, which is why it stayed untried. Robust Video Matting was ruled out
+  earlier for a simpler reason: it is GPL-3.0, and this project is MIT.
 - **The segmenter looks at the person, not the room.** Its 256x144 input is a crop around where
   the person was (`Compositor.nextSegRoi`):
   - The crop takes the person's bounds plus margins.
