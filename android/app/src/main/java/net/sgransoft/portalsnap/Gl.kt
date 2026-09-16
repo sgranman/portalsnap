@@ -373,31 +373,9 @@ object Shaders {
     // Pop Art (PopArt.kt): a person look over a grunge ground, chosen per beat. The mask is the
     // segmenter's (1 = person), the echoes are the same mask 90ms apart, newest first. Grounds and
     // grain are procedural. Frame pixel p has y down; uv is the mask's (and the frame's) 0..1.
-    const val FX_POP_ART = """
-        precision highp float;
-        varying vec2 vUv;
-        uniform sampler2D uTexture;
-        uniform sampler2D uMask;
-        uniform sampler2D uEcho0;
-        uniform sampler2D uEcho1;
-        uniform sampler2D uEcho2;
-        uniform vec2 uMaskTexel;
-        uniform vec2 uSize;
-        uniform float uLook;
-        uniform float uBg;
-        uniform float uTrans;
-        uniform float uTransP;
-        uniform float uOutline;
-        uniform float uEchoOn;
-        uniform vec3 uEchoColor;
-        uniform vec3 uHead;
-        uniform float uDissolve;
-        uniform float uHalftone;
-        uniform float uTime;
-        uniform float uFlash;
-        // The way textures on the person slide, in px per second, changed on the beat.
-        uniform vec2 uDrift;
-
+    // hash / noise / fbm, shared by the Pop Art pass and the bake that precomputes its ground.
+    // One copy, so the two can never drift onto different noise and shift the ground.
+    private const val POP_NOISE = """
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
         float noise(vec2 p) {
@@ -417,19 +395,13 @@ object Shaders {
             }
             return v;
         }
+    """
 
-        // The mask is 256x144 under a 1280x720 frame: blur across its pixels, then pull the edge
-        // back to a clean line, so silhouettes aren't staircases.
-        float soft(sampler2D t, vec2 uv) {
-            vec2 d = uMaskTexel * 1.2;
-            float a = texture2D(t, uv).a * 4.0
-                + (texture2D(t, uv + vec2(d.x, 0.0)).a + texture2D(t, uv - vec2(d.x, 0.0)).a
-                + texture2D(t, uv + vec2(0.0, d.y)).a + texture2D(t, uv - vec2(0.0, d.y)).a) * 2.0
-                + texture2D(t, uv + d).a + texture2D(t, uv - d).a
-                + texture2D(t, uv + vec2(d.x, -d.y)).a + texture2D(t, uv + vec2(-d.x, d.y)).a;
-            return smoothstep(0.3, 0.7, a / 16.0);
-        }
-
+    // The two grounds. Both are functions of the pixel alone — no time, no camera — so they are
+    // the same image every frame, and FX_POP_GROUND bakes them once instead of the Pop Art pass
+    // paying for four fbm (sixty-odd sin) per pixel per frame. On a gen 2 Portal that was the
+    // whole cost of the filter: 6fps with them inline, 22 with them baked.
+    private const val POP_GROUNDS = """
         // Red grunge paper: blotchy, grainy, a faint diagonal print, big ghosted shapes.
         vec3 redGround(vec2 p) {
             vec3 c = vec3(0.72, 0.15, 0.19) * (0.86 + 0.2 * fbm(p / 180.0));
@@ -442,6 +414,62 @@ object Shaders {
         vec3 darkGround(vec2 p) {
             vec3 c = vec3(0.115, 0.11, 0.125) * (0.75 + 0.5 * fbm(p / 160.0));
             return c + (hash(floor(p / 2.0)) - 0.5) * 0.03;
+        }
+    """
+
+    // Draws one ground into a framebuffer of its own, once, at frame size. uDark picks which.
+    // Addressed by vUv exactly as the Pop Art pass reads it back, so whatever flips lie between
+    // the two cancel out.
+    const val FX_POP_GROUND = """
+        precision highp float;
+        varying vec2 vUv;
+        uniform vec2 uSize;
+        uniform float uDark;
+    """ + POP_NOISE + POP_GROUNDS + """
+        void main() {
+            vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uSize;
+            gl_FragColor = vec4(uDark > 0.5 ? darkGround(p) : redGround(p), 1.0);
+        }
+    """
+
+    const val FX_POP_ART = """
+        precision highp float;
+        varying vec2 vUv;
+        uniform sampler2D uTexture;
+        uniform sampler2D uMask;
+        uniform sampler2D uEcho0;
+        uniform sampler2D uEcho1;
+        uniform sampler2D uEcho2;
+        // The two grounds, already drawn (FX_POP_GROUND).
+        uniform sampler2D uGroundRed;
+        uniform sampler2D uGroundDark;
+        uniform vec2 uMaskTexel;
+        uniform vec2 uSize;
+        uniform float uLook;
+        uniform float uBg;
+        uniform float uTrans;
+        uniform float uTransP;
+        uniform float uOutline;
+        uniform float uEchoOn;
+        uniform vec3 uEchoColor;
+        uniform vec3 uHead;
+        uniform float uDissolve;
+        uniform float uHalftone;
+        uniform float uTime;
+        uniform float uFlash;
+        // The way textures on the person slide, in px per second, changed on the beat.
+        uniform vec2 uDrift;
+    """ + POP_NOISE + """
+        // The mask is 256x144 under a 1280x720 frame: blur across its pixels, then pull the edge
+        // back to a clean line, so silhouettes aren't staircases.
+        float soft(sampler2D t, vec2 uv) {
+            vec2 d = uMaskTexel * 1.2;
+            float a = texture2D(t, uv).a * 4.0
+                + (texture2D(t, uv + vec2(d.x, 0.0)).a + texture2D(t, uv - vec2(d.x, 0.0)).a
+                + texture2D(t, uv + vec2(0.0, d.y)).a + texture2D(t, uv - vec2(0.0, d.y)).a) * 2.0
+                + texture2D(t, uv + d).a + texture2D(t, uv - d).a
+                + texture2D(t, uv + vec2(d.x, -d.y)).a + texture2D(t, uv + vec2(-d.x, d.y)).a;
+            return smoothstep(0.3, 0.7, a / 16.0);
         }
 
         // 0 red, 1 dark: held, or mid-transition.
@@ -493,7 +521,7 @@ object Shaders {
             float m = cutout(uv, cam);
             vec2 slide = p - uDrift * uTime;
             float dk = darkness(p);
-            vec3 col = mix(redGround(p), darkGround(p), dk);
+            vec3 col = mix(texture2D(uGroundRed, vUv).rgb, texture2D(uGroundDark, vUv).rgb, dk);
             vec3 groundTone = mix(vec3(0.72, 0.15, 0.19), vec3(0.3, 0.3, 0.34), dk);
 
             // Motion echoes: where the person was a moment ago.

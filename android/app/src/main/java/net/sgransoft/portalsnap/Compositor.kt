@@ -73,6 +73,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private lateinit var pPop: Program
     private lateinit var pDisco: Program
     private lateinit var pPopArt: Program
+    private lateinit var pPopGround: Program
     // The camera draws into frame. With a cut-out filter, each frame waits (held) for its own
     // mask while the camera moves on to the other buffer; composites read shown, the frame going
     // out.
@@ -128,6 +129,11 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private var maskH = 0
     private var maskAt = 0L
     private var maskBuf: ByteBuffer? = null
+    // Pop Art's red and dark grunge, drawn once on the first frame that asks for them. They are
+    // functions of the pixel alone, so they never change; see FX_POP_GROUND.
+    private var groundRed: Fbo? = null
+    private var groundDark: Fbo? = null
+
     // The same mask as a moment ago, three times over, for motion echoes: refreshed every 90ms.
     private val echoTex = IntArray(3)
     private val echoAt = LongArray(3)
@@ -178,6 +184,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             pPop = Program(Shaders.VERTEX, Shaders.FX_POP)
             pDisco = Program(Shaders.VERTEX, Shaders.FX_DISCO)
             pPopArt = Program(Shaders.VERTEX, Shaders.FX_POP_ART)
+            pPopGround = Program(Shaders.VERTEX, Shaders.FX_POP_GROUND)
             frameA = Fbo(FRAME_W, FRAME_H)
             frameB = Fbo(FRAME_W, FRAME_H)
             frame = frameA
@@ -514,6 +521,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     }
 
     private fun composite(plan: Plan) {
+        if (plan.fx?.kind == FrameFx.POP_ART) bakePopGround()
         comp.bind()
         val fx = plan.fx
         if (fx != null) {
@@ -610,6 +618,26 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         GLES20.glDisable(GLES20.GL_BLEND)
     }
 
+    // Pop Art's ground, drawn once. Sixty-odd sin per pixel for an image that is the same every
+    // frame was the whole cost of the filter on a gen 2 Portal, whose Adreno 615 has roughly half
+    // the gen 1's shading power. One slow frame here buys every frame after it.
+    private fun bakePopGround() {
+        if (groundRed != null) return
+        val red = Fbo(FRAME_W, FRAME_H)
+        val dark = Fbo(FRAME_W, FRAME_H)
+        pPopGround.use()
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glUniform2f(pPopGround.u("uSize"), FRAME_W.toFloat(), FRAME_H.toFloat())
+        for ((target, isDark) in arrayOf(red to 0f, dark to 1f)) {
+            target.bind()
+            GLES20.glUniform1f(pPopGround.u("uDark"), isDark)
+            pPopGround.drawQuad()
+        }
+        groundRed = red
+        groundDark = dark
+        Log.i(TAG, "pop art ground baked ${FRAME_W}x$FRAME_H")
+    }
+
     // A frame shader standing in for the plain camera picture.
     private fun drawFx(fx: FrameFx) {
         GLES20.glDisable(GLES20.GL_BLEND)
@@ -661,6 +689,12 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
                 GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, echoTex[i])
                 GLES20.glUniform1i(p.u(names[k]), 2 + k)
             }
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE5)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, groundRed?.tex ?: 0)
+            GLES20.glUniform1i(p.u("uGroundRed"), 5)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE6)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, groundDark?.tex ?: 0)
+            GLES20.glUniform1i(p.u("uGroundDark"), 6)
             GLES20.glUniform2f(p.u("uMaskTexel"), 1f / maxOf(1, maskW), 1f / maxOf(1, maskH))
             GLES20.glUniform2f(p.u("uSize"), FRAME_W.toFloat(), FRAME_H.toFloat())
             val q = fx.q
