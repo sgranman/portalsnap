@@ -82,7 +82,12 @@ class MainActivity : Activity() {
     // The second row over the bottom of the picture, and what it's showing: Places or a FilterGroup.
     private lateinit var subBar: HorizontalScrollView
     private lateinit var subRow: LinearLayout
+    private lateinit var subWrap: LinearLayout
+    private lateinit var subToggle: TextView
     private var subFor: Any? = null
+    // Folded away or not. Not remembered across launches: the Portal is a shared thing, and the
+    // next person to walk up to it should find the places where they can see them.
+    private var subOpen = true
 
     private var cameraTexture: SurfaceTexture? = null
     private var openedCamera = false
@@ -345,14 +350,31 @@ class MainActivity : Activity() {
         stage.addView(gear, lp(dp(60), dp(60), Gravity.TOP or Gravity.END).apply { rightMargin = dp(18); topMargin = dp(18) })
 
         // The second row, over the bottom of the picture: Places' places, or the filters in a group.
+        // It folds away with the arrow above it, so a row of backgrounds isn't sitting over the
+        // picture once it has been used. The arrow stays behind to bring it back.
         subRow = LinearLayout(this).apply { setPadding(dp(14), dp(10), dp(14), dp(12)) }
         subBar = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(170, 0, 0, 0), Color.TRANSPARENT))
             addView(subRow)
+        }
+        subToggle = label("", 20f).apply {
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            background = rounded(Color.argb(150, 0, 0, 0), dp(999).toFloat())
+            setPadding(dp(22), dp(6), dp(22), dp(6))
+            setOnClickListener {
+                subOpen = !subOpen
+                syncSubOpen()
+            }
+        }
+        subWrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(subToggle, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(14); bottomMargin = dp(6) })
+            addView(subBar, LinearLayout.LayoutParams(MATCH, WRAP))
             visibility = View.GONE
         }
-        stage.addView(subBar, lp(MATCH, WRAP, Gravity.BOTTOM))
+        stage.addView(subWrap, lp(MATCH, WRAP, Gravity.BOTTOM))
 
         loadMsg = label("Waking up the camera…", 22f, Palette.DIM).apply { gravity = Gravity.CENTER }
         loader = LinearLayout(this).apply {
@@ -478,8 +500,25 @@ class MainActivity : Activity() {
             }
             subBar.scrollTo(0, 0)
         }
-        subBar.visibility = if (want == null) View.GONE else View.VISIBLE
+        subWrap.visibility = if (want == null) View.GONE else View.VISIBLE
+        syncSubOpen()
         styleSubRow(active)
+    }
+
+    // Folded or not. The arrow points the way the row will go: down to send it away, up to bring
+    // it back. Folded, it also says what is down there — a bare arrow on a bright picture is not
+    // much to find again from across a room.
+    private fun syncSubOpen() {
+        subBar.visibility = if (subOpen) View.VISIBLE else View.GONE
+        subToggle.text = if (subOpen) {
+            "▼"
+        } else {
+            "▲  " + when (val f = subFor) {
+                is FilterGroup -> f.name
+                Places -> "Places"
+                else -> ""
+            }
+        }
     }
 
     private fun styleSubRow(active: Filter?) {
