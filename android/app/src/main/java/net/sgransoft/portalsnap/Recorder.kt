@@ -21,6 +21,7 @@ import kotlin.concurrent.thread
 class Recorder(private val file: File, private val mic: MicHub?) {
     val inputSurface: Surface
     @Volatile var voiceRatio = 1f
+    @Volatile var voiceFx = VoiceFx.NONE
     @Volatile var hasAudio = false
         private set
 
@@ -39,6 +40,7 @@ class Recorder(private val file: File, private val mic: MicHub?) {
     @Volatile private var stopping = false
 
     private val shifter = PitchShifter()
+    private val robot = RobotVoice()
     private val loudness = Loudness()
     private val floats = FloatArray(MicHub.BLOCK)
     private val bytes = ByteBuffer.allocate(MicHub.BLOCK * 2).order(ByteOrder.LITTLE_ENDIAN)
@@ -127,6 +129,7 @@ class Recorder(private val file: File, private val mic: MicHub?) {
             // Gain first, as Chrome's capture-side AGC was, so the voice is shifted at level.
             loudness.process(floats, n)
             shifter.process(floats, n, voiceRatio)
+            if (voiceFx == VoiceFx.ROBOT) robot.process(floats, n)
             // The app's own sounds go in after the voice effect, at their own pitch, read at the
             // mic's capture time.
             Mixer.mixInto(floats, n, pts * 1000)

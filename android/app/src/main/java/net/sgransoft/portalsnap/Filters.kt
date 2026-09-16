@@ -117,6 +117,8 @@ class Draw(val pen: Pen) {
     val hamsters = ArrayList<Hamster3D>()
     /** Cool's 3D sunglasses, drawn at the same point as glasses. */
     val aviators = ArrayList<Aviators3D>()
+    /** Alien's warps of the camera picture, drawn with the patches. */
+    val aliens = ArrayList<AlienWarp>()
     /** Segment tier: the latest person mask (1 person, 0 not), maskW x maskH, top row first. */
     var mask: ByteArray? = null
     var maskW = 0
@@ -171,6 +173,9 @@ abstract class Filter(
     open val ambience: String? = null
 
     open fun voiceFrom(face: Face): Float? = null
+
+    /** An effect on the recorded voice beyond its pitch, such as the Alien's robot. */
+    open val voiceFx = VoiceFx.NONE
 
     /** Under layer, once however many people are in frame. */
     open fun scene(d: Draw, faces: List<Face>) {}
@@ -639,7 +644,7 @@ object BigHead : Filter("bighead", "Big Head", "🤯", Mode.MESH) {
 
 // In the bar's order: the Faces group first (its chip stands where Dog is), then Places.
 val FILTERS: List<Filter> = listOf(
-    Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Places,
+    Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Alien, Places,
     Mirror, PopSilhouette, DiscoStar, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod, BikeRide, Freefall)
 
 /**
@@ -650,5 +655,5 @@ val FILTERS: List<Filter> = listOf(
 class FilterGroup(val id: String, val name: String, val emoji: String, val members: List<Filter>)
 
 val GROUPS: List<FilterGroup> = listOf(
-    FilterGroup("faces", "Faces", "🐶", listOf(Dog, Cat, Shades, Crown, Googly, Mustache, BigHead)),
+    FilterGroup("faces", "Faces", "🐶", listOf(Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Alien)),
 )

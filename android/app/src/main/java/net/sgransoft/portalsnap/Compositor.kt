@@ -122,6 +122,8 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private var fallRenderer: FreefallRenderer? = null
     private var hamsterRenderer: HamsterRenderer? = null
     private var aviatorRenderer: AviatorRenderer? = null
+    private var alienRenderer: AlienRenderer? = null
+    private var alienFailed = false
     /** The app's assets, for 3D passes that load pictures (Freefall's ground). */
     private lateinit var assets: AssetManager
     private var glassFailed = false
@@ -456,6 +458,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             egl.swap(enc)
             recRate.tick()
             recorder?.voiceRatio = painter.voice
+            recorder?.voiceFx = painter.voiceFx
         }
 
         renderRate.tick()
@@ -654,6 +657,16 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             // Column-major: src = M * (x, y, 1).
             GLES20.glUniformMatrix3fv(pPatch.u("uMap"), 1, false, floatArrayOf(m[0], m[3], 0f, m[1], m[4], 0f, m[2], m[5], 1f), 0)
             pPatch.drawQuad()
+        }
+
+        if (plan.aliens.isNotEmpty() && !alienFailed) {
+            try {
+                val r = alienRenderer ?: AlienRenderer().also { alienRenderer = it }
+                r.draw(plan.aliens, shown.tex)
+            } catch (e: Throwable) {
+                alienFailed = true
+                Log.e(TAG, "alien warp failed; turning it off", e)
+            }
         }
 
         if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty() || plan.rides.isNotEmpty() || plan.falls.isNotEmpty() || plan.hamsters.isNotEmpty() || plan.aviators.isNotEmpty()) && !glassFailed) {
