@@ -81,6 +81,13 @@ kotlin {
 
 dependencies {
     implementation("com.google.mediapipe:tasks-vision:1.0.0")
+    // TensorFlow Lite's own runtime, for running the segmentation model without MediaPipe's
+    // wrapper. MediaPipe bundles TFLite inside its native library but does not expose the Java
+    // Interpreter, and its GPU path dies converting the output (see README). Reading the output
+    // tensor directly is the only way to reach the GPU on these Portals.
+    implementation("org.tensorflow:tensorflow-lite:2.17.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.17.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.17.0")
     // QR for pairing: the encoder only, pure Java, no Google services.
     implementation("com.google.zxing:core:3.5.3")
 }

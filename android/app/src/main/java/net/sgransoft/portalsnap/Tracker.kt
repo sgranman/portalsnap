@@ -31,6 +31,13 @@ class TrackResult(val faces: List<FaceAnchors>, val mask: ByteArray?, val maskW:
 const val MASK_GRID_W = 512
 const val MASK_GRID_H = 288
 
+/** The segmentation models, by the name `--es segModel` uses. Whichever isn't in assets falls back. */
+val SEG_ASSETS = mapOf(
+    "landscape" to "selfie_segmenter_landscape.tflite",
+    "general" to "selfie_segmenter.tflite",
+    "multiclass" to "selfie_multiclass_256x256.tflite",
+)
+
 val FULL_FRAME = floatArrayOf(0f, 0f, 1f, 1f)
 
 /**
@@ -163,6 +170,15 @@ class Tracker(private val ctx: Context) {
                 when (val task = model?.task) {
                     is FaceDetector -> faces = Anchors.fromDetections(task.detectForVideo(img, ts), Anchors.faceCap(Mode.FAST))
                     is FaceLandmarker -> faces = Anchors.fromLandmarks(task.detectForVideo(img, ts), Anchors.faceCap(Mode.MESH))
+                    is TfliteSeg -> {
+                        // The same confidence mask MediaPipe's path produces, from our own
+                        // interpreter. toFrame lays it back over the frame either way.
+                        if (tfConf.size < task.outW * task.outH) tfConf = FloatArray(task.outW * task.outH)
+                        task.run(img2rgba(rgba, w, h, task.inW, task.inH), tfConf)
+                        mask = toFrame(java.nio.FloatBuffer.wrap(tfConf), task.outW, task.outH, jobRoi, false)
+                        mw = MASK_GRID_W
+                        mh = MASK_GRID_H
+                    }
                     is ImageSegmenter -> {
                         // Confidence, not categories: a soft edge the compositor can smooth over
                         // time and the shaders can snap to the picture. The category mask was a
@@ -277,6 +293,17 @@ class Tracker(private val ctx: Context) {
         return out
     }
 
+    // Scratch for the TFLite path, tracker thread only.
+    private var tfConf = FloatArray(0)
+
+    /** The submitted frame is already at the model's input size, so this is a pass-through. */
+    private fun img2rgba(rgba: ByteBuffer, w: Int, h: Int, inW: Int, inH: Int): ByteBuffer {
+        if (w == inW && h == inH) return rgba
+        // Sizing is the compositor's job (segInputW/H); anything else means they disagreed.
+        Log.w(TAG, "tflite input is ${w}x$h but the model wants ${inW}x$inH")
+        return rgba
+    }
+
     // Scratch for toFrame, tracker thread only.
     private var conf = FloatArray(0)
     private var colX0 = IntArray(0)
@@ -310,6 +337,29 @@ class Tracker(private val ctx: Context) {
         segMulticlass = segModelName == "multiclass"
         segInputW = 256
         segInputH = if (segModelName == "landscape") 144 else 256
+        // Our own interpreter instead of MediaPipe's, which is the only way onto the GPU: their
+        // selfie models carry a custom op (Convolution2DTransposeBias) that stock TFLite has no
+        // registration for, so this is for models built from standard ops. `--es segModelPath`
+        // points it at one pushed onto the Portal.
+        if (prefs.getString(SEG_BACKEND, "mediapipe") == "tflite") {
+            val path = prefs.getString(SEG_MODEL_PATH, null) ?: SEG_ASSETS.getValue(segModelName)
+            // Its own pref: SEG_DELEGATE means MediaPipe's delegate, and MediaPipe's GPU path
+            // aborts the process, so the two must not share a setting.
+            val want = prefs.getString(SEG_TF_DELEGATE, "gpu") ?: "gpu"
+            for (backend in listOf(want, "cpu").distinct()) {
+                try {
+                    val seg = TfliteSeg(ctx, path, backend)
+                    segInputW = seg.inW
+                    segInputH = seg.inH
+                    return Model(seg, "TFLITE-${seg.delegate}", 0)
+                } catch (e: Throwable) {
+                    Log.w(TAG, "tflite segmenter $path on $backend: ${e.message?.take(120)}")
+                }
+            }
+            Log.w(TAG, "tflite segmenter unavailable; using MediaPipe")
+            segInputW = 256
+            segInputH = if (segModelName == "landscape") 144 else 256
+        }
         if (prefs.getBoolean(SEG_GPU_TRYING, false)) {
             Log.w(TAG, "segmenter GPU attempt didn't survive last time; staying on CPU")
             prefs.edit().putBoolean(SEG_GPU_BAD, true).putBoolean(SEG_GPU_TRYING, false).commit()
@@ -335,11 +385,9 @@ class Tracker(private val ctx: Context) {
         const val SEG_GPU_BAD = "segGpuBad"
         const val SEG_GPU_PROVEN = 10L
         const val SEG_MODEL = "segModel"
-        val SEG_ASSETS = mapOf(
-            "landscape" to "selfie_segmenter_landscape.tflite",
-            "general" to "selfie_segmenter.tflite",
-            "multiclass" to "selfie_multiclass_256x256.tflite",
-        )
+        const val SEG_BACKEND = "segBackend"
+        const val SEG_TF_DELEGATE = "segTfDelegate"
+        const val SEG_MODEL_PATH = "segModelPath"
     }
 
     private fun build(m: Mode, d: Delegate): Model? {

@@ -965,6 +965,27 @@ class MainActivity : Activity() {
         }
         // Which segmentation model: landscape (256x144), general (256x256) or multiclass. Applied
         // at once, so two can be compared on the same person before they have moved.
+        // `--es segBackend tflite|mediapipe` and `--es segModelPath /sdcard/x.tflite`: run the
+        // segmenter through our own TFLite interpreter, and on which model. Applied at once.
+        var reloadSeg = false
+        i.getStringExtra("segBackend")?.let {
+            getSharedPreferences("tracker", MODE_PRIVATE).edit().putString("segBackend", it).commit()
+            reloadSeg = true
+        }
+        // Which delegate the TFLite backend uses. Separate from segDelegate, which is
+        // MediaPipe's and whose GPU setting aborts the process.
+        i.getStringExtra("segTfDelegate")?.let {
+            getSharedPreferences("tracker", MODE_PRIVATE).edit().putString("segTfDelegate", it).commit()
+            reloadSeg = true
+        }
+        i.getStringExtra("segModelPath")?.let {
+            val v = if (it == "none" || it.isEmpty()) null else it
+            getSharedPreferences("tracker", MODE_PRIVATE).edit().putString("segModelPath", v).commit()
+            reloadSeg = true
+        }
+        if (reloadSeg && !i.hasExtra("segModel")) {
+            tracker.reloadSegmenter { ok -> Log.i(TAG, "segmenter reloaded=$ok") }
+        }
         i.getStringExtra("segModel")?.let {
             getSharedPreferences("tracker", MODE_PRIVATE).edit().putString("segModel", it).commit()
             tracker.reloadSegmenter { ok -> Log.i(TAG, "segmentation model $it loaded=$ok") }
@@ -978,6 +999,14 @@ class MainActivity : Activity() {
         if (i.hasExtra("cutColour")) compositor.cutColour = segDial(i, "cutColour", compositor.cutColour, 60f)
         if (i.hasExtra("cutCentre")) compositor.cutCentre = segDial(i, "cutCentre", compositor.cutCentre, 2f)
         if (i.hasExtra("maskView")) compositor.maskView = i.getBooleanExtra("maskView", false)
+        // `--es tfliteProbe landscape|general`: load that model through TensorFlow Lite itself,
+        // CPU then GPU, and log the tensor shapes and what each costs. The question this answers
+        // is whether the GPU delegate runs these ops on a Portal's Adreno at all.
+        i.getStringExtra("tfliteProbe")?.let { which ->
+            // A name from SEG_ASSETS, or a path to a model pushed onto the Portal.
+            val asset = if (which.startsWith("/")) which else SEG_ASSETS[which] ?: SEG_ASSETS.getValue("landscape")
+            exec.execute { TfliteSeg.probe(this, asset) }
+        }
         // `--es testRect 0,1,0.35,0.8`: which part of the test portrait fills the frame.
         i.getStringExtra("testRect")?.let { r ->
             val v = r.split(",").mapNotNull { it.trim().toFloatOrNull() }
