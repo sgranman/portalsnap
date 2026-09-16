@@ -104,6 +104,7 @@ class Plan {
     var falls: List<Fall3D> = emptyList()
     var hamsters: List<Hamster3D> = emptyList()
     var aviators: List<Aviators3D> = emptyList()
+    var aliens: List<AlienWarp> = emptyList()
 
     fun reset() {
         composite = false
@@ -119,6 +120,7 @@ class Plan {
         falls = emptyList()
         hamsters = emptyList()
         aviators = emptyList()
+        aliens = emptyList()
     }
 }
 
@@ -134,6 +136,8 @@ class Painter {
     /** adb's `--ef turn`: pretend every head is turned this many degrees, for the same reason. */
     @Volatile var debugTurn: Float? = null
     @Volatile var voice = 1f
+        private set
+    @Volatile var voiceFx = VoiceFx.NONE
         private set
     @Volatile var liveFaces = 0
         private set
@@ -170,6 +174,7 @@ class Painter {
         val dt = (now - lastAt).coerceIn(0, 50).toFloat()
         lastAt = now
         val f = active
+        voiceFx = f?.voiceFx ?: VoiceFx.NONE
         val t0 = SystemClock.elapsedRealtimeNanos()
         try {
             if (f == null) {
@@ -188,6 +193,7 @@ class Painter {
             draw.falls.clear()
             draw.hamsters.clear()
             draw.aviators.clear()
+            draw.aliens.clear()
             val m = mic
             draw.level = m?.level ?: 0f
             draw.beat = m?.beatPulse(now) ?: 0f
@@ -258,6 +264,7 @@ class Painter {
                     plan.falls = ArrayList(draw.falls)
                     plan.hamsters = ArrayList(draw.hamsters)
                     plan.aviators = ArrayList(draw.aviators)
+                    plan.aliens = ArrayList(draw.aliens)
                     return plan
                 }
                 idle(under, over)
@@ -310,6 +317,7 @@ class Painter {
             plan.falls = ArrayList(draw.falls)
             plan.hamsters = ArrayList(draw.hamsters)
             plan.aviators = ArrayList(draw.aviators)
+            plan.aliens = ArrayList(draw.aliens)
             return plan
         } finally {
             paintMs.add((SystemClock.elapsedRealtimeNanos() - t0) / 1e6)

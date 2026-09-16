@@ -50,7 +50,8 @@ Override only what you need.
 
 The flags that go with them are `usesUnder`, `usesOver`, `coversCamera`, `keepsScene` (keep
 drawing when nobody is in view), `usesFx` and `wantsMic`. For sound there's `voiceFrom(face)` (the
-pitch that person's recorded voice is shifted to), `music` (an asset looped while selected) and
+pitch that person's recorded voice is shifted to), `voiceFx` (an effect beyond pitch, such as
+`VoiceFx.ROBOT`), `music` (an asset looped while selected) and
 `ambience` (a synthesized sound looped while selected).
 
 ### Tracker tiers
@@ -85,6 +86,7 @@ read for every one.
 | Stickers: hats, ears, whiskers | `Canvas` through `d.pen` in face space | `Filters.kt` (Royal, Puppy, Kitty) |
 | Something reacting to a face | blendshapes and `Nod` in `update` | `Monster.kt` (a nod flips the mood) |
 | Zooms, bulging eyes, a face pasted somewhere | `Patch`: a region of the camera resampled into an ellipse, with `bulge` for a lens | Big Head, `Hamster` eyes |
+| Reshaping a whole face | a warp shader of its own: smooth maps chained in face space, each easing to no change at its edge, scissored to the head | `Alien.kt` |
 | Particles | `Particles` and `Particle` | Hearts, Hamster's crumbs |
 | A full-frame look | a `FrameFx` shader in `Gl.kt` | Mirror, `PopArt.kt`, `Disco.kt` |
 | Solid 3D props that turn with the head | `View3D`, a camera whose z = 0 plane lands exactly on frame pixels, plus `Mesh` and `Meshes.lathe` | `Glass3D.kt` (Lemonade), `Hamster3D.kt` |

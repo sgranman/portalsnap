@@ -721,7 +721,7 @@ class MainActivity : Activity() {
         hint(
             when {
                 !rec.hasAudio -> "Recording (no microphone)"
-                active != null && voiceOf(active, null) != 1f -> "Recording — say something in your ${active.name} voice!"
+                active != null && (voiceOf(active, null) != 1f || active.voiceFx != VoiceFx.NONE) -> "Recording — say something in your ${active.name} voice!"
                 else -> "Recording — say something!"
             }, 2000,
         )
