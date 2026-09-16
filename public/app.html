@@ -1268,7 +1268,7 @@ function setVoice(ratio) {
 // reach the device's own photo album, so a capture is only "saved" once the
 // server has it. Everything below funnels into upload().
 
-const MAX_CLIP_MS = 30000;
+const MAX_CLIP_MS = 60000;
 
 // Full camera resolution. Dropping this to 540p was tried and measured on the
 // Portal: it moved neither the composite rate nor inference, because `comp`
@@ -1496,9 +1496,10 @@ function tickRec() {
   const ms = performance.now() - recStartedAt;
   recFps = recFrames / (ms / 1000);
   const s = Math.floor(ms / 1000);
+  const cap = MAX_CLIP_MS / 1000;
   el("recclock").textContent =
     Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") +
-    " / 0:" + (MAX_CLIP_MS / 1000);
+    " / " + Math.floor(cap / 60) + ":" + String(cap % 60).padStart(2, "0");
   if (ms >= MAX_CLIP_MS) stopRec();
 }
 

@@ -749,7 +749,8 @@ class MainActivity : Activity() {
             if (recorder == null) return
             val ms = SystemClock.uptimeMillis() - recStartedAt
             val s = ms / 1000
-            recClock.text = "%d:%02d / 0:%d".format(s / 60, s % 60, MAX_CLIP_MS / 1000)
+            val cap = MAX_CLIP_MS / 1000
+            recClock.text = "%d:%02d / %d:%02d".format(s / 60, s % 60, cap / 60, cap % 60)
             if (ms >= MAX_CLIP_MS) stopRec() else ui.postDelayed(this, 200)
         }
     }
@@ -1102,7 +1103,7 @@ class MainActivity : Activity() {
     }
 
     private companion object {
-        const val MAX_CLIP_MS = 30_000L
+        const val MAX_CLIP_MS = 60_000L
         const val CAMERA_PROBLEM = "Camera problem"
         const val CAMERA_RETRY_MS = 3000L
 

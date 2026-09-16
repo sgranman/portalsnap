@@ -97,8 +97,9 @@ const MEDIA_NAME = /^(pic|vid)-[0-9TZ-]+-[a-z0-9]{4}\.(jpg|png|webm|mp4)$/;
 const posterFor = name => name.replace(/\.(webm|mp4)$/, ".jpg");
 const isPoster = name => /^vid-/.test(name) && name.endsWith(".jpg");
 
-// A 30s clip at the app's 2.5Mbps cap is ~10MB. This is a runaway guard, and
-// it sits under the 100MB body limit on a Cloudflare quick tunnel.
+// A 60s clip is ~20MB from the web app (2.5Mbps) and ~31MB from the Android
+// app (4Mbps). This is a runaway guard, and it sits under the 100MB body limit
+// on a Cloudflare quick tunnel.
 const MAX_UPLOAD = 64 * 1024 * 1024;
 
 fs.mkdirSync(REPORTS, { recursive: true });
