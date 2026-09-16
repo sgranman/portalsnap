@@ -334,6 +334,13 @@ object Shaders {
         uniform sampler2D uTexture;
         uniform sampler2D uMask;
         uniform vec2 uTexel;
+        // Where the cut-out falls: x and y are the confidence the edge runs between, z how hard a
+        // difference in camera colour pulls a neighbour's weight down, w how much this pixel's own
+        // sample outweighs its neighbours. See Compositor's cutLo.
+        uniform vec4 uCut;
+        // 1 shows the cut-out itself, white where the person is: what the mask actually became,
+        // with nothing else in the frame to confuse a measurement of it.
+        uniform float uShowMask;
         void main() {
             vec2 m = vec2(vUv.x, 1.0 - vUv.y);
             vec3 here = texture2D(uTexture, vUv).rgb;
@@ -345,12 +352,14 @@ object Shaders {
                 for (int j = -1; j <= 1; j++) {
                     vec2 o = vec2(float(i), float(j)) * uTexel;
                     vec3 c = texture2D(uTexture, vUv + vec2(o.x, -o.y)).rgb - here;
-                    float w = exp(-dot(c, c) * 60.0) * ((i == 0 && j == 0) ? 2.0 : 1.0);
+                    float w = exp(-dot(c, c) * uCut.z) * ((i == 0 && j == 0) ? uCut.w : 1.0);
                     a += w * texture2D(uMask, m + o).a;
                     wsum += w;
                 }
             }
-            a = smoothstep(0.45, 0.75, a / wsum);
+            a = smoothstep(uCut.x, uCut.y, a / wsum);
+            // Opaque, so it covers the scene underneath rather than blending into it.
+            if (uShowMask > 0.5) { gl_FragColor = vec4(a, a, a, 1.0); return; }
             gl_FragColor = texture2D(uTexture, vUv) * a;
         }
     """
@@ -459,6 +468,8 @@ object Shaders {
         uniform float uFlash;
         // The way textures on the person slide, in px per second, changed on the beat.
         uniform vec2 uDrift;
+        // As MASK's: the edge, the colour pull, and the centre sample's weight.
+        uniform vec4 uCut;
     """ + POP_NOISE + """
         // The mask is 256x144 under a 1280x720 frame: blur across its pixels, then pull the edge
         // back to a clean line, so silhouettes aren't staircases.
@@ -503,13 +514,13 @@ object Shaders {
                 for (int i = -1; i <= 1; i++) {
                     vec2 o = vec2(float(i), float(j)) * d;
                     vec3 c = texture2D(uTexture, vec2(uv.x + o.x, 1.0 - uv.y - o.y)).rgb - here;
-                    float w = exp(-dot(c, c) * 60.0) * ((i == 0 && j == 0) ? 2.0 : 1.0);
+                    float w = exp(-dot(c, c) * uCut.z) * ((i == 0 && j == 0) ? uCut.w : 1.0);
                     sum += w * texture2D(uMask, uv + o).a;
                     wsum += w;
                 }
             }
             // A little past halfway: the model's soft edge leans outward into the room.
-            return smoothstep(0.45, 0.75, sum / wsum);
+            return smoothstep(uCut.x, uCut.y, sum / wsum);
         }
 
         void main() {

@@ -212,6 +212,14 @@ $A --ef jaw 0.8                                 # force jawOpen on test faces (H
 $A --es filter bike --ef rideDist 1.6           # Bike Ride: hold every rider this many metres away (the portrait never moves); negative clears
 $A --es filter freefall --ef fallDist 0.75      # Freefall: hold every diver this far away; poke (or --ef jaw 0.8) makes them fall
 $A --es filter places --es place moon          # Places: castle, forest, waterfall, circus, yacht, beach, northpole or moon
+$A --es segModel landscape|general|multiclass   # segmentation model, applied at once
+$A --ez freeze true                            # hold the picture; the segmenter keeps re-reading it
+$A --ez maskView true                          # draw the cut-out itself, white on black
+$A --es testRect 0,1,0.32,0.80                 # which part of the test portrait fills the frame
+$A --ef cutLo 0.30 --ef cutHi 0.60             # where the cut-out's edge falls (negative resets)
+$A --ef cutColour 60 --ef cutCentre 2          # colour snap, and the centre sample's weight
+$A --ef maskStill 0.75 --ef maskMove 0.75      # how hard the mask is averaged over time
+$A --ez segFullFrame true                      # show the segmenter the whole frame, not a crop
 $A --es server https://portalsnap.example.net   # set the server
 $A --ei rot 180                                 # override camera rotation
 $A --ez bench true                              # the bench above; results in files/bench-*.json and logcat PSNAP_BENCH
@@ -256,6 +264,9 @@ Each of these cost real time, so check here first:
 
   Confidence masks abort the same way (`image_frame.cc:298 Invalid format: UNKNOWN`), tried
   2026-09-14, so this is MediaPipe's GPU output conversion on this device, not the mask type.
+  A gen 2 Portal (Adreno 615, a different driver) aborts identically, tried 2026-09-16, so it is
+  MediaPipe's Java-layer conversion rather than anything about the Adreno 540. The app is already
+  on the newest MediaPipe (`tasks-vision:1.0.0`, July 2026), so there is no upgrade to wait for.
   The GPU is still an opt-in with `--es segDelegate gpu` (or `auto`, or `cpu`; it takes effect
   on the next launch). A note is written before each GPU attempt and cleared after 10 good
   results, so a crash puts the next launch back on the CPU. A real GPU path would mean running
@@ -263,9 +274,31 @@ Each of these cost real time, so check here first:
   directly, bypassing MediaPipe's conversion.
 - **Segment edges need help.** The category mask is a hard 256x144 staircase under a 1280x720
   frame. The segmenter now returns confidence masks instead. `Compositor.uploadMask` smooths
-  them over time (`MASK_SMOOTH`) and fixes their polarity. The `MASK` and `FX_POP_ART` shaders
-  snap the soft edge to the camera image (a colour-weighted neighbourhood, then a threshold a
-  little past halfway), which removes most of the halo of room around a person.
+  them over time and fixes their polarity. The `MASK` and `FX_POP_ART` shaders snap the soft edge
+  to the camera image (a colour-weighted neighbourhood, then a threshold), which removes most of
+  the halo of room around a person.
+- **The cut-out does not boil; it erodes.** Measured with `--ez freeze` (which holds one frame
+  while the segmenter keeps re-reading it) and `--ez maskView` (which draws the cut-out itself):
+  on a frame that truly holds still the mask is **identical frame to frame**, 0.000% of pixels
+  moving. Everything that looked like boiling was the subject moving — including the debug
+  portrait, which drifts and breathes on a sine to imitate one, and which invalidated three
+  earlier attempts at measuring this. Temporal smoothing therefore has nothing to fight, and
+  `MASK_SMOOTH_STILL` is left equal to `MASK_SMOOTH_MOVE`.
+
+  What the mask does instead is erode. The threshold ran 0.45-0.75, chosen against halo, and a
+  thing one or two mask texels wide — a thumb on a raised hand — never reaches 0.45 once its
+  neighbourhood is averaged in, so it disappears. Moving the edge to 0.30-0.60 pushes a strong
+  boundary (hair against a bright window) out by only three to six pixels, measured, which is far
+  less than it gives back. Raising the centre sample's weight was tried as a gentler fix and does
+  the opposite — boundary length falls from 1659px to 1539px between weights of 1 and 8, because
+  the colour-weighted neighbourhood is where the detail comes from. Colour snap above about 150
+  starts punching holes in the person rather than following its edge.
+- **A bigger segmentation model isn't the answer.** `selfie_segmenter` (the square 256x256 of the
+  same family, nearly twice the pixels) costs 30-34ms against the landscape model's 21-25, taking
+  a gen 1 Portal from 26fps to 20.5. On a frozen frame it buys about 1% more boundary on a head
+  and 4% on a torso, and the two masks are hard to tell apart by eye. `--es segModel general`
+  keeps it available; landscape stays the default. `selfie_multiclass_256x256` measures 695ms a
+  frame on a gen 2 Portal's CPU, confirming the gen 1 figure below, and is not shipped.
 - **The segmenter looks at the person, not the room.** Its 256x144 input is a crop around where
   the person was (`Compositor.nextSegRoi`):
   - The crop takes the person's bounds plus margins.

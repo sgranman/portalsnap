@@ -60,6 +60,8 @@ class Tracker(private val ctx: Context) {
     @Volatile var segInputH = 144
         private set
     @Volatile var segMulticlass = false
+    /** Which segmentation model is loaded: landscape, general or multiclass. */
+    @Volatile var segModelName = "landscape"
         private set
     @Volatile var ready = false
         private set
@@ -109,6 +111,24 @@ class Tracker(private val ctx: Context) {
             busy = false
             ready = model != null
             onReady(ready)
+        }
+    }
+
+    /**
+     * Drops the loaded segmenter so the next [select] builds it again, for adb's `--es segModel`
+     * without a restart. Comparing two models on a living person is hopeless if each switch costs
+     * a relaunch and the pose has moved by the time it comes back.
+     */
+    fun reloadSegmenter(onReady: (Boolean) -> Unit = {}) {
+        val old = models.remove(Mode.SEGMENT)
+        handler.post {
+            if (current === runCatching { old?.get() }.getOrNull()) {
+                current = null
+                ready = false
+            }
+            // MediaPipe's tasks are AutoCloseable; the heavier models are worth handing back.
+            runCatching { (old?.get()?.task as? AutoCloseable)?.close() }
+            if (mode == Mode.SEGMENT) select(Mode.SEGMENT, onReady) else onReady(true)
         }
     }
 
@@ -276,14 +296,20 @@ class Tracker(private val ctx: Context) {
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         // Which model: the small landscape one (256x144), or the heavier multiclass one (256x256,
         // with hair as its own class). adb's `--es segModel multiclass|landscape`.
-        segMulticlass = prefs.getString(SEG_MODEL, "landscape") == "multiclass"
-        // It isn't shipped (830ms a frame on the gen 1 Portal's CPU); it works if dropped into assets.
-        if (segMulticlass && ctx.assets.list("")?.contains("selfie_multiclass_256x256.tflite") != true) {
-            Log.w(TAG, "multiclass segmentation model isn't in assets; using landscape")
-            segMulticlass = false
+        // landscape is the 256x144 one that ships. general is the same family square at 256x256,
+        // so nearly twice the pixels on the person. multiclass has hair as its own class and is
+        // far heavier. Whichever isn't in assets falls back to landscape.
+        val want = prefs.getString(SEG_MODEL, "landscape") ?: "landscape"
+        val have = ctx.assets.list("")?.toSet().orEmpty()
+        segModelName = if (SEG_ASSETS[want]?.let { it in have } == true) {
+            want
+        } else {
+            if (want != "landscape") Log.w(TAG, "segmentation model '$want' isn't in assets; using landscape")
+            "landscape"
         }
+        segMulticlass = segModelName == "multiclass"
         segInputW = 256
-        segInputH = if (segMulticlass) 256 else 144
+        segInputH = if (segModelName == "landscape") 144 else 256
         if (prefs.getBoolean(SEG_GPU_TRYING, false)) {
             Log.w(TAG, "segmenter GPU attempt didn't survive last time; staying on CPU")
             prefs.edit().putBoolean(SEG_GPU_BAD, true).putBoolean(SEG_GPU_TRYING, false).commit()
@@ -309,6 +335,11 @@ class Tracker(private val ctx: Context) {
         const val SEG_GPU_BAD = "segGpuBad"
         const val SEG_GPU_PROVEN = 10L
         const val SEG_MODEL = "segModel"
+        val SEG_ASSETS = mapOf(
+            "landscape" to "selfie_segmenter_landscape.tflite",
+            "general" to "selfie_segmenter.tflite",
+            "multiclass" to "selfie_multiclass_256x256.tflite",
+        )
     }
 
     private fun build(m: Mode, d: Delegate): Model? {
@@ -337,7 +368,7 @@ class Tracker(private val ctx: Context) {
                 Mode.SEGMENT -> ImageSegmenter.createFromOptions(
                     ctx,
                     ImageSegmenter.ImageSegmenterOptions.builder()
-                        .setBaseOptions(base(if (segMulticlass) "selfie_multiclass_256x256.tflite" else "selfie_segmenter_landscape.tflite"))
+                        .setBaseOptions(base(SEG_ASSETS[segModelName] ?: SEG_ASSETS.getValue("landscape")))
                         .setRunningMode(RunningMode.VIDEO)
                         .setOutputCategoryMask(false)
                         .setOutputConfidenceMasks(true)

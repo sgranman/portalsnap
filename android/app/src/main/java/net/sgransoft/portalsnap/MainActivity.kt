@@ -864,7 +864,14 @@ class MainActivity : Activity() {
         put("micSilent", mic.silent)
         put("segPct", r1(compositor.segShare * 100.0))
         put("segCrop", r1(compositor.segCrop * 100.0))
-        put("segModel", if (tracker.segMulticlass) "multiclass" else "landscape")
+        put("segModel", tracker.segModelName)
+        put("segInput", "${tracker.segInputW}x${tracker.segInputH}")
+        // Two decimals, not r1's one: these are dials turned in small steps.
+        put("maskStill", "%.2f".format(compositor.maskStill))
+        put("maskMove", "%.2f".format(compositor.maskMove))
+        put("cut", "%.2f/%.2f/%.0f/%.1f".format(compositor.cutLo, compositor.cutHi, compositor.cutColour, compositor.cutCentre))
+        put("segFullFrame", compositor.segFullFrame)
+        put("freeze", compositor.freeze)
         put("synced", compositor.synced)
         put("loadMs", JSONObject().apply { Mode.entries.forEach { m -> tracker.loadMs(m)?.let { put(m.name, it) } } })
         put("nativeHeapMB", Debug.getNativeHeapAllocatedSize() / 1_000_000)
@@ -884,7 +891,7 @@ class MainActivity : Activity() {
                 val o = opened
                 hud.text = buildString {
                     append("source  ${if (testFaces > 0) "test portrait x$testFaces" else "camera ${o?.id ?: "-"} ${o?.size ?: ""} rot ${compositor.rotation}"}\n")
-                    append("mode    ${tracker.mode}  ${tracker.delegate}\n")
+                    append("mode    ${tracker.mode}  ${tracker.delegate}${if (tracker.mode == Mode.SEGMENT) "  ${tracker.segModelName} ${tracker.segInputW}x${tracker.segInputH}" else ""}\n")
                     append("grab    %.1f ms\n".format(tracker.grab.pct(0.5)))
                     append("infer   %.1f ms  p95 %.1f\n".format(tracker.infer.pct(0.5), tracker.infer.pct(0.95)))
                     append("detect  %.1f fps\n".format(tracker.rate.fps()))
@@ -896,13 +903,26 @@ class MainActivity : Activity() {
                     append("faces   ${painter.liveFaces} / ${Anchors.faceCap(tracker.mode)}\n")
                     append("voice   %.2f\n".format(painter.voice))
                     if (painter.active?.wantsMic == true || recorder != null) append("mic     %.2f  beats %d%s\n".format(mic.level, mic.beats, if (mic.silent) "  SILENT (privacy on?)" else ""))
-                    if (tracker.mode == Mode.SEGMENT) append("seg     %.0f%% person\n".format(compositor.segShare * 100))
+                    if (tracker.mode == Mode.SEGMENT) {
+                append("seg     %.0f%% person  crop %.0f%%%s\n".format(compositor.segShare * 100, compositor.segCrop * 100, if (compositor.segFullFrame) "  FULL" else ""))
+                append("mask    still %.2f  move %.2f\n".format(compositor.maskStill, compositor.maskMove))
+                append("cut     %.2f-%.2f  colour %.0f  centre %.1f\n".format(compositor.cutLo, compositor.cutHi, compositor.cutColour, compositor.cutCentre))
+            }
                     if (recorder != null) append("rec     %.1f fps\n".format(compositor.recRate.fps()))
                     tracker.lastError?.let { append("err     ${it.take(60)}") }
                 }.trimEnd()
             }
             ui.postDelayed(this, 250)
         }
+    }
+
+    // One dial: the value asked for, or [fallback] when it's negative, logged either way so a
+    // session of turning them leaves a record of what was tried.
+    private fun segDial(i: Intent, name: String, current: Float, fallback: Float): Float {
+        val v = i.getFloatExtra(name, -1f)
+        val next = if (v < 0f) fallback else v
+        Log.i(TAG, "$name $current -> $next")
+        return next
     }
 
     private val logTick = object : Runnable {
@@ -943,10 +963,34 @@ class MainActivity : Activity() {
                 .putString("segDelegate", it).putBoolean("segGpuBad", false).putBoolean("segGpuTrying", false).commit()
             Log.i(TAG, "segmenter delegate set to $it; restart to apply")
         }
-        // Which segmentation model: landscape (small, 256x144) or multiclass (256x256). Next start.
+        // Which segmentation model: landscape (256x144), general (256x256) or multiclass. Applied
+        // at once, so two can be compared on the same person before they have moved.
         i.getStringExtra("segModel")?.let {
             getSharedPreferences("tracker", MODE_PRIVATE).edit().putString("segModel", it).commit()
-            Log.i(TAG, "segmentation model set to $it; restart to apply")
+            tracker.reloadSegmenter { ok -> Log.i(TAG, "segmentation model $it loaded=$ok") }
+        }
+        // The cut-out's dials, live: no restart, so they can be turned with someone standing in
+        // front of the Portal instead of guessed at. A negative value puts one back to its default.
+        if (i.hasExtra("maskStill")) compositor.maskStill = segDial(i, "maskStill", compositor.maskStill, 0.75f)
+        if (i.hasExtra("maskMove")) compositor.maskMove = segDial(i, "maskMove", compositor.maskMove, 0.75f)
+        if (i.hasExtra("cutLo")) compositor.cutLo = segDial(i, "cutLo", compositor.cutLo, 0.30f)
+        if (i.hasExtra("cutHi")) compositor.cutHi = segDial(i, "cutHi", compositor.cutHi, 0.60f)
+        if (i.hasExtra("cutColour")) compositor.cutColour = segDial(i, "cutColour", compositor.cutColour, 60f)
+        if (i.hasExtra("cutCentre")) compositor.cutCentre = segDial(i, "cutCentre", compositor.cutCentre, 2f)
+        if (i.hasExtra("maskView")) compositor.maskView = i.getBooleanExtra("maskView", false)
+        // `--es testRect 0,1,0.35,0.8`: which part of the test portrait fills the frame.
+        i.getStringExtra("testRect")?.let { r ->
+            val v = r.split(",").mapNotNull { it.trim().toFloatOrNull() }
+            if (v.size == 4) compositor.setTestCrop(v[0], v[1], v[2], v[3])
+        }
+        // `--ez freeze true` holds the picture so a model or a dial can be compared on one frame.
+        if (i.hasExtra("freeze")) {
+            compositor.freeze = i.getBooleanExtra("freeze", false)
+            Log.i(TAG, "freeze ${compositor.freeze}")
+        }
+        if (i.hasExtra("segFullFrame")) {
+            compositor.segFullFrame = i.getBooleanExtra("segFullFrame", false)
+            Log.i(TAG, "segmenter sees ${if (compositor.segFullFrame) "the whole frame" else "a crop"}")
         }
         if (i.hasExtra("jaw")) painter.debugJaw = i.getFloatExtra("jaw", -1f).takeIf { it >= 0f }
         if (i.hasExtra("rideDist")) BikeRide.debugDist = i.getFloatExtra("rideDist", -1f).takeIf { it > 0f }
