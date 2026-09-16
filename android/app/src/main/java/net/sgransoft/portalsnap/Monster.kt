@@ -24,11 +24,12 @@ import kotlin.math.sqrt
 // The voice follows: deep for the monster, high for the cutie.
 // All art is in face units: the eyes at (±0.5, 0), y down, one unit between the eyes.
 object MonsterCutie : Filter("monster", "Monster", "👹", Mode.MESH) {
-    // The original build's voices. The reference measured nearer 0.6x and 1.7x with the formants
-    // held, but a formant-preserving shifter (TD-PSOLA) at those ratios sounded far worse on a real
-    // voice than this, so both were put back.
-    private const val MONSTER_VOICE = 0.72f
-    private const val CUTIE_VOICE = 1.6f
+    // Both voices sit high: three semitones down is plenty of monster without the growl turning
+    // into a rumble, and a clean octave up makes the cutie properly squeaky. The reference
+    // measured nearer 0.6x and 1.7x with the formants held, but a formant-preserving shifter
+    // (TD-PSOLA) at those ratios sounded far worse on a real voice than plain ratios do.
+    private const val MONSTER_VOICE = 0.84f
+    private const val CUTIE_VOICE = 2f
     private const val EYE_BULGE = 0.62f
     // The new look shows once the cloud covers the face.
     private const val REVEAL_MS = 180L

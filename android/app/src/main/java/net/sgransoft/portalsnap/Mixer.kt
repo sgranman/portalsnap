@@ -46,6 +46,14 @@ object Mixer {
         val endNs: Long = if (loop) Long.MAX_VALUE else startNs + (clip.pcm.size / (clip.rate * speed.toDouble()) * 1e9).toLong()
     }
 
+    /**
+     * Silences the speaker without stopping anything. The voices go on walking, so a looping
+     * soundtrack stays in step with the wall clock its visuals are cut to, and it comes back
+     * where it would have been. Set while a captured clip is on screen: the clip already carries
+     * these sounds, baked in at record time, and hearing them twice is a mess.
+     */
+    @Volatile var muted = false
+
     @Volatile private var voices: List<Voice> = emptyList()
     private val nextId = AtomicInteger(1)
     private val lock = Object()
@@ -78,8 +86,9 @@ object Mixer {
         for (v in voices) v.stopNs = min(v.stopNs, now)
     }
 
-    /** Stops everything and the speaker thread; the next [play] starts it again. */
+    /** Stops everything and the speaker thread; the next [play] starts it again, unmuted. */
     fun shutdown() {
+        muted = false
         synchronized(lock) {
             stopAll()
             if (generation > 0) generation = -generation
@@ -189,7 +198,8 @@ object Mixer {
                 }
                 Arrays.fill(mix, 0f)
                 for (v in live) render(v, mix, BLOCK)
-                for (i in 0 until BLOCK) out[i] = (softClip(mix[i]) * 32767f).toInt().toShort()
+                // render() has moved the cursors either way; muted, only the speaker misses out.
+                if (muted) out.fill(0) else for (i in 0 until BLOCK) out[i] = (softClip(mix[i]) * 32767f).toInt().toShort()
                 track.write(out, 0, BLOCK)
             }
         } finally {
