@@ -142,7 +142,9 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
     private val debt = HashMap<Int, Float>()
     // While hearts pour out, a piano walks down the white keys, a note every NOTE_MS, and starts
     // again from the top when it runs out of keyboard or after the mouths have been shut a moment.
+    // It plays quietly: a note every 85ms is a lot of notes, and it sits under the room, not over it.
     private const val NOTE_MS = 85L
+    private const val NOTE_GAIN = 0.22f
     private var noteAt = 0L
     private var noteKey = 0
     private var pouringAt = -1_000_000L
@@ -180,7 +182,7 @@ object PixelHearts : Filter("hearts", "Hearts", "💖", Mode.MESH) {
             pouringAt = d.t
             if (d.t - noteAt >= NOTE_MS) {
                 noteAt = d.t
-                Sfx.play("key$noteKey", 0.42f)
+                Sfx.play("key$noteKey", NOTE_GAIN)
                 noteKey = (noteKey + 1) % Sfx.HEART_KEYS.size
             }
         }

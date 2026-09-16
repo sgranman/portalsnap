@@ -408,13 +408,14 @@ class MainActivity : Activity() {
         column.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(column, lp(MATCH, MATCH))
 
-        review = ReviewPanel(this, onKeep = { keep() }, onAgain = { closeReview() }).apply { visibility = View.GONE }
+        review = ReviewPanel(this, onKeep = { keep() }, onAgain = { closeReview() },
+            onPlaying = { on -> clipSound("review", on) }).apply { visibility = View.GONE }
         root.addView(review, lp(MATCH, MATCH))
-        albumPanel = AlbumPanel(this, captures, exec, onBack = { albumPanel.close() }).apply { visibility = View.GONE }
+        albumPanel = AlbumPanel(this, captures, exec, onBack = { albumPanel.close() },
+            onPlaying = { on -> clipSound("album", on) }).apply { visibility = View.GONE }
         root.addView(albumPanel, lp(MATCH, MATCH))
-        settings = SettingsPanel(this, server, captures, exec, onBack = { closeSettings() }, onPair = {
-            pair.open { captures.uploadPending { ui.post { settings.refresh() } } }
-        }).apply { visibility = View.GONE }
+        settings = SettingsPanel(this, server, captures, exec, onBack = { closeSettings() },
+            onPair = { openPair() }).apply { visibility = View.GONE }
         root.addView(settings, lp(MATCH, MATCH))
         pair = PairPanel(this, server, exec, onClose = {
             settings.refresh()
@@ -542,6 +543,12 @@ class MainActivity : Activity() {
             or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
     }
 
+    // Pairing is the moment this Portal's album should reach the server — all of it, not just
+    // whatever it takes from now on. Both ways in go through here so they behave the same.
+    private fun openPair() {
+        pair.open { captures.uploadEverything { ui.post { settings.refresh() } } }
+    }
+
     private fun overlayUp() = review.visibility == View.VISIBLE || albumPanel.visibility == View.VISIBLE ||
         pair.visibility == View.VISIBLE || settings.visibility == View.VISIBLE
 
@@ -562,6 +569,17 @@ class MainActivity : Activity() {
             hint("Getting ${f.name} ready…", 2500)
         }
         tracker.select(f.tier) { ok -> if (!ok) ui.post { hint("${f.name} is having a nap", 2500) } }
+    }
+
+    // A clip on screen carries its own sound, baked in when it was recorded: the soundtrack that
+    // was playing, the effect's noises, all of it. The live filter is still running behind the
+    // panel, so leaving the mixer on would play the same music a second time, out of step with the
+    // clip's copy. It goes quiet for as long as something is playing one back.
+    private val playingClips = HashSet<String>()
+
+    private fun clipSound(who: String, playing: Boolean) {
+        if (playing) playingClips += who else playingClips -= who
+        Mixer.muted = playingClips.isNotEmpty()
     }
 
     // The mic runs only while an effect listens to it; the recorder takes its own hold.
@@ -903,7 +921,7 @@ class MainActivity : Activity() {
             "again" -> closeReview()
             "album" -> openAlbum()
             "settings" -> openSettings()
-            "pair" -> pair.open()
+            "pair" -> openPair()
             "close" -> {
                 pair.close()
                 settings.close()

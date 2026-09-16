@@ -22,6 +22,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * A server is optional (Settings, under Advanced). When one is set up and sending is on, each
  * kept capture is queued and sent in the background. Anything that didn't make it is retried
  * the next time the app resumes or the album opens.
+ *
+ * Linking to a server sends the album as it already stands, not just what the Portal takes from
+ * then on ([uploadEverything]). The album is the thing being shared and it exists before the link
+ * does, so a Portal that has been taking photos for weeks arrives at a server with all of them.
  */
 class Captures(private val ctx: Context, private val server: Server, private val exec: ExecutorService) {
     class Item(val file: File, val kind: String) {
@@ -102,6 +106,22 @@ class Captures(private val ctx: Context, private val server: Server, private val
         exec.execute { done(runCatching { sendNow(item) }.getOrDefault(false)) }
     }
 
+    /**
+     * Queues the whole album and sends it: what this Portal does the moment it links to a server.
+     * Held back when sending is off, which is the person saying this Portal's captures don't go
+     * there. Runs on the executor, since [queueAll] reads the album off disk.
+     */
+    fun uploadEverything(done: (() -> Unit)? = null) {
+        if (!autoUpload) {
+            uploadPending(done)
+            return
+        }
+        exec.execute {
+            queueAll()
+            uploadPending(done)
+        }
+    }
+
     /** Sends everything queued, one at a time, on the executor. [done] runs either way. */
     fun uploadPending(done: (() -> Unit)? = null) {
         if (!server.configured || !server.paired || !sweeping.compareAndSet(false, true)) {
@@ -129,13 +149,16 @@ class Captures(private val ctx: Context, private val server: Server, private val
 
     /**
      * Moves captures that older builds kept in the app's private "captures" folder into the
-     * album, once the storage permission allows it. With a paired server they were sent when
-     * they were kept, so they're marked as sent rather than sent twice.
+     * album, once the storage permission allows it. A capture's record of where it has been sent
+     * moves with it: the file is renamed on the way across, and the record is keyed by name.
+     * Anything with no such record has never been sent anywhere, so it is queued rather than
+     * assumed — guessing "sent" here would hide it from [queueAll] and from the album's
+     * "send the ones not there yet" for good.
      */
     fun migrate() {
         if (!shared) return
         val files = ctx.getExternalFilesDir("captures")?.listFiles() ?: return
-        val sentTo = if (server.configured && server.paired) server.base else null
+        var queued = false
         for (f in files) {
             val kind = when (f.extension) {
                 "mp4" -> VIDEO
@@ -151,9 +174,16 @@ class Captures(private val ctx: Context, private val server: Server, private val
                 f.delete()
             }.isSuccess
             if (!moved) continue
-            if (sentTo != null) prefs.edit().putString(SENT + dst.name, sentTo).apply()
+            val was = prefs.getString(SENT + f.name, null)
+            prefs.edit()
+                .apply { if (was != null) putString(SENT + dst.name, was) else putBoolean(QUEUED + dst.name, true) }
+                .remove(SENT + f.name).remove(QUEUED + f.name).apply()
+            queued = queued || was == null
             scan(dst)
         }
+        // The sweep on resume may well have run before this did — it is the same executor — so
+        // what just joined the queue would otherwise sit there until the app was opened again.
+        if (queued) uploadPending()
     }
 
     // True once it's on the server, already or just now; false if another send has it in hand.

@@ -101,7 +101,13 @@ const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
 /* -------------------------------- Review -------------------------------- */
 
-class ReviewPanel(ctx: Context, onKeep: () -> Unit, onAgain: () -> Unit) : LinearLayout(ctx) {
+class ReviewPanel(
+    ctx: Context,
+    onKeep: () -> Unit,
+    onAgain: () -> Unit,
+    /** Whether a clip is on screen with its own sound, so the app can hush its own. */
+    private val onPlaying: (Boolean) -> Unit,
+) : LinearLayout(ctx) {
     private val image = ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
     private val video = VideoView(ctx)
     private val keep = ctx.actionButton("Keep it", Palette.ACCENT)
@@ -134,6 +140,7 @@ class ReviewPanel(ctx: Context, onKeep: () -> Unit, onAgain: () -> Unit) : Linea
 
     fun showPhoto(file: File) {
         video.stopPlayback()
+        onPlaying(false)
         video.visibility = GONE
         image.visibility = VISIBLE
         image.setImageBitmap(BitmapFactory.decodeFile(file.absolutePath))
@@ -145,6 +152,7 @@ class ReviewPanel(ctx: Context, onKeep: () -> Unit, onAgain: () -> Unit) : Linea
         image.visibility = GONE
         video.visibility = VISIBLE
         video.setVideoURI(Uri.fromFile(file))
+        onPlaying(true)
         reset()
     }
 
@@ -182,6 +190,7 @@ class ReviewPanel(ctx: Context, onKeep: () -> Unit, onAgain: () -> Unit) : Linea
     // after "Keep it" — the "stuck preview".
     fun close() {
         video.stopPlayback()
+        onPlaying(false)
         video.visibility = GONE
         image.setImageDrawable(null)
         visibility = GONE
@@ -196,6 +205,8 @@ class AlbumPanel(
     private val captures: Captures,
     private val exec: ExecutorService,
     onBack: () -> Unit,
+    /** Whether a clip is on screen with its own sound, so the app can hush its own. */
+    private val onPlaying: (Boolean) -> Unit,
 ) : FrameLayout(ctx) {
     private val ui = Handler(Looper.getMainLooper())
     private val grid = GridView(ctx)
@@ -205,6 +216,8 @@ class AlbumPanel(
     private val vImage = ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
     private val vVideo = VideoView(ctx)
     private val vDelete = ctx.actionButton("Delete", Palette.DANGER)
+    private val vPrev = ctx.navArrow("◀")
+    private val vNext = ctx.navArrow("▶")
     private var viewing: Captures.Item? = null
     private var items: List<Captures.Item> = emptyList()
     private val thumbs = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
@@ -245,6 +258,9 @@ class AlbumPanel(
                 setPadding(ctx.dp(3), ctx.dp(3), ctx.dp(3), ctx.dp(3))
                 addView(vImage, lp(MATCH, MATCH))
                 addView(vVideo, lp(MATCH, MATCH, Gravity.CENTER))
+                // Last in, so they sit over the picture rather than under it.
+                addView(vPrev, lp(WRAP, WRAP, Gravity.LEFT or Gravity.CENTER_VERTICAL).apply { leftMargin = ctx.dp(12) })
+                addView(vNext, lp(WRAP, WRAP, Gravity.RIGHT or Gravity.CENTER_VERTICAL).apply { rightMargin = ctx.dp(12) })
             }
             addView(box, LinearLayout.LayoutParams((dm.widthPixels * 0.84f).toInt(), (dm.heightPixels * 0.62f).toInt()))
             addView(LinearLayout(ctx).apply {
@@ -254,6 +270,8 @@ class AlbumPanel(
             }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = ctx.dp(18) })
         }
         vDelete.setOnClickListener { deleteViewing() }
+        vPrev.setOnClickListener { step(-1) }
+        vNext.setOnClickListener { step(1) }
         vVideo.setOnPreparedListener { vVideo.start() }
         vVideo.visibility = GONE
         addView(viewer, lp(MATCH, MATCH))
@@ -284,6 +302,7 @@ class AlbumPanel(
             ui.post {
                 items = got
                 adapter.notifyDataSetChanged()
+                syncArrows()
                 note.text = if (got.isEmpty()) "Nothing saved yet. Take a photo and tap Keep it!" else ""
             }
         }
@@ -354,12 +373,18 @@ class AlbumPanel(
         vDelete.text = "Delete"
         vDelete.enabledLook(true)
         viewer.visibility = VISIBLE
+        syncArrows()
+        // Whatever was on stops first: stepping off a clip to a photo leaves the VideoView hidden
+        // but alive, and a hidden VideoView goes on playing its sound.
+        vVideo.stopPlayback()
         if (it.kind == Captures.VIDEO) {
             vImage.visibility = GONE
             vVideo.visibility = VISIBLE
             vVideo.setVideoURI(Uri.fromFile(it.file))
+            onPlaying(true)
         } else {
             vVideo.visibility = GONE
+            onPlaying(false)
             vImage.visibility = VISIBLE
             vImage.setImageDrawable(null)
             exec.execute {
@@ -369,10 +394,33 @@ class AlbumPanel(
         }
     }
 
+    // The arrows walk the same list the grid lays out — photos and clips together, newest first.
+    private fun step(delta: Int) {
+        val at = indexOfViewing()
+        if (at < 0) return
+        items.getOrNull(at + delta)?.let { openViewer(it) }
+    }
+
+    // By file, not by identity: refresh() rebuilds the list from disk behind the viewer.
+    private fun indexOfViewing(): Int {
+        val v = viewing ?: return -1
+        return items.indexOfFirst { it.file == v.file }
+    }
+
+    // Dimmed at the two ends, and out of the way entirely when there is nowhere to step.
+    private fun syncArrows() {
+        val at = indexOfViewing()
+        val many = items.size > 1
+        for (a in arrayOf(vPrev, vNext)) a.visibility = if (many) VISIBLE else GONE
+        vPrev.enabledLook(at > 0)
+        vNext.enabledLook(at >= 0 && at < items.size - 1)
+    }
+
     // Same SurfaceView rule as ReviewPanel.close(): hide the VideoView itself.
     private fun closeViewer() {
         viewing = null
         vVideo.stopPlayback()
+        onPlaying(false)
         vVideo.visibility = GONE
         vImage.setImageDrawable(null)
         viewer.visibility = GONE
@@ -411,6 +459,15 @@ fun decodeFileScaled(file: File, maxEdge: Int): Bitmap? {
     var sample = 1
     while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
     return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+}
+
+// A chevron over the edge of the picture in the album's viewer, dark enough to read over a bright
+// photo. Big padding: it is a tap target on a screen people reach for across a table.
+private fun Context.navArrow(glyph: String) = label(glyph, 30f, bold = true).apply {
+    background = rounded(Color.argb(170, 0, 0, 0), dp(30).toFloat(), dp(2), Palette.LINE)
+    setPadding(dp(22), dp(18), dp(22), dp(18))
+    gravity = Gravity.CENTER
+    isClickable = true
 }
 
 // A panel's title with a "Back to camera" button on the right.
