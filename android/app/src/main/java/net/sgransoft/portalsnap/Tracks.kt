@@ -32,6 +32,8 @@ class Track(val id: Int) {
     var target: FaceAnchors? = null
     /** Head pitch in degrees, lightly smoothed; mesh tier only. */
     var pitch: Float? = null
+    /** Head turn in degrees, smoothed the same way; mesh tier only. */
+    var turn: Float? = null
     var shown: HashMap<String, MPt>? = null
     val shownBlend = HashMap<String, Float>()
     val vel = HashMap<String, MPt>()
@@ -108,6 +110,7 @@ class Tracks {
 
         t.target = face
         face.pitch?.let { p -> t.pitch = t.pitch?.let { it + (p - it) * 0.6f } ?: p }
+        face.turn?.let { p -> t.turn = t.turn?.let { it + (p - it) * 0.6f } ?: p }
         val (cx, cy) = centre(face)
         t.cx = cx
         t.cy = cy
@@ -219,6 +222,8 @@ class Face(
     private val extra: Map<String, Pt>,
     /** Head pitch in degrees from MediaPipe's pose matrix; its sign is not relied on. */
     val pitch: Float? = null,
+    /** Head turn in degrees from the pose matrix, for Matrix.rotateM about y in View3D. */
+    val turn: Float? = null,
 ) {
     var rank = 0
     var count = 1
@@ -238,7 +243,7 @@ class Face(
     val headTopY: Float = extra["headTop"]?.y ?: (-0.84f * abs(mouth.y))
 }
 
-fun buildFace(t: Track, jawOverride: Float? = null): Face {
+fun buildFace(t: Track, jawOverride: Float? = null, turnOverride: Float? = null): Face {
     val a = t.shown!!
     val w = FRAME_W.toFloat()
     val h = FRAME_H.toFloat()
@@ -276,5 +281,6 @@ fun buildFace(t: Track, jawOverride: Float? = null): Face {
     return Face(
         t.id, cx, cy, angle, eyeDist, nose, mouth, earR, earL, earSpan, yaw,
         HashMap(t.shownBlend).also { b -> jawOverride?.let { b["jawOpen"] = it } }, t.target?.dense == true, extra, t.pitch,
+        turnOverride ?: t.turn,
     )
 }

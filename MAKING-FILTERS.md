@@ -61,12 +61,13 @@ selected filter's tier.
 | Tier | What it knows | Speed on a gen 1 Portal | Faces |
 |---|---|---|---|
 | `Mode.FAST` | eyes, nose, mouth, ears | 30 fps (the camera's limit) | 3 |
-| `Mode.MESH` | 478 landmarks, named points like `chin`, `lipBottom`, `headTop`; blendshapes like `jawOpen`, `mouthPucker`, `eyeBlinkLeft`; head pitch | about 16 fps | 2 |
+| `Mode.MESH` | 478 landmarks, named points like `chin`, `lipBottom`, `headTop`; blendshapes like `jawOpen`, `mouthPucker`, `eyeBlinkLeft`; head pitch and turn | about 16 fps | 2 |
 | `Mode.SEGMENT` | a mask of where people are | about 25 fps | everyone |
 
 Everything else about a face is on `Face`:
 - **Position:** `cx`, `cy` and `angle` in frame pixels, and `eyeDist` for scale.
-- **Turn:** `yaw`, from -1 to 1.
+- **Turn:** `yaw`, from -1 to 1, on every tier; on the mesh tier also `turn`, the head's real turn in
+  degrees from its pose, ready for `Matrix.rotateM` about y in `View3D`.
 - **Features:** `nose`, `mouth`, `earL`, `earR`, `headTopY` and `headSpan`, in face units.
 - **Expressions:** `bs("jawOpen")` and the other blendshapes.
 - **Who's who:** `id`, which stays with a person while they're tracked, and `rank`/`count` for
@@ -81,12 +82,13 @@ read for every one.
 
 | To make | Use | See |
 |---|---|---|
-| Stickers: hats, glasses, ears | `Canvas` through `d.pen` in face space | `Filters.kt` (Cool, Royal, Puppy) |
+| Stickers: hats, ears, whiskers | `Canvas` through `d.pen` in face space | `Filters.kt` (Royal, Puppy, Kitty) |
 | Something reacting to a face | blendshapes and `Nod` in `update` | `Monster.kt` (a nod flips the mood) |
 | Zooms, bulging eyes, a face pasted somewhere | `Patch`: a region of the camera resampled into an ellipse, with `bulge` for a lens | Big Head, `Hamster` eyes |
 | Particles | `Particles` and `Particle` | Hearts, Hamster's crumbs |
 | A full-frame look | a `FrameFx` shader in `Gl.kt` | Mirror, `PopArt.kt`, `Disco.kt` |
 | Solid 3D props that turn with the head | `View3D`, a camera whose z = 0 plane lands exactly on frame pixels, plus `Mesh` and `Meshes.lathe` | `Glass3D.kt` (Lemonade), `Hamster3D.kt` |
+| 3D props that go behind the head | the head pose's `turn`, and a head shape drawn into the depth buffer only, so parts behind it are hidden | `Aviators3D.kt` (Cool's glasses arms) |
 | Bendy 3D: arms, tendrils, bodies | `TubeBuilder`, or `ColorGeo` tubes, ellipsoids, cones and boxes rebuilt every frame | `PeasInAPod.kt`, `BikeRide.kt` |
 | A whole 3D world | your own camera and a renderer, `ColorGeo` meshes with colour per vertex (a forest in one draw call), a sky shader | `Park.kt` + `RideRenderer.kt`, `FreefallRenderer.kt` |
 | Someone somewhere else | the segment tier and a picture in `assets/` | `Places.kt` |
@@ -125,6 +127,7 @@ A="adb shell am start -n net.sgransoft.portalsnap/.MainActivity"
 $A --ei faces 1 --es filter clown --ez hud true   # the test portrait, your filter, the HUD
 $A --ei faces 2                                    # two people
 $A --ef jaw 0.8                                    # pretend the mouth is open (mesh tier); negative clears
+$A --ef turn 30                                    # pretend the head is turned 30° (mesh tier); 999 clears
 $A --es action poke                                # a tap on the picture
 $A --ei faces 0                                    # back to the real camera
 
@@ -221,7 +224,7 @@ yourself.
    - **Portal:** turn on ADB as above.
    - **Other devices:** the app is built for the Portal's camera and screen, and ordinary Android
      devices haven't been tested.
-2. **Start from a neighbour.** Copy the filter closest to what you want: `Shades` for a
+2. **Start from a neighbour.** Copy the filter closest to what you want: `Crown` for a
    sticker, `PixelHearts` for particles, `Hamster` for 3D props, `Places` for a backdrop. Give it a
    new id and add it to `FILTERS`.
 3. **Iterate with the test portrait and `--ef jaw`**, then try it on real faces.

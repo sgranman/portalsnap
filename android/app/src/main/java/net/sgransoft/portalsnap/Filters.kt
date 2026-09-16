@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import kotlin.math.PI
@@ -114,6 +115,8 @@ class Draw(val pen: Pen) {
     val falls = ArrayList<Fall3D>()
     /** Hamster's 3D props, drawn at the same point as glasses. */
     val hamsters = ArrayList<Hamster3D>()
+    /** Cool's 3D sunglasses, drawn at the same point as glasses. */
+    val aviators = ArrayList<Aviators3D>()
     /** Segment tier: the latest person mask (1 person, 0 not), maskW x maskH, top row first. */
     var mask: ByteArray? = null
     var maskW = 0
@@ -266,19 +269,52 @@ internal inline fun perEar(c: Canvas, f: Face, pull: Float, block: () -> Unit) {
 /* -------------------------------- Dog -------------------------------- */
 
 object Dog : Filter("dog", "Puppy", "🐶", Mode.MESH, voice = 0.78f) {
+    // One floppy ear in its own units: the root at the origin, one ear-length down and one
+    // half-width out to the side (+x). A rounded fold over the top, widest low down, a round lobe.
+    private val ear = Path().apply {
+        moveTo(-0.45f, 0.02f)
+        cubicTo(-0.35f, -0.2f, 0.6f, -0.24f, 0.8f, -0.02f)
+        cubicTo(1.2f, 0.3f, 1.3f, 0.78f, 0.9f, 0.97f)
+        cubicTo(0.5f, 1.12f, -0.4f, 1.08f, -0.7f, 0.85f)
+        cubicTo(-1.0f, 0.6f, -0.7f, 0.25f, -0.45f, 0.02f)
+        close()
+    }
+    private val inner = Path().apply {
+        moveTo(-0.1f, 0.2f)
+        cubicTo(0.35f, 0.12f, 0.78f, 0.38f, 0.74f, 0.7f)
+        cubicTo(0.7f, 0.93f, 0.2f, 0.99f, -0.3f, 0.86f)
+        cubicTo(-0.58f, 0.62f, -0.46f, 0.32f, -0.1f, 0.2f)
+        close()
+    }
+    private val fur = LinearGradient(0f, 0f, 0f, 1f, hex("#8f5d2e"), hex("#6a4120"), Shader.TileMode.CLAMP)
+    private val earScale = android.graphics.Matrix()
+    private val earPath = Path()
+
     override fun draw(d: Draw, f: Face) = inFaceSpace(d.c, f) {
         val c = d.c
         val p = d.pen
         val S = f.headSpan
         val sway = sinT(d.t, 500f) * 0.05f
 
+        // Hung from high on the sides of the skull, above the hairline, falling outward to about
+        // the eyes. They were hung off the temples, which put them over the cheeks.
+        val len = S * 0.5f
+        val half = S * 0.14f
+        earScale.setScale(half, len)
         p.lift(0.05f)
-        perEar(c, f, 0f) {
-            c.rotate(deg(0.30f + sway))
-            val w = S * 0.115f
-            val h = S * 0.235f
-            c.drawOval(p.rect(w * 0.25f, h * 0.82f, w, h), p.fill(hex("#7d4f24")))
-            c.drawOval(p.rect(w * 0.30f, h * 0.88f, w * 0.55f, h * 0.72f), p.fill(hex("#5a3517")))
+        for (side in intArrayOf(-1, 1)) {
+            val save = c.save()
+            c.translate(side * S * 0.36f, f.headTopY - S * 0.2f)
+            c.scale(side.toFloat(), 1f)
+            c.rotate(deg(-0.38f - sway))
+            ear.transform(earScale, earPath)
+            fur.setLocalMatrix(earScale)
+            c.drawPath(earPath, p.fill(fur))
+            p.unlift()
+            inner.transform(earScale, earPath)
+            c.drawPath(earPath, p.fill(rgba(74, 42, 18, 0.85f)))
+            p.lift(0.05f)
+            c.restoreToCount(save)
         }
         p.unlift()
 
@@ -388,65 +424,30 @@ object Cat : Filter("cat", "Kitty", "🐱", Mode.MESH, voice = 1.42f) {
 
 /* ----------------------------- Sunglasses ----------------------------- */
 
-object Shades : Filter("shades", "Cool", "😎", Mode.FAST) {
-    override fun draw(d: Draw, f: Face) = inFaceSpace(d.c, f) {
+// Gold aviators, modelled in 3D (Aviators3D.kt) so the arms run back along the head and hide
+// behind it when it turns. Mesh tier for the head's pose and its real width at the temples.
+object Shades : Filter("shades", "Cool", "😎", Mode.MESH) {
+    override val usesUnder = true
+
+    // A soft shadow under each lens, flat on the face, so the frames sit on it rather than in
+    // front of the glass.
+    override fun under(d: Draw, f: Face) = inFaceSpace(d.c, f) {
         val c = d.c
-        val p = d.pen
-        val S = f.earSpan
-        val lensW = S * 0.34f
-        val lensH = S * 0.26f
-        val gap = S * 0.09f
-
-        p.lift(0.05f)
-        val frame = p.stroke(hex("#f3c93f"), S * 0.028f)
-        frame.strokeJoin = Paint.Join.ROUND
         for (side in intArrayOf(-1, 1)) {
-            val x = side * (gap / 2 + lensW / 2)
-            val r = lensH * 0.42f
-            val lens = Path().apply {
-                moveTo(x - lensW / 2 + r, -lensH / 2)
-                lineTo(x + lensW / 2 - r, -lensH / 2)
-                quadTo(x + lensW / 2, -lensH / 2, x + lensW / 2, -lensH / 2 + r)
-                lineTo(x + lensW / 2, lensH / 2 - r)
-                quadTo(x + lensW / 2, lensH / 2, x + lensW / 2 - r, lensH / 2)
-                lineTo(x - lensW / 2 + r, lensH / 2)
-                quadTo(x - lensW / 2, lensH / 2, x - lensW / 2, lensH / 2 - r)
-                lineTo(x - lensW / 2, -lensH / 2 + r)
-                quadTo(x - lensW / 2, -lensH / 2, x - lensW / 2 + r, -lensH / 2)
-                close()
-            }
-            c.drawPath(lens, p.fill(rgba(14, 14, 20, 0.9f)))
-            c.drawPath(lens, frame)
-
             val save = c.save()
-            c.clipPath(lens)
-            p.newPath().apply {
-                moveTo(x - lensW * 0.5f, lensH * 0.5f)
-                lineTo(x - lensW * 0.1f, -lensH * 0.5f)
-                lineTo(x + lensW * 0.1f, -lensH * 0.5f)
-                lineTo(x - lensW * 0.3f, lensH * 0.5f)
-                close()
-            }
-            c.drawPath(p.path, p.fill(rgba(255, 255, 255, 0.22f)))
+            c.translate(side * (AviatorShape.LENS_X + 0.02f), AviatorShape.LENS_Y + 0.07f)
+            c.scale(1f, AviatorShape.HALF_H / AviatorShape.HALF_W)
+            val r = AviatorShape.HALF_W * 1.25f
+            c.drawCircle(0f, 0f, r, d.pen.fill(RadialGradient(
+                0f, 0f, r, intArrayOf(rgba(0, 0, 0, 0.3f), rgba(0, 0, 0, 0.22f), rgba(0, 0, 0, 0f)),
+                floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP,
+            )))
             c.restoreToCount(save)
         }
-        p.unlift()
+    }
 
-        p.newPath().apply {
-            moveTo(-gap / 2, -lensH * 0.12f)
-            quadTo(0f, -lensH * 0.34f, gap / 2, -lensH * 0.12f)
-        }
-        c.drawPath(p.path, frame)
-
-        // Temples run to the real ear points.
-        for (ear in listOf(f.earR, f.earL)) {
-            val side = if (ear.x < 0) -1 else 1
-            p.newPath().apply {
-                moveTo(side * (gap / 2 + lensW), -lensH * 0.18f)
-                quadTo(side * (gap / 2 + lensW * 1.5f), -lensH * 0.3f, ear.x * 0.92f, ear.y)
-            }
-            c.drawPath(p.path, frame)
-        }
+    override fun draw(d: Draw, f: Face) {
+        d.aviators += aviatorsOn(f)
     }
 }
 
@@ -463,8 +464,10 @@ object Crown : Filter("crown", "Royal", "👑", Mode.MESH) {
         val w = S * 0.92f
         val h = S * 0.42f
 
+        // The band's bottom edge sits up in the hair, a seventh of a head above the top of the
+        // forehead, so the crown is on the head rather than on the brows.
         val save = c.save()
-        c.translate(cx, f.headTopY + h * 0.15f)
+        c.translate(cx, f.headTopY - S * 0.14f - h * 0.42f)
 
         p.lift(0.06f)
         val gold = LinearGradient(
@@ -574,14 +577,15 @@ object Mustache : Filter("mustache", "Fancy", "🎩", Mode.FAST, voice = 0.8f) {
         val S = f.headSpan
         val cx = (f.earR.x + f.earL.x) / 2
 
+        // The brim rides above the forehead, in the hair, rather than across it.
         val save = c.save()
-        c.translate(cx, f.headTopY)
+        c.translate(cx, f.headTopY - S * 0.1f)
         p.lift(0.06f)
         val hat = p.fill(hex("#191922"))
         val brimW = S * 1.02f
         val brimH = S * 0.07f
         c.drawOval(p.rect(0f, 0f, brimW / 2, brimH), hat)
-        val crownW = S * 0.56f
+        val crownW = S * 0.6f
         val crownH = S * 0.34f
         c.drawRect(-crownW / 2, -crownH, crownW / 2, 0f, hat)
         c.drawOval(p.rect(0f, -crownH, crownW / 2, brimH * 0.8f), hat)

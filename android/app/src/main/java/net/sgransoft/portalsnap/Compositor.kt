@@ -121,6 +121,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private var rideRenderer: RideRenderer? = null
     private var fallRenderer: FreefallRenderer? = null
     private var hamsterRenderer: HamsterRenderer? = null
+    private var aviatorRenderer: AviatorRenderer? = null
     /** The app's assets, for 3D passes that load pictures (Freefall's ground). */
     private lateinit var assets: AssetManager
     private var glassFailed = false
@@ -655,7 +656,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             pPatch.drawQuad()
         }
 
-        if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty() || plan.rides.isNotEmpty() || plan.falls.isNotEmpty() || plan.hamsters.isNotEmpty()) && !glassFailed) {
+        if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty() || plan.rides.isNotEmpty() || plan.falls.isNotEmpty() || plan.hamsters.isNotEmpty() || plan.aviators.isNotEmpty()) && !glassFailed) {
             try {
                 if (plan.glasses.isNotEmpty()) {
                     val r = glassRenderer ?: GlassRenderer().also { glassRenderer = it }
@@ -676,6 +677,10 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
                 if (plan.hamsters.isNotEmpty()) {
                     val r = hamsterRenderer ?: HamsterRenderer().also { hamsterRenderer = it }
                     r.draw(plan.hamsters)
+                }
+                if (plan.aviators.isNotEmpty()) {
+                    val r = aviatorRenderer ?: AviatorRenderer().also { aviatorRenderer = it }
+                    r.draw(plan.aviators)
                 }
             } catch (e: Throwable) {
                 glassFailed = true
