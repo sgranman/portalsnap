@@ -130,6 +130,7 @@ kids laugh are the whole point.
 | | |
 |---|---|
 | [MAKING-FILTERS.md](MAKING-FILTERS.md) | how to build a filter, with an agent or by hand |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | how to report a bug, measure a performance change, and open a pull request |
 | [android/README.md](android/README.md) | the Android app: building, adb extras, releases, Portal quirks, benchmarks |
 | [android/PHOTOBOOTH.md](android/PHOTOBOOTH.md) | how each Photo Booth effect was rebuilt |
 | [BUILD-JOURNAL.md](BUILD-JOURNAL.md) | the web app's build journal: measurements, decisions, pairing and security design, other ways to host it |
