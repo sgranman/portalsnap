@@ -71,6 +71,23 @@ dedicated to it under CC0, so none requires attribution; they are credited here 
 | `northpole.jpg` | Arctic fox in snow (Unsplash) | Jonatan Pie | CC0 | <https://commons.wikimedia.org/wiki/File:Arctic_fox_in_snow_(Unsplash).jpg> |
 | `moon.jpg` | Earthrise, Apollo 8 (NASA, AS08-14-2383) | Bill Anders | public domain | <https://commons.wikimedia.org/wiki/File:Earth-moon.jpg> |
 
+## Cat Hat's kitten — CC BY 4.0
+
+`android/app/src/main/assets/cat/` (`kitten.bin`, `fur.jpg`, `fur-normal.jpg`) is Cat Hat's
+kitten, made from:
+
+> **"Kitten"** by **FainoDS**, <https://sketchfab.com/3d-models/kitten-4ae3704cd65b423ab994545988d4db1a>,
+> licensed under Creative Commons Attribution 4.0 (<https://creativecommons.org/licenses/by/4.0/>).
+
+Changes: the model was given a skeleton and skin weights, posed lying down, converted to the
+app's own binary format, and its textures re-encoded as JPEG, by `android/tools/cat/build_cat.py`.
+The app adds eyelids and animates it. The original is fetched by
+`android/tools/cat/fetch-kitten.sh` from Objaverse's copy of the same Sketchfab upload and is not
+committed.
+
+This is the one piece of third-party art that asks for attribution, rather than being public
+domain or CC0: an attribution licence was the only way to a detailed, textured cat.
+
 ## Development-only
 
 `puppeteer-core` (Apache-2.0) drives the browser tests. It is a

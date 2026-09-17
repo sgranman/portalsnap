@@ -79,7 +79,7 @@ object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH) {
     }
 
     private val kitties = HashMap<Int, Kitty>()
-    private var pokedAt = 0L
+    @Volatile private var pokedAt = 0L
 
     private var cat: CatModel? = null
     private val ix = HashMap<String, Int>()
