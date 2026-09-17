@@ -109,8 +109,9 @@ A few rules of thumb that came out of building these:
 - **Measure before optimizing.** The HUD and the `PSNAP` stats line report render fps, frame
   time, tracker fps and jitter. Rough tracking on the mesh tier turned out to be the tracker's
   rate, not the renderer, and springs fixed it where a lower frame rate wouldn't have.
-- **Art must be yours, public domain or CC0.** Credit anything you didn't make in
-  `THIRD-PARTY.md`. Wikimedia Commons' API can filter searches by licence.
+- **Art must be yours, public domain, CC0 or CC BY.** Credit anything you didn't make in
+  `THIRD-PARTY.md`. CC BY needs its title, author, source link, licence and what you changed
+  (see Cat Hat's kitten there). Wikimedia Commons' API can filter searches by licence.
 - **Pictures of real people stay out of the repo.** Describe an effect in words, as
   `android/PHOTOBOOTH.md` does.
 
