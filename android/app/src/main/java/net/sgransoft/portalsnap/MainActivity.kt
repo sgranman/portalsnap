@@ -998,6 +998,8 @@ class MainActivity : Activity() {
         // `--ef turn 30`: every head turned this many degrees (Cool's arms); 999 clears.
         // `--ef rock 20`: the test portrait tilts 20 degrees each way and sways; 0 stops it.
         if (i.hasExtra("rock")) compositor.testRock = i.getFloatExtra("rock", 0f)
+        // `--ez catHead true`: Cat Hat tints the head its kitten hides behind.
+        if (i.hasExtra("catHead")) CatRenderer.showHead = i.getBooleanExtra("catHead", false)
         if (i.hasExtra("turn")) painter.debugTurn = i.getFloatExtra("turn", 999f).takeIf { it in -90f..90f }
         if (i.hasExtra("rideDist")) BikeRide.debugDist = i.getFloatExtra("rideDist", -1f).takeIf { it > 0f }
         if (i.hasExtra("fallDist")) Freefall.debugDist = i.getFloatExtra("fallDist", -1f).takeIf { it > 0f }

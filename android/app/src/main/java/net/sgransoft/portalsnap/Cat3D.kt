@@ -125,6 +125,18 @@ class Cat3D(bones: Int) {
 }
 
 object CatShaders {
+    /** Debug: the head occluder, tinted, so its fit on the real head can be seen. */
+    val TINT = """
+        #version 300 es
+        precision mediump float;
+        in vec3 vNormal;
+        out vec4 outColor;
+        void main() {
+            float lit = 0.5 + 0.5 * abs(normalize(vNormal).z);
+            outColor = vec4(0.45 * lit, 0.05, 0.3 * lit, 1.0) * 0.45;
+        }
+    """.trimIndent()
+
     val VERTEX = """
         #version 300 es
         uniform mat4 uModel;
@@ -218,6 +230,7 @@ class CatRenderer(assets: AssetManager) {
     private val cat = checkNotNull(CatModel.get(assets)) { "no kitten" }
     private val program = Program(CatShaders.VERTEX, CatShaders.FRAGMENT)
     private val pHead = Program(Shaders3D.VERTEX, AviatorShaders.DEPTH_ONLY)
+    private val pTint = Program(Shaders3D.VERTEX, CatShaders.TINT)
     private val sphere = AviatorShape.sphere()
     private val fur = texture(assets, "cat/fur.jpg")
     private val bump = texture(assets, "cat/fur-normal.jpg")
@@ -329,6 +342,12 @@ class CatRenderer(assets: AssetManager) {
             x1 = max(x1, c.bounds[2])
             y1 = max(y1, c.bounds[3])
         }
+        if (showHead) {
+            x0 = 0f
+            y0 = 0f
+            x1 = FRAME_W.toFloat()
+            y1 = FRAME_H.toFloat()
+        }
         // GL rows count up from the bottom.
         val gx = x0.toInt().coerceIn(0, FRAME_W)
         val gy = (FRAME_H - y1.toInt() - 1).coerceIn(0, FRAME_H)
@@ -437,6 +456,18 @@ class CatRenderer(assets: AssetManager) {
             unbind()
         }
 
+        if (showHead) {
+            GLES20.glEnable(GLES20.GL_BLEND)
+            GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+            GLES20.glDepthMask(false)
+            pTint.use()
+            GLES20.glUniformMatrix4fv(pTint.u("uViewProj"), 1, false, View3D.viewProj, 0)
+            for (c in list) {
+                GLES20.glUniformMatrix4fv(pTint.u("uModel"), 1, false, c.head, 0)
+                sphere.draw(pTint)
+            }
+            GLES20.glDepthMask(true)
+        }
         GLES20.glDisable(GLES20.GL_DEPTH_TEST)
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
@@ -535,6 +566,8 @@ class CatRenderer(assets: AssetManager) {
     }
 
     companion object {
+        /** Debug, `--ez catHead true`: tints the head each kitten hides behind. */
+        @Volatile var showHead = false
         private const val LID_ROWS = 6
         private const val LID_COLS = 14
         private const val LID_VERTS = (LID_ROWS + 1) * (LID_COLS + 1)

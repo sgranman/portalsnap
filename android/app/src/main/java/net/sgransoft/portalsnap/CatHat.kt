@@ -290,7 +290,7 @@ object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH) {
         Matrix.rotateM(h, 0, deg(k.pitch), 1f, 0f, 0f)
         Matrix.scaleM(h, 0, unit, unit, unit)
         Matrix.translateM(h, 0, 0f, top.cy, HEAD_Z)
-        Matrix.scaleM(h, 0, S * 0.47f, top.ry, HEAD_DEPTH)
+        Matrix.scaleM(h, 0, S * HEAD_WIDTH, top.ry, HEAD_DEPTH)
 
         shadow(k, c, rig)
         return c
@@ -298,24 +298,28 @@ object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH) {
 
     private class Top(val y: Float, val z: Float, val cy: Float, val ry: Float)
 
-    // The head as an ellipsoid in face units: from a little above the top of the forehead (for
-    // the skull and some hair) down to the chin, HEAD_DEPTH deep behind its front. The kitten
-    // lies where that ellipsoid's top is at SEAT_DEPTH.
+    // The head as an ellipsoid in face units, measured on a portrait: an adult's eyes sit a bit
+    // above halfway between the top of the skull and the chin. The face mesh stops at the upper
+    // forehead, so the skull's top is taken a little above that and scaled from the chin,
+    // whichever is higher. The kitten lies where the top is at SEAT_DEPTH, sunk into the hair.
     private fun headTop(f: Face): Top {
-        val topY = f.headTopY - f.headSpan * 0.04f
         val chin = f["chin"]?.y ?: 1.36f
+        val topY = min(f.headTopY - 0.55f, -0.83f * chin)
         val cy = (topY + chin) / 2
         val ry = (chin - topY) / 2
         val dz = (SEAT_DEPTH - HEAD_Z) / HEAD_DEPTH
-        val y = cy - ry * kotlin.math.sqrt(max(0f, 1 - dz * dz))
+        val y = cy - ry * kotlin.math.sqrt(max(0f, 1 - dz * dz)) + SINK
         return Top(y, SEAT_DEPTH, cy, ry)
     }
 
-    // Set back from the real forehead, so its front slopes away under the kitten's chest instead
-    // of cutting through it, while still hiding the hind feet and tail behind the head.
-    private const val HEAD_Z = 1.6f
-    private const val HEAD_DEPTH = 1.5f
+    // An adult head is about 2 face units front to back, from just in front of the eye corners.
+    private const val HEAD_Z = 0.85f
+    private const val HEAD_DEPTH = 1.05f
+    /** Half its width over the head's width at the temples: the skull is wider above the ears. */
+    private const val HEAD_WIDTH = 0.56f
     private const val SEAT_DEPTH = 0.75f
+    /** How far the kitten sinks into the hair, in face units. */
+    private const val SINK = 0.08f
 
     /* ------------------------------ life ------------------------------ */
 
@@ -429,9 +433,9 @@ object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH) {
         at(0, 0f, SEAT_Y, SEAT_Z)
         // Just below each paw, where it presses into the forehead.
         rig.joint(b("pawL"), joint)
-        at(2, joint[0], joint[1] + 1.5f, joint[2] + 0.3f)
+        at(2, joint[0], joint[1] + 0.8f, joint[2] - 0.3f)
         rig.joint(b("pawR"), joint)
-        at(4, joint[0], joint[1] + 1.5f, joint[2] + 0.3f)
+        at(4, joint[0], joint[1] + 0.8f, joint[2] - 0.3f)
         at(6, 1f, SEAT_Y, SEAT_Z)
 
         // Where on the frame it is: round every joint, padded by the kitten's thickness.
@@ -473,13 +477,13 @@ object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH) {
         )))
         c.restoreToCount(save)
         for (i in intArrayOf(2, 4)) {
-            val pr = unitPx * 1.5f
+            val pr = unitPx * 1.2f
             val save2 = c.save()
             c.translate(s[i], s[i + 1])
             c.rotate(deg(f.angle))
             c.scale(1f, 0.6f)
             c.drawCircle(0f, 0f, pr, d.pen.fill(RadialGradient(
-                0f, 0f, pr, intArrayOf(rgba(0, 0, 0, 0.42f * fade), rgba(0, 0, 0, 0.18f * fade), rgba(0, 0, 0, 0f)),
+                0f, 0f, pr, intArrayOf(rgba(0, 0, 0, 0.3f * fade), rgba(0, 0, 0, 0.12f * fade), rgba(0, 0, 0, 0f)),
                 floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP,
             )))
             c.restoreToCount(save2)

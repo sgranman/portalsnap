@@ -68,33 +68,47 @@ INDEX = {n: i for i, n in enumerate(NAMES)}
 # Turns in degrees about model axes (x toward the kitten's left, y forward, z up), each in its
 # parent's already-turned frame.
 POSE = {
-    # Lying along the top of a head that slopes down to the forehead: nose a little down.
-    "pelvis": ((1, 0, 0), -6),
-    "chest": ((1, 0, 0), -8),
+    # Draped over the dome of the head, arched: the rump drops down its back and the chest down
+    # its front, so the kitten hugs the head instead of standing on it.
+    "pelvis": ((1, 0, 0), 18),
+    "spine": ((1, 0, 0), -36),
+    "chest": ((1, 0, 0), -12),
     # The head comes up and looks ahead, at whoever is in front of the Portal.
-    "neck": ((1, 0, 0), 22),
-    "head": ((1, 0, 0), 2),
+    "neck": ((1, 0, 0), 44),
+    "head": ((1, 0, 0), -8),
     # Front legs reach forward and down over the forehead, paws resting on it.
-    "shoulderL": ((1, -0.15, 0), 60),
-    "shoulderR": ((1, 0.15, 0), 60),
+    "shoulderL": ((1, -0.15, 0), 46),
+    "shoulderR": ((1, 0.15, 0), 46),
     "elbowL": ((1, 0, 0), -5),
     "elbowR": ((1, 0, 0), -5),
-    "pawL": ((1, 0, 0), -40),
-    "pawR": ((1, 0, 0), -40),
-    # Hind legs splay out over the sides of the head and bend back in to hold on.
-    "hipL": ((0.35, -1, 0), 28),
-    "hipR": ((0.35, 1, 0), 28),
-    "kneeL": ((0, 1, 0), 40),
-    "kneeR": ((0, -1, 0), 40),
-    "footL": ((1, 0.6, 0), -30),
-    "footR": ((1, -0.6, 0), -30),
+    "pawL": ((1, 0, 0), -38),
+    "pawR": ((1, 0, 0), -38),
+    # Settled down onto the head.
+    "_shift": (0, 0.3, -0.9),
 }
 
+# CatHat.kt's head for a typical adult, in kitten units: centre and radii. The app seats the
+# kitten's (0, -1.7, 0.4) on it, which is (0, -0.4, 1.7) here; the head's centre is 0.1 face
+# units behind and 1.22 below that, and one face unit is 5.3 kitten units.
+HEAD_CENTRE = (0.0, -0.93, -4.74)
+HEAD_RADII = (4.87, 5.53, 6.9)
+
+
+def on_head(x, y, z, out=1.0):
+    """The head's surface in the direction (x, y, z) from its centre, pushed out by [out]."""
+    rx, ry, rz = HEAD_RADII
+    k = out / math.sqrt(x * x + y * y + z * z)
+    return (HEAD_CENTRE[0] + x * k * rx, HEAD_CENTRE[1] + y * k * ry, HEAD_CENTRE[2] + z * k * rz)
+
+
+# The hind legs hold on round the back of the head: knee, foot and toes aimed at points just off
+# its surface, down its back corners. x flips for the other side.
+HIND_PATH = [(0.45, -0.62, 0.64, 1.06), (0.62, -0.55, 0.45, 1.05), (0.66, -0.35, 0.4, 1.02)]
 
 # The tail is aimed rather than turned by hand: straight out of the rump, then drooping over the
-# back of the head toward the kitten's right. Points in model space,
-# where each tail bone should end up pointing.
-TAIL_PATH = [(-0.2, -5.2, 7.2), (-0.7, -6.1, 6.7), (-1.3, -6.7, 6.0), (-1.9, -7.0, 5.3), (-2.4, -7.1, 4.7)]
+# back of the head toward the kitten's right. Offsets from the tail's root, where each tail bone
+# should end up pointing.
+TAIL_PATH = [(-0.2, -1.06, 0.17), (-0.7, -1.96, -0.33), (-1.3, -2.56, -1.03), (-1.9, -2.86, -1.73), (-2.4, -2.96, -2.33)]
 
 
 def aim(pose, names, points):
@@ -256,7 +270,7 @@ def bone_matrices(pose):
         rot = quat(*q).to_matrix().to_4x4() if q else Matrix.Identity(4)
         pv = Vector(pivot)
         if parent is None:
-            local = Matrix.Translation(pv) @ rot
+            local = Matrix.Translation(pv + Vector(pose.get("_shift", (0, 0, 0)))) @ rot
             world[i] = local
         else:
             pp = Vector(BONES[INDEX[parent]][2])
@@ -320,7 +334,13 @@ def eye_centres(eye_pos):
 
 
 def full_pose():
-    return aim(dict(POSE), ["tail0", "tail1", "tail2", "tail3", "tail4"], TAIL_PATH)
+    pose = dict(POSE)
+    for side, sx in (("L", 1), ("R", -1)):
+        points = [on_head(x * sx, y, z, out) for x, y, z, out in HIND_PATH]
+        aim(pose, ["hip" + side, "knee" + side, "foot" + side], points)
+    world, _ = bone_matrices(pose)
+    root = (world[INDEX["tail0"]] @ Vector((0, 0, 0, 1))).to_3d()
+    return aim(pose, ["tail0", "tail1", "tail2", "tail3", "tail4"], [tuple(root + Vector(o)) for o in TAIL_PATH])
 
 
 def posed(model, pose):
@@ -447,9 +467,9 @@ def render(model, out, pose=None, views=None):
     sc = bpy.context.scene
     sc.collection.objects.link(obj)
     if "--head" in sys.argv:
-        bpy.ops.mesh.primitive_uv_sphere_add(radius=1, location=(0, -1.0, -2.6), segments=48, ring_count=24)
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=1, location=HEAD_CENTRE, segments=48, ring_count=24)
         h = bpy.context.object
-        h.scale = (4.0, 4.9, 5.4)
+        h.scale = HEAD_RADII
         bpy.ops.object.shade_smooth()
     sc.render.engine = "CYCLES"
     sc.cycles.samples = 24
@@ -466,8 +486,8 @@ def render(model, out, pose=None, views=None):
     cam = bpy.data.objects.new("cam", bpy.data.cameras.new("cam"))
     sc.collection.objects.link(cam)
     sc.camera = cam
-    centre = Vector((0, 0, 4))
-    for name, d in (views or [("front", (0, 1, 0.25)), ("q", (0.8, 0.9, 0.45)), ("side", (1, 0.05, 0.1)), ("back", (-0.5, -1, 0.3))]):
+    centre = Vector((0, -0.5, 2))
+    for name, d in (views or [("front", (0, 1, 0.15)), ("q", (0.55, 1, 0.2)), ("side", (1, 0.05, 0.1)), ("back", (-0.5, -1, 0.3))]):
         d = Vector(d).normalized()
         cam.location = centre + d * 26
         cam.rotation_euler = (centre - cam.location).to_track_quat("-Z", "Y").to_euler()

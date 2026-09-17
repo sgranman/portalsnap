@@ -694,9 +694,11 @@ The model:
   - **Weights:** from distance to each bone, with only where a bone can reach decided by
     position. Region-by-piece weights opened seams wherever pieces overlap, at the neck ring,
     shoulders and hips. Weights by position alone bend overlapping pieces together.
-  - **Pose:** the script lays the kitten down, front paws draped forward over the forehead,
-    hind legs round the sides, tail aimed along a path so it droops off the back. It writes that
-    posed mesh, so the app only adds small turns.
+  - **Pose:** the script arches the kitten over the dome of a head. The rump drops down the
+    back and the chest down the front, front paws draped over the forehead. The hind legs and
+    tail are aimed at points on the app's head shape, so the hind legs grip the back of the head.
+    It writes that posed mesh, so the app only adds small turns. The first pose lay flat, as if
+    on a table, and from the side its hind legs hung in the air past the back of the head.
   - **Previews:** the script's renders use the same skinning maths as the app (turn about a
     pivot in model axes, children inherit), so what Blender shows is what the Portal draws.
   - **Export:** `assets/cat/kitten.bin` holds vertices, bones, parts and the eyes' shapes, next to
@@ -705,9 +707,16 @@ The model:
   - **Fur:** normal-mapped, with wrap lighting, a pale sheen at the silhouette and a darker
     underside.
   - **Eyes:** a glossy shader with a catchlight.
-  - **Occluder:** a head-shaped ellipsoid goes into depth first, so the hind feet and tail
-    behind the head are hidden. It sits back from the real forehead: set at the forehead, it
-    sliced through the kitten's chest where that sinks into the hair.
+  - **Occluder:** a head-shaped ellipsoid goes into depth first, so the hind legs and tail
+    behind the head are hidden.
+    - **First version:** its top was the face mesh's highest point, the upper forehead, so it was
+      far too small and low and hid almost nothing. Legs showed that should have been behind the
+      head.
+    - **Now:** measured on the test portrait with `--ez catHead true`, which tints it. The top of
+      the skull is about 0.55 face units above that point (0.83 of the chin's distance below the
+      eyes), the head about 2 face units front to back from just in front of the eye corners, and
+      1.1 times the temple width. The kitten lies on its top at 0.75 face units back, sunk 0.08
+      into the hair.
   - **Edges:** the kitten is drawn 4x multisampled into its own framebuffer before the composite
     starts, only over its bounding rectangle, then laid over with coverage as alpha. Its fur
     edges stair-stepped badly without it.
