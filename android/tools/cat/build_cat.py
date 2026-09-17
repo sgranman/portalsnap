@@ -19,7 +19,6 @@ Axes: Blender's model is z up with the kitten facing +y. The app's are x right, 
 from the camera, with the kitten facing the camera, so (x, y, z) goes to (-x, -z, -y).
 """
 import bpy
-import bmesh
 import math
 import os
 import struct
@@ -32,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "kitten.glb")
 
 # ---------------------------------------------------------------- skeleton
-# name, parent, pivot (the joint it turns about), end (for distance weights), region
+# name, parent, pivot (the joint it turns about), end (for distance weights and aiming)
 L, R = 1, -1
 
 
@@ -41,42 +40,29 @@ def mirror(p, side):
 
 
 BONES = [
-    ("pelvis", None, (0, -3.0, 5.4), (0, -1.0, 5.6), "body"),
-    ("spine", "pelvis", (0, -1.0, 5.6), (0, 1.2, 5.8), "body"),
-    ("chest", "spine", (0, 1.2, 5.8), (0, 2.4, 6.6), "body"),
-    ("neck", "chest", (0, 2.4, 6.4), (0, 3.4, 7.2), "neck"),
-    ("head", "neck", (0, 3.4, 7.2), (0, 5.4, 7.4), "head"),
-    ("tail0", "pelvis", (0, -4.3, 6.9), (0, -5.0, 7.8), "tail"),
-    ("tail1", "tail0", (0, -5.0, 7.8), (0, -5.5, 8.8), "tail"),
-    ("tail2", "tail1", (0, -5.5, 8.8), (0, -5.6, 9.7), "tail"),
-    ("tail3", "tail2", (0, -5.6, 9.7), (0, -5.1, 10.4), "tail"),
-    ("tail4", "tail3", (0, -5.1, 10.4), (0, -4.6, 10.8), "tail"),
+    ("pelvis", None, (0, -3.0, 5.4), (0, -1.0, 5.6)),
+    ("spine", "pelvis", (0, -1.0, 5.6), (0, 1.2, 5.8)),
+    ("chest", "spine", (0, 1.2, 5.8), (0, 2.4, 6.6)),
+    ("neck", "chest", (0, 2.4, 6.4), (0, 3.4, 7.2)),
+    ("head", "neck", (0, 3.4, 7.2), (0, 5.4, 7.4)),
+    ("tail0", "pelvis", (0, -4.3, 6.9), (0, -5.0, 7.8)),
+    ("tail1", "tail0", (0, -5.0, 7.8), (0, -5.5, 8.8)),
+    ("tail2", "tail1", (0, -5.5, 8.8), (0, -5.6, 9.7)),
+    ("tail3", "tail2", (0, -5.6, 9.7), (0, -5.1, 10.4)),
+    ("tail4", "tail3", (0, -5.1, 10.4), (0, -4.6, 10.8)),
 ]
 for side, s in (("L", L), ("R", R)):
     BONES += [
-        ("ear" + side, "head", mirror((1.55, 4.25, 8.8), s), mirror((2.3, 4.4, 10.2), s), "ear" + side),
-        ("shoulder" + side, "chest", mirror((1.5, 1.4, 5.2), s), mirror((1.8, 1.4, 3.2), s), "front" + side),
-        ("elbow" + side, "shoulder" + side, mirror((1.8, 1.4, 3.2), s), mirror((1.8, 1.5, 1.1), s), "front" + side),
-        ("paw" + side, "elbow" + side, mirror((1.8, 1.5, 1.1), s), mirror((1.7, 2.3, 0.1), s), "front" + side),
-        ("hip" + side, "pelvis", mirror((1.5, -3.4, 5.0), s), mirror((1.8, -3.2, 3.0), s), "hind" + side),
-        ("knee" + side, "hip" + side, mirror((1.8, -3.2, 3.0), s), mirror((1.8, -4.2, 1.4), s), "hind" + side),
-        ("foot" + side, "knee" + side, mirror((1.8, -4.2, 1.4), s), mirror((1.7, -3.5, 0.1), s), "hind" + side),
+        ("ear" + side, "head", mirror((1.55, 4.25, 8.8), s), mirror((2.3, 4.4, 10.2), s)),
+        ("shoulder" + side, "chest", mirror((1.5, 1.4, 5.2), s), mirror((1.8, 1.4, 3.2), s)),
+        ("elbow" + side, "shoulder" + side, mirror((1.8, 1.4, 3.2), s), mirror((1.8, 1.5, 1.1), s)),
+        ("paw" + side, "elbow" + side, mirror((1.8, 1.5, 1.1), s), mirror((1.7, 2.3, 0.1), s)),
+        ("hip" + side, "pelvis", mirror((1.5, -3.4, 5.0), s), mirror((1.8, -3.2, 3.0), s)),
+        ("knee" + side, "hip" + side, mirror((1.8, -3.2, 3.0), s), mirror((1.8, -4.2, 1.4), s)),
+        ("foot" + side, "knee" + side, mirror((1.8, -4.2, 1.4), s), mirror((1.7, -3.5, 0.1), s)),
     ]
 NAMES = [b[0] for b in BONES]
 INDEX = {n: i for i, n in enumerate(NAMES)}
-
-# Which bones may move each region's vertices. Where pieces overlap (a leg's top inside the body,
-# the neck inside the head) both regions share the bones there, so the seam bends as one.
-ALLOWED = {
-    "body": ["pelvis", "spine", "chest", "neck", "tail0", "shoulderL", "shoulderR", "hipL", "hipR"],
-    "neck": ["chest", "neck", "head", "shoulderL", "shoulderR"],
-    "head": ["neck", "head"],
-    "tail": ["pelvis", "tail0", "tail1", "tail2", "tail3", "tail4"],
-}
-for side in "LR":
-    ALLOWED["ear" + side] = ["head", "ear" + side]
-    ALLOWED["front" + side] = ["chest", "shoulder" + side, "elbow" + side, "paw" + side]
-    ALLOWED["hind" + side] = ["pelvis", "hip" + side, "knee" + side, "foot" + side]
 
 # ---------------------------------------------------------------- the lying-down pose
 # Turns in degrees about model axes (x toward the kitten's left, y forward, z up), each in its
@@ -201,7 +187,8 @@ def islands(obj):
 
 
 def region_of(c):
-    """The region a piece belongs to, from where its middle is."""
+    """Which part of the kitten a piece is, from where its middle is: the lids take their
+    colours from the head's."""
     x, y, z = c
     side = "L" if x > 0 else "R"
     if z > 8.6 and abs(x) > 1.2 and y > 3.0:
@@ -241,7 +228,7 @@ def reach(name, p):
     return np.ones(len(p), dtype=bool)
 
 
-def weights(pos, region):
+def weights(pos):
     """Up to four bones per vertex, from distance to each bone's segment."""
     d = np.stack([seg_dist(pos, np.array(b[2], float), np.array(b[3], float)) for b in BONES], axis=1)
     w = 1.0 / np.power(d + 0.35, 6)
@@ -264,7 +251,7 @@ def bone_matrices(pose):
     """Model-space skinning matrix per bone for a {name: (axis, deg)} pose."""
     world = [None] * len(BONES)
     skin = [None] * len(BONES)
-    for i, (name, parent, pivot, _, _) in enumerate(BONES):
+    for i, (name, parent, pivot, _) in enumerate(BONES):
         q = pose.get(name)
         rot = quat(*q).to_matrix().to_4x4() if q else Matrix.Identity(4)
         pv = Vector(pivot)
@@ -318,7 +305,7 @@ def build():
         ranges.append((p["kind"], start, len(p["tris"]) * 3))
         base += len(p["pos"])
     tris = np.concatenate(tris)
-    joints, wts = weights(pos, region)
+    joints, wts = weights(pos)
     eyes = eye_centres(parts[-1]["pos"])
     return dict(eye_vertex=len(pos) - len(parts[-1]["pos"]), pos=pos, nrm=nrm, tan=tan, uv=uv, tris=tris, ranges=ranges, joints=joints, wts=wts, region=region, eyes=eyes)
 

@@ -12,6 +12,8 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 
 // Cat Hat's kitten: FainoDS's textured "Kitten" (CC BY 4.0, see THIRD-PARTY.md), rigged and laid
@@ -112,8 +114,12 @@ class Cat3D(bones: Int) {
     val model = FloatArray(16)
     /** Skinning matrices in kitten units, 16 per bone. */
     val skin = FloatArray(16 * bones)
-    /** Each lid from open (0) to shut (1), right eye in the picture first. */
-    val lids = FloatArray(2)
+    /** A blink, both lids, from open (0) to shut (1). */
+    var blink = 0f
+    /** How far the upper lids hang down on their own, sleepy or content, 0 to 1. */
+    var droop = 0f
+    /** Roughly where on the frame it is, in frame px: left, top, right, bottom. */
+    val bounds = FloatArray(4)
     /** The person's head, a unit sphere to world, drawn into depth so what is behind it hides. */
     val head = FloatArray(16)
 }
@@ -179,7 +185,9 @@ object CatShaders {
                 float fres = 0.04 + 0.5 * pow(1.0 - max(dot(n, v), 0.0), 4.0);
                 vec3 room = mix(vec3(0.25, 0.23, 0.22), vec3(0.95, 0.95, 1.0), smoothstep(-0.2, 0.6, -r.y));
                 float glint = pow(max(dot(r, KEY), 0.0), 120.0);
-                col = albedo * 0.55 + room * fres + vec3(1.0) * glint * 1.4;
+                // A crisp catchlight from the same light, so the eyes look wet and alive.
+                float catch = smoothstep(0.955, 0.975, dot(n, normalize(v + KEY)));
+                col = albedo * 0.55 + room * fres + vec3(1.0) * (glint * 1.4 + catch * 0.9);
             } else {
                 if (uKind == 0) {
                     vec3 t = normalize(vTangent.xyz - n * dot(n, vTangent.xyz));
@@ -253,7 +261,130 @@ class CatRenderer(assets: AssetManager) {
         GLES20.glBindBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, 0)
     }
 
+    // Fur edges against the picture stair-step badly at the Portal's resolution, so the kitten is
+    // drawn into a multisampled framebuffer of its own, resolved, and laid over the frame with
+    // the resolved coverage as alpha. Where that isn't available it's drawn straight in.
+    private var msaa = 0
+    private var resolved: Fbo? = null
+    private var msaaFailed = false
+    private val pOver = Program(Shaders.VERTEX, Shaders.TEX)
+    private val quadPos = FloatArray(16)
+    private val quadTex = FloatArray(16)
+
+    private fun multisampled(): Boolean {
+        if (msaaFailed) return false
+        if (msaa != 0) return true
+        val ids = IntArray(3)
+        GLES20.glGenFramebuffers(1, ids, 0)
+        GLES20.glGenRenderbuffers(2, ids, 1)
+        val max = IntArray(1)
+        GLES20.glGetIntegerv(GLES30.GL_MAX_SAMPLES, max, 0)
+        val samples = min(4, max[0])
+        if (samples < 2) {
+            msaaFailed = true
+            return false
+        }
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, ids[0])
+        GLES20.glBindRenderbuffer(GLES20.GL_RENDERBUFFER, ids[1])
+        GLES30.glRenderbufferStorageMultisample(GLES20.GL_RENDERBUFFER, samples, GLES30.GL_RGBA8, FRAME_W, FRAME_H)
+        GLES20.glFramebufferRenderbuffer(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_RENDERBUFFER, ids[1])
+        GLES20.glBindRenderbuffer(GLES20.GL_RENDERBUFFER, ids[2])
+        GLES30.glRenderbufferStorageMultisample(GLES20.GL_RENDERBUFFER, samples, GLES30.GL_DEPTH_COMPONENT24, FRAME_W, FRAME_H)
+        GLES20.glFramebufferRenderbuffer(GLES20.GL_FRAMEBUFFER, GLES20.GL_DEPTH_ATTACHMENT, GLES20.GL_RENDERBUFFER, ids[2])
+        val ok = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) == GLES20.GL_FRAMEBUFFER_COMPLETE
+        GLES20.glBindRenderbuffer(GLES20.GL_RENDERBUFFER, 0)
+        if (!ok) {
+            Log.w("PSNAP", "kitten: no multisampled framebuffer, drawing without")
+            GLES20.glDeleteFramebuffers(1, ids, 0)
+            GLES20.glDeleteRenderbuffers(2, ids, 1)
+            msaaFailed = true
+            return false
+        }
+        msaa = ids[0]
+        resolved = Fbo(FRAME_W, FRAME_H)
+        Log.i("PSNAP", "kitten: ${samples}x multisampling")
+        return true
+    }
+
+    private var prepared = false
+    private val rect = IntArray(4)
+
+    /**
+     * Draws the kittens into their multisampled framebuffer and resolves them, before the
+     * composite starts, so a tile-based GPU doesn't have to set the half-drawn composite aside
+     * and load it back around them. Only the rectangle the kittens are in is cleared, resolved
+     * and laid over.
+     */
+    fun prepare(list: List<Cat3D>) {
+        prepared = false
+        if (!multisampled()) return
+        // Only the part of the frame the kittens are in.
+        var x0 = FRAME_W.toFloat()
+        var y0 = FRAME_H.toFloat()
+        var x1 = 0f
+        var y1 = 0f
+        for (c in list) {
+            x0 = min(x0, c.bounds[0])
+            y0 = min(y0, c.bounds[1])
+            x1 = max(x1, c.bounds[2])
+            y1 = max(y1, c.bounds[3])
+        }
+        // GL rows count up from the bottom.
+        val gx = x0.toInt().coerceIn(0, FRAME_W)
+        val gy = (FRAME_H - y1.toInt() - 1).coerceIn(0, FRAME_H)
+        val gw = (x1.toInt() + 1).coerceIn(0, FRAME_W) - gx
+        val gh = (FRAME_H - y0.toInt()).coerceIn(0, FRAME_H) - gy
+        prepared = true
+        rect[0] = gx
+        rect[1] = gy
+        rect[2] = gw
+        rect[3] = gh
+        if (gw <= 0 || gh <= 0) return
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, msaa)
+        GLES20.glViewport(0, 0, FRAME_W, FRAME_H)
+        GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
+        GLES20.glScissor(gx, gy, gw, gh)
+        GLES20.glClearColor(0f, 0f, 0f, 0f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        drawCats(list)
+        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
+        GLES20.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, msaa)
+        GLES20.glBindFramebuffer(GLES30.GL_DRAW_FRAMEBUFFER, resolved!!.fbo)
+        GLES30.glBlitFramebuffer(gx, gy, gx + gw, gy + gh, gx, gy, gx + gw, gy + gh, GLES20.GL_COLOR_BUFFER_BIT, GLES20.GL_NEAREST)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+    }
+
+    /** Into the bound framebuffer: what [prepare] resolved, or the kittens themselves without it. */
     fun draw(list: List<Cat3D>) {
+        if (!prepared) {
+            drawCats(list)
+            return
+        }
+        prepared = false
+        val gx = rect[0]
+        val gy = rect[1]
+        val gw = rect[2]
+        val gh = rect[3]
+        if (gw <= 0 || gh <= 0) return
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        // The unit quad over just that rectangle, sampling the same rectangle of the resolve.
+        val fw = FRAME_W.toFloat()
+        val fh = FRAME_H.toFloat()
+        Matrix.setIdentityM(quadPos, 0)
+        Matrix.translateM(quadPos, 0, (gx + gw / 2f) / fw * 2 - 1, (gy + gh / 2f) / fh * 2 - 1, 0f)
+        Matrix.scaleM(quadPos, 0, gw / fw, gh / fh, 1f)
+        Matrix.setIdentityM(quadTex, 0)
+        Matrix.translateM(quadTex, 0, gx / fw, gy / fh, 0f)
+        Matrix.scaleM(quadTex, 0, gw / fw, gh / fh, 1f)
+        pOver.use()
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, resolved!!.tex)
+        GLES20.glUniform1i(pOver.u("uTexture"), 0)
+        pOver.drawQuad(quadPos, quadTex)
+    }
+
+    private fun drawCats(list: List<Cat3D>) {
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glDepthFunc(GLES20.GL_LEQUAL)
         GLES20.glDepthMask(true)
@@ -292,8 +423,8 @@ class CatRenderer(assets: AssetManager) {
                 // The offset is in bytes, two per index.
                 GLES20.glDrawElements(GLES20.GL_TRIANGLES, cat.parts[p * 3 + 2], GLES20.GL_UNSIGNED_SHORT, cat.parts[p * 3 + 1] * 2)
             }
-            if (c.lids[0] > 0.02f || c.lids[1] > 0.02f) {
-                buildLids(c.lids)
+            if (c.blink > 0.02f || c.droop > 0.02f) {
+                buildLids(c.blink, c.droop)
                 lidBuf.clear()
                 lidBuf.put(lidVerts).flip()
                 GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, lidVbo)
@@ -339,14 +470,15 @@ class CatRenderer(assets: AssetManager) {
      * edge rolls down over the eye; the lower lid rises a little to meet it. Open, both bands
      * are too thin to see.
      */
-    private fun buildLids(shut: FloatArray) {
+    private fun buildLids(blink: Float, droop: Float) {
         var o = 0
-        for ((e, eye) in cat.eyes.withIndex()) {
-            val s = shut[e].coerceIn(0f, 1f)
+        val upper = max(blink, droop).coerceIn(0f, 1f)
+        val lower = blink.coerceIn(0f, 1f)
+        for (eye in cat.eyes) {
             // Upper: from up and back under the brow, down past the middle of the eye.
-            o = band(eye, o, UPPER_TOP, UPPER_TOP + (UPPER_SHUT - UPPER_TOP) * s)
-            // Lower: from under the eye up to meet the upper lid, a third as far.
-            o = band(eye, o, LOWER_BOTTOM, LOWER_BOTTOM + (LOWER_SHUT - LOWER_BOTTOM) * s)
+            o = band(eye, o, UPPER_TOP, UPPER_TOP + (UPPER_SHUT - UPPER_TOP) * upper)
+            // Lower: from under the eye up to meet the upper lid.
+            o = band(eye, o, LOWER_BOTTOM, LOWER_BOTTOM + (LOWER_SHUT - LOWER_BOTTOM) * lower)
         }
     }
 
@@ -436,6 +568,7 @@ class CatRenderer(assets: AssetManager) {
 
 /** Kitten-space rig maths shared by CatHat: local turns in, skinning matrices out. */
 class CatRig(private val cat: CatModel) {
+    val boneCount = cat.boneCount
     /** Per bone local rotation (radians about x, then y, then z, in its parent's frame). */
     val rx = FloatArray(cat.boneCount)
     val ry = FloatArray(cat.boneCount)

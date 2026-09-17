@@ -604,6 +604,17 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
 
     private fun composite(plan: Plan) {
         if (plan.fx?.kind == FrameFx.POP_ART) bakePopGround()
+        // Cat Hat's kittens are drawn off to one side first, so the composite isn't interrupted.
+        if (plan.cats.isNotEmpty() && !glassFailed) {
+            try {
+                val r = catRenderer ?: CatRenderer(assets).also { catRenderer = it }
+                r.prepare(plan.cats)
+            } catch (e: Throwable) {
+                glassFailed = true
+                Log.e(TAG, "kitten pass failed; turning 3D off", e)
+                GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
+            }
+        }
         comp.bind()
         val fx = plan.fx
         if (fx != null) {

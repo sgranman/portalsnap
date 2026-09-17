@@ -22,7 +22,7 @@ import kotlin.math.sin
 //
 // The kitten is a real textured 3D model (Cat3D.kt); this file only decides how it sits and moves.
 
-object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH, voice = 1.25f) {
+object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH) {
     override val usesUnder = true
 
     /** The app's assets, for the model; set by MainActivity like Places'. */
@@ -74,8 +74,8 @@ object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH, voice = 1.25f) {
         val phase = (now % 10000) / 1000f
         var rig: CatRig? = null
         var cat: Cat3D? = null
-        /** Frame px: seat x, y; left paw; right paw; one kitten unit along x from the seat. */
-        val shadow = FloatArray(8)
+        /** Frame px: seat x, y; left paw; right paw; one kitten unit along x from the seat; scratch. */
+        val shadow = FloatArray(10)
     }
 
     private val kitties = HashMap<Int, Kitty>()
@@ -351,10 +351,8 @@ object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH, voice = 1.25f) {
             }
         }
         // Heavy-lidded when it's been still a while; wide awake when startled.
-        val droop = k.calm * 0.35f * (1 - k.alarm)
-        val s = max(shut, droop)
-        c.lids[0] = s
-        c.lids[1] = s
+        c.blink = shut
+        c.droop = k.calm * 0.3f * (1 - k.alarm)
     }
 
     private fun quick(ms: Float) = when {
@@ -429,11 +427,32 @@ object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH, voice = 1.25f) {
             k.shadow[i + 1] = px[1]
         }
         at(0, 0f, SEAT_Y, SEAT_Z)
+        // Just below each paw, where it presses into the forehead.
         rig.joint(b("pawL"), joint)
-        at(2, joint[0], joint[1] + 0.9f, joint[2])
+        at(2, joint[0], joint[1] + 1.5f, joint[2] + 0.3f)
         rig.joint(b("pawR"), joint)
-        at(4, joint[0], joint[1] + 0.9f, joint[2])
+        at(4, joint[0], joint[1] + 1.5f, joint[2] + 0.3f)
         at(6, 1f, SEAT_Y, SEAT_Z)
+
+        // Where on the frame it is: round every joint, padded by the kitten's thickness.
+        val box = c.bounds
+        box[0] = Float.MAX_VALUE
+        box[1] = Float.MAX_VALUE
+        box[2] = -Float.MAX_VALUE
+        box[3] = -Float.MAX_VALUE
+        for (i in 0 until rig.boneCount) {
+            rig.joint(i, joint)
+            at(8, joint[0], joint[1], joint[2])
+            box[0] = min(box[0], k.shadow[8])
+            box[1] = min(box[1], k.shadow[9])
+            box[2] = max(box[2], k.shadow[8])
+            box[3] = max(box[3], k.shadow[9])
+        }
+        val pad = hypot(k.shadow[6] - k.shadow[0], k.shadow[7] - k.shadow[1]) * 3.2f
+        box[0] -= pad
+        box[1] -= pad
+        box[2] += pad
+        box[3] += pad
     }
 
     override fun under(d: Draw, f: Face) {
@@ -454,10 +473,16 @@ object CatHat : Filter("cathat", "Cat Hat", "🐈", Mode.MESH, voice = 1.25f) {
         )))
         c.restoreToCount(save)
         for (i in intArrayOf(2, 4)) {
-            val pr = unitPx * 1.3f
-            c.drawCircle(s[i], s[i + 1], pr, d.pen.fill(RadialGradient(
-                s[i], s[i + 1], pr, intArrayOf(rgba(0, 0, 0, 0.3f), rgba(0, 0, 0, 0f)), null, Shader.TileMode.CLAMP,
+            val pr = unitPx * 1.5f
+            val save2 = c.save()
+            c.translate(s[i], s[i + 1])
+            c.rotate(deg(f.angle))
+            c.scale(1f, 0.6f)
+            c.drawCircle(0f, 0f, pr, d.pen.fill(RadialGradient(
+                0f, 0f, pr, intArrayOf(rgba(0, 0, 0, 0.42f * fade), rgba(0, 0, 0, 0.18f * fade), rgba(0, 0, 0, 0f)),
+                floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP,
             )))
+            c.restoreToCount(save2)
         }
     }
 
