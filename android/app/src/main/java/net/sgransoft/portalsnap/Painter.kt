@@ -268,6 +268,7 @@ class Painter {
                     plan.hamsters = ArrayList(draw.hamsters)
                     plan.aviators = ArrayList(draw.aviators)
                     plan.cats = ArrayList(draw.cats)
+                    plan.aliens = ArrayList(draw.aliens)
                     return plan
                 }
                 idle(under, over)
@@ -321,6 +322,7 @@ class Painter {
             plan.hamsters = ArrayList(draw.hamsters)
             plan.aviators = ArrayList(draw.aviators)
             plan.cats = ArrayList(draw.cats)
+            plan.aliens = ArrayList(draw.aliens)
             return plan
         } finally {
             paintMs.add((SystemClock.elapsedRealtimeNanos() - t0) / 1e6)
