@@ -125,6 +125,7 @@ class MainActivity : Activity() {
         Sfx.init()
         rotOverride = getSharedPreferences("device", MODE_PRIVATE).getInt("rot", -1).takeIf { it >= 0 }
         Places.assets = assets
+        CatHat.assets = assets
         Places.current = getSharedPreferences("places", MODE_PRIVATE).getInt("place", 0).coerceIn(0, Places.PLACES.size - 1)
         buildUi()
 
@@ -995,6 +996,8 @@ class MainActivity : Activity() {
         }
         if (i.hasExtra("jaw")) painter.debugJaw = i.getFloatExtra("jaw", -1f).takeIf { it >= 0f }
         // `--ef turn 30`: every head turned this many degrees (Cool's arms); 999 clears.
+        // `--ef rock 20`: the test portrait tilts 20 degrees each way and sways; 0 stops it.
+        if (i.hasExtra("rock")) compositor.testRock = i.getFloatExtra("rock", 0f)
         if (i.hasExtra("turn")) painter.debugTurn = i.getFloatExtra("turn", 999f).takeIf { it in -90f..90f }
         if (i.hasExtra("rideDist")) BikeRide.debugDist = i.getFloatExtra("rideDist", -1f).takeIf { it > 0f }
         if (i.hasExtra("fallDist")) Freefall.debugDist = i.getFloatExtra("fallDist", -1f).takeIf { it > 0f }

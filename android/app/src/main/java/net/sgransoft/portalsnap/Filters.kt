@@ -117,6 +117,8 @@ class Draw(val pen: Pen) {
     val hamsters = ArrayList<Hamster3D>()
     /** Cool's 3D sunglasses, drawn at the same point as glasses. */
     val aviators = ArrayList<Aviators3D>()
+    /** Cat Hat's kittens, drawn at the same point as glasses. */
+    val cats = ArrayList<Cat3D>()
     /** Alien's warps of the camera picture, drawn with the patches. */
     val aliens = ArrayList<AlienWarp>()
     /** Segment tier: the latest person mask (1 person, 0 not), maskW x maskH, top row first. */
@@ -644,7 +646,7 @@ object BigHead : Filter("bighead", "Big Head", "🤯", Mode.MESH) {
 
 // In the bar's order: the Faces group first (its chip stands where Dog is), then Places.
 val FILTERS: List<Filter> = listOf(
-    Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Alien, Places,
+    Dog, Cat, CatHat, Shades, Crown, Googly, Mustache, BigHead, Alien, Places,
     Mirror, PopSilhouette, DiscoStar, MonsterCutie, PixelHearts, Hamster, Lemonade, PeasInAPod, BikeRide, Freefall)
 
 /**
@@ -655,5 +657,5 @@ val FILTERS: List<Filter> = listOf(
 class FilterGroup(val id: String, val name: String, val emoji: String, val members: List<Filter>)
 
 val GROUPS: List<FilterGroup> = listOf(
-    FilterGroup("faces", "Faces", "🐶", listOf(Dog, Cat, Shades, Crown, Googly, Mustache, BigHead, Alien)),
+    FilterGroup("faces", "Faces", "🐶", listOf(Dog, Cat, CatHat, Shades, Crown, Googly, Mustache, BigHead, Alien)),
 )

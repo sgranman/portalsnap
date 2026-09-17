@@ -122,6 +122,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     private var fallRenderer: FreefallRenderer? = null
     private var hamsterRenderer: HamsterRenderer? = null
     private var aviatorRenderer: AviatorRenderer? = null
+    private var catRenderer: CatRenderer? = null
     private var alienRenderer: AlienRenderer? = null
     private var alienFailed = false
     /** The app's assets, for 3D passes that load pictures (Freefall's ground). */
@@ -211,6 +212,8 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
     @Volatile var rotation = 0
     @Volatile var sourceW = FRAME_W
     @Volatile var sourceH = FRAME_H
+    /** Debug: rocks the test portrait side to side this many degrees, swaying it as it goes. */
+    @Volatile var testRock = 0f
     /** 0 means the camera; 1 or 2 feeds the test portrait instead. */
     @Volatile var testFaces = 0
         private set
@@ -549,11 +552,15 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         for (i in 0 until n) {
             val dh = FRAME_H * (if (n == 1) 0.92f else 0.74f) * (1 + 0.04f * sin(now / 1700f + i))
             val dw = dh * testAspect
-            val x = FRAME_W * (i + 1f) / (n + 1) + sin(now / 900f + i * 2) * 36f
+            val rock = testRock
+            val x = FRAME_W * (i + 1f) / (n + 1) + sin(now / 900f + i * 2) * 36f + sin(now / 1500f) * rock * 5f
             val y = FRAME_H / 2f + sin(now / 1300f + i) * 14f
             GlMatrix.setIdentityM(posM, 0)
             GlMatrix.translateM(posM, 0, x / FRAME_W * 2 - 1, 1 - y / FRAME_H * 2, 0f)
-            GlMatrix.scaleM(posM, 0, dw / FRAME_W, dh / FRAME_H, 1f)
+            // In pixels, so turning it doesn't shear it: frame px to clip, the turn, then its size.
+            GlMatrix.scaleM(posM, 0, 2f / FRAME_W, 2f / FRAME_H, 1f)
+            if (rock != 0f) GlMatrix.rotateM(posM, 0, sin(now / 1100f) * rock, 0f, 0f, 1f)
+            GlMatrix.scaleM(posM, 0, dw / 2, dh / 2, 1f)
             pTex.drawQuad(posM, testCrop)
         }
     }
@@ -669,7 +676,7 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
             }
         }
 
-        if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty() || plan.rides.isNotEmpty() || plan.falls.isNotEmpty() || plan.hamsters.isNotEmpty() || plan.aviators.isNotEmpty()) && !glassFailed) {
+        if ((plan.glasses.isNotEmpty() || plan.pods.isNotEmpty() || plan.rides.isNotEmpty() || plan.falls.isNotEmpty() || plan.hamsters.isNotEmpty() || plan.aviators.isNotEmpty() || plan.cats.isNotEmpty()) && !glassFailed) {
             try {
                 if (plan.glasses.isNotEmpty()) {
                     val r = glassRenderer ?: GlassRenderer().also { glassRenderer = it }
@@ -694,6 +701,10 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
                 if (plan.aviators.isNotEmpty()) {
                     val r = aviatorRenderer ?: AviatorRenderer().also { aviatorRenderer = it }
                     r.draw(plan.aviators)
+                }
+                if (plan.cats.isNotEmpty()) {
+                    val r = catRenderer ?: CatRenderer(assets).also { catRenderer = it }
+                    r.draw(plan.cats)
                 }
             } catch (e: Throwable) {
                 glassFailed = true
