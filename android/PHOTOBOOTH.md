@@ -25,6 +25,7 @@ filters where that works, or a supplied image where a photographic look is the p
 | 9 | Peas in a Pod | 1434519407443964 | mesh | the face cloned into three peas | medium |
 | 10 | Bike Ride | 3745986732290546 | fast | real 3D park, riders and helmets, face on the head (built) | medium–large |
 | 11 | Freefall | 897386285564659 | mesh + blendshapes | real 3D diver and helmet, sky and ground shader, falls on an open mouth (built) | large |
+| 12 | Cat Hat | (described, no video) | mesh | a textured 3D kitten lying on the head, balancing and blinking (built) | large |
 
 ### Status (2026-09-14)
 
@@ -669,6 +670,107 @@ Not yet checked with a real person:
 - the sound on the Portal's speaker
 
 The reference's clouds are photographic; these are procedural.
+
+### 12. Cat Hat
+**Built in real 3D** (`CatHat.kt`, `Cat3D.kt`, `tools/cat/build_cat.py`; the "Cat Hat" chip in
+Faces). There was no reference video. The user described the Portal's old AR cat: a live cat
+anchored onto the top of your head like a hat, which shifts its weight, balances and clings to
+stay upright when you move, tilt sideways or lean forward. They asked for a detailed textured 3D
+cat, not shapes put together, that blinks and moves a little.
+
+The model:
+
+- **Source:** "Kitten" by FainoDS on Sketchfab, CC BY 4.0, credited in `THIRD-PARTY.md`: a
+  realistic grey tabby kitten, 15.5k triangles with a 1024² fur texture and normal map. It was
+  picked from about 2,400 cat models in Objaverse's mirror of Sketchfab. The shortlist was
+  rendered in Blender, and CC0 cats turned out to be museum scans and statues.
+  - **Passed over:** a Scottish Fold with a full rig and eyelid bones. Its Sketchfab page is
+    gone, and the upload looked like someone else's asset re-posted.
+  - **Its shape:** standing and unrigged, made of separate overlapping pieces (head, ears, body
+    with tail, four legs, face bits), with its eyes as separate meshes.
+- **Rig:** `build_cat.py` runs in Blender 4.2 headless.
+  - **Skeleton:** 24 bones: pelvis, spine, chest, neck, head, ears, five tail bones, and three
+    per leg.
+  - **Weights:** from distance to each bone, with only where a bone can reach decided by
+    position. Region-by-piece weights opened seams wherever pieces overlap, at the neck ring,
+    shoulders and hips. Weights by position alone bend overlapping pieces together.
+  - **Pose:** the script arches the kitten over the dome of a head. The rump drops down the
+    back and the chest down the front, front paws draped over the forehead. The hind legs and
+    tail are aimed at points on the app's head shape, so the hind legs grip the back of the head.
+    It writes that posed mesh, so the app only adds small turns. The first pose lay flat, as if
+    on a table, and from the side its hind legs hung in the air past the back of the head.
+  - **Previews:** the script's renders use the same skinning maths as the app (turn about a
+    pivot in model axes, children inherit), so what Blender shows is what the Portal draws.
+  - **Export:** `assets/cat/kitten.bin` holds vertices, bones, parts and the eyes' shapes, next to
+    `fur.jpg` and `fur-normal.jpg`, about 1.1MB in all.
+- **Drawing:** GPU skinning, four bones a vertex.
+  - **Fur:** normal-mapped, with wrap lighting, a pale sheen at the silhouette and a darker
+    underside.
+  - **Eyes:** a glossy shader with a catchlight.
+  - **Occluder:** a head-shaped ellipsoid goes into depth first, so the hind legs and tail
+    behind the head are hidden.
+    - **First version:** its top was the face mesh's highest point, the upper forehead, so it was
+      far too small and low and hid almost nothing. Legs showed that should have been behind the
+      head.
+    - **Now:** measured on the test portrait with `--ez catHead true`, which tints it. The top of
+      the skull is about 0.55 face units above that point (0.83 of the chin's distance below the
+      eyes), the head about 2 face units front to back from just in front of the eye corners, and
+      1.1 times the temple width. The kitten lies on its top at 0.75 face units back, sunk 0.08
+      into the hair.
+  - **Edges:** the kitten is drawn 4x multisampled into its own framebuffer before the composite
+    starts, only over its bounding rectangle, then laid over with coverage as alpha. Its fur
+    edges stair-stepped badly without it.
+- **Blinks:** the model has no eyelids, so the app makes them each frame: a shell just outside
+  each eye, banded between two latitudes, pinched at the corners and darker along its edge. The
+  upper lid rolls down and the lower one rises to meet it.
+  - **Mix:** mostly quick blinks, sometimes a double blink, and a slow "cat kiss" blink once
+    the kitten is calm.
+  - **Sleepy:** after about 12s of a still head the upper lids hang a little.
+
+How it moves (`CatHat.kt`), all springs on the head's motion:
+
+- **Balance:** it leans against the head's tilt, 80% of the way. A quarter of that happens where
+  it lies and the rest up the spine. Its head stays nearly level, and its front legs turn back
+  so the paws keep hold, the downhill paw digging in.
+- **Sway:** sideways acceleration throws it the other way, a little underdamped, so it wobbles
+  back.
+- **Leaning forward:** it sits back against the head's nod. Head pitch is measured against a
+  slow baseline, the way Lemonade does.
+- **A quick drop:** the kitten lifts off the head and bounces back.
+- **Turning:** it turns with the head, but its neck and head turn back toward the camera a
+  beat behind.
+- **Fright:** sudden moves put its ears back and make its tail busy; it calms over a couple of
+  seconds.
+- **Idle:**
+  - breathing
+  - an ear flick every 2.5–8.5s
+  - a lazy tail swing
+  - a glance with a head tilt every few seconds
+  - kneading with the front paws every 12–24s
+- **A tap:** a startled hop, then a double blink.
+- **Shadows:** soft 2D shadows under the body and paws on the under layer.
+
+Measured:
+
+- **Gen 1 Portal:** 30fps render with one or two kittens, 2.5–4.5ms frames p50.
+- **Gen 2 Portal, release build:** 30fps with one or two kittens, and recording two kittens held
+  30fps for a 52s clip.
+  - **First minute:** straight after an install, recording dropped to 16–17fps for about a
+    minute while frame times climbed to 50ms. It never happened once the app had been running.
+    Turning the multisampled pass off during that minute didn't lift it, so the likely cause
+    is a freshly installed app still warming up on the gen 2's two big cores. Worth watching
+    for.
+- **Testing:**
+  - `--ef rock 25` tilts and sways the test portrait, so the tracker sees a head roll and the
+    balancing can be watched.
+  - `--ef turn 35` turns the head.
+  - `--es action poke` makes the kitten hop.
+
+Not yet checked with a real person:
+
+- whether a real head's nod leans it the right way (the pitch sign is taken from Lemonade)
+- how high it sits in real hair, and its size on a child
+- how the side view looks on a truly turned head: `--ef turn` turns the kitten but not the photo
 
 ## Shared building blocks these need
 

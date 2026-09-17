@@ -7,3 +7,6 @@ local.properties
 
 # The test portrait is MediaPipe's test asset, fetched rather than committed.
 app/src/debug/assets/test/
+
+# Cat Hat's source model, fetched by tools/cat/fetch-kitten.sh.
+tools/cat/kitten.glb

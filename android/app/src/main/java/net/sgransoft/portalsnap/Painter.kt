@@ -104,6 +104,7 @@ class Plan {
     var falls: List<Fall3D> = emptyList()
     var hamsters: List<Hamster3D> = emptyList()
     var aviators: List<Aviators3D> = emptyList()
+    var cats: List<Cat3D> = emptyList()
     var aliens: List<AlienWarp> = emptyList()
 
     fun reset() {
@@ -120,6 +121,7 @@ class Plan {
         falls = emptyList()
         hamsters = emptyList()
         aviators = emptyList()
+        cats = emptyList()
         aliens = emptyList()
     }
 }
@@ -193,6 +195,7 @@ class Painter {
             draw.falls.clear()
             draw.hamsters.clear()
             draw.aviators.clear()
+            draw.cats.clear()
             draw.aliens.clear()
             val m = mic
             draw.level = m?.level ?: 0f
@@ -264,6 +267,7 @@ class Painter {
                     plan.falls = ArrayList(draw.falls)
                     plan.hamsters = ArrayList(draw.hamsters)
                     plan.aviators = ArrayList(draw.aviators)
+                    plan.cats = ArrayList(draw.cats)
                     plan.aliens = ArrayList(draw.aliens)
                     return plan
                 }
@@ -317,6 +321,7 @@ class Painter {
             plan.falls = ArrayList(draw.falls)
             plan.hamsters = ArrayList(draw.hamsters)
             plan.aviators = ArrayList(draw.aviators)
+            plan.cats = ArrayList(draw.cats)
             plan.aliens = ArrayList(draw.aliens)
             return plan
         } finally {

@@ -91,6 +91,7 @@ read for every one.
 | A full-frame look | a `FrameFx` shader in `Gl.kt` | Mirror, `PopArt.kt`, `Disco.kt` |
 | Solid 3D props that turn with the head | `View3D`, a camera whose z = 0 plane lands exactly on frame pixels, plus `Mesh` and `Meshes.lathe` | `Glass3D.kt` (Lemonade), `Hamster3D.kt` |
 | 3D props that go behind the head | the head pose's `turn`, and a head shape drawn into the depth buffer only, so parts behind it are hidden | `Aviators3D.kt` (Cool's glasses arms) |
+| A textured model from elsewhere, rigged and animated | a Blender script that skins and poses it and writes a small binary, GPU skinning in the app, bones turned by springs | `tools/cat/build_cat.py`, `Cat3D.kt`, `CatHat.kt` |
 | Bendy 3D: arms, tendrils, bodies | `TubeBuilder`, or `ColorGeo` tubes, ellipsoids, cones and boxes rebuilt every frame | `PeasInAPod.kt`, `BikeRide.kt` |
 | A whole 3D world | your own camera and a renderer, `ColorGeo` meshes with colour per vertex (a forest in one draw call), a sky shader | `Park.kt` + `RideRenderer.kt`, `FreefallRenderer.kt` |
 | Someone somewhere else | the segment tier and a picture in `assets/` | `Places.kt` |
@@ -130,6 +131,7 @@ $A --ei faces 1 --es filter clown --ez hud true   # the test portrait, your filt
 $A --ei faces 2                                    # two people
 $A --ef jaw 0.8                                    # pretend the mouth is open (mesh tier); negative clears
 $A --ef turn 30                                    # pretend the head is turned 30° (mesh tier); 999 clears
+$A --ef rock 25                                    # tilt and sway the test portrait 25° each way; 0 stops
 $A --es action poke                                # a tap on the picture
 $A --ei faces 0                                    # back to the real camera
 

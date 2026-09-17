@@ -215,6 +215,8 @@ $A --ef jaw 0.8                                 # force jawOpen on test faces (H
 $A --es filter shades --ef turn 30              # Cool: pretend every head is turned 30° (the arms hide behind it); 999 clears
 $A --es filter bike --ef rideDist 1.6           # Bike Ride: hold every rider this many metres away (the portrait never moves); negative clears
 $A --es filter freefall --ef fallDist 0.75      # Freefall: hold every diver this far away; poke (or --ef jaw 0.8) makes them fall
+$A --es filter cathat --ef rock 25              # Cat Hat: tilt and sway the test portrait 25° each way, so the kitten balances; 0 stops
+$A --es filter cathat --ez catHead true         # Cat Hat: tint the head the kitten hides behind, to check its fit
 $A --es filter places --es place moon          # Places: castle, forest, waterfall, circus, yacht, beach, northpole or moon
 $A --es segModel landscape|general|multiclass   # segmentation model, applied at once
 $A --ez freeze true                            # hold the picture; the segmenter keeps re-reading it
