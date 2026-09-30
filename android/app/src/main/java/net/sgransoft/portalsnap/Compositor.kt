@@ -21,7 +21,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
-import kotlin.math.min
+import kotlin.math.max
 import kotlin.math.sin
 import android.graphics.Matrix as GfxMatrix
 import android.opengl.Matrix as GlMatrix
@@ -845,8 +845,12 @@ class Compositor(private val tracker: Tracker, private val painter: Painter) {
         GLES20.glViewport(0, 0, winW, winH)
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-        // Contain, not cover: the preview shows exactly what a capture will hold.
-        val s = min(winW.toFloat() / FRAME_W, winH.toFloat() / FRAME_H)
+        // Cover, not contain: the picture fills the stage edge to edge. The stage over the Portal's
+        // bottom bar is a little wider than 16:9, so a sliver comes off the top and bottom (about
+        // 5% on a gen 1). Captures keep the whole frame, so a photo holds a touch more than the
+        // preview did, never less. Contain left a black strip down each side, and the gear's dark
+        // circle half-vanished into the right-hand one.
+        val s = max(winW.toFloat() / FRAME_W, winH.toFloat() / FRAME_H)
         val vw = (FRAME_W * s).toInt()
         val vh = (FRAME_H * s).toInt()
         GLES20.glViewport((winW - vw) / 2, (winH - vh) / 2, vw, vh)
