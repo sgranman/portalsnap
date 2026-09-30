@@ -33,6 +33,8 @@ object Sfx {
             clips["clink3"] = Mixer.Clip(clink(13L, 3500f), RATE)
             clips["whoosh"] = Mixer.Clip(whoosh(), RATE)
             clips["wind"] = Mixer.Clip(wind(), RATE)
+            clips["beep"] = Mixer.Clip(beep(880f), RATE)
+            clips["beepLast"] = Mixer.Clip(beep(1320f), RATE)
             for ((i, f0) in HEART_KEYS.withIndex()) clips["key$i"] = Mixer.Clip(pianoNote(f0), RATE)
         }
     }
@@ -173,6 +175,18 @@ object Sfx {
         var peak = 1e-6f
         for (v in out) peak = max(peak, abs(v))
         return ShortArray(n) { (out[it] / peak * 0.8f * 32767f).toInt().toShort() }
+    }
+
+    // The self-timer's count: a clean, short tone, soft at both ends so it doesn't click. The last
+    // one is a fifth higher, the "here it comes" that a camera's timer gives.
+    private fun beep(hz: Float): ShortArray {
+        val n = (RATE * 0.14f).toInt()
+        val w = 2 * PI * hz / RATE
+        return ShortArray(n) { i ->
+            val t = i.toFloat() / RATE
+            val env = min(1f, t / 0.005f) * min(1f, (0.14f - t) / 0.04f)
+            (sin(w * i) * env * 0.5f * 32767f).toInt().toShort()
+        }
     }
 
     // A bubble's bloop: a sine that sweeps up as the bubble's cavity shrinks, with a quick
