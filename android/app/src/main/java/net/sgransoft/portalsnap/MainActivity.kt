@@ -77,6 +77,8 @@ class MainActivity : Activity() {
     private lateinit var settings: SettingsPanel
     private lateinit var captures: Captures
     private lateinit var gear: TextView
+    private lateinit var timerButton: TextView
+    private lateinit var countView: TextView
     private val chips = ArrayList<Pair<Filter?, LinearLayout>>()
     private val groupChips = ArrayList<Pair<FilterGroup, LinearLayout>>()
     // The second row over the bottom of the picture, and what it's showing: Places or a FilterGroup.
@@ -104,6 +106,10 @@ class MainActivity : Activity() {
     }
 
     private var pending: Capture? = null
+    // The shutter's self-timer: 0 (off), 3 or 10 seconds, and where a running count has got to.
+    private var timerS = 0
+    private var counting = false
+    private var countLeft = 0
     private var recorder: Recorder? = null
     private var recStartedAt = 0L
     private var benchRunning = false
@@ -127,6 +133,7 @@ class MainActivity : Activity() {
         Places.assets = assets
         CatHat.assets = assets
         Places.current = getSharedPreferences("places", MODE_PRIVATE).getInt("place", 0).coerceIn(0, Places.PLACES.size - 1)
+        timerS = getSharedPreferences("camera", MODE_PRIVATE).getInt("timer", 0).takeIf { it in TIMERS } ?: 0
         buildUi()
 
         compositor.start(this) { st -> ui.post { cameraTexture = st; syncSource() } }
@@ -173,6 +180,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        cancelCountdown()
         if (recorder != null) stopRec()
         mic.release("filter")
         musicToken++
@@ -330,6 +338,16 @@ class MainActivity : Activity() {
         flash = View(this).apply { setBackgroundColor(Color.WHITE); alpha = 0f }
         stage.addView(flash, lp(MATCH, MATCH))
 
+        // The self-timer's count, big enough to read from where you've stepped back to. It's a
+        // view over the picture, not drawn into it, so it never ends up in the photo.
+        countView = label("", 180f, bold = true).apply {
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setShadowLayer(24f, 0f, 4f, Color.argb(200, 0, 0, 0))
+            visibility = View.GONE
+        }
+        stage.addView(countView, lp(WRAP, WRAP, Gravity.CENTER))
+
         hud = label("", 12f, Palette.HUD).apply {
             typeface = Typeface.MONOSPACE
             background = rounded(Color.argb(140, 0, 0, 0), dp(8).toFloat())
@@ -349,6 +367,17 @@ class MainActivity : Activity() {
             setOnClickListener { openSettings() }
         }
         stage.addView(gear, lp(dp(60), dp(60), Gravity.TOP or Gravity.END).apply { rightMargin = dp(18); topMargin = dp(18) })
+
+        // The shutter's self-timer, beside the gear: a tap steps it Off, 3s, 10s. A photo you have
+        // to reach the screen for has your arm in it; with the timer on there's time to step back.
+        timerButton = label("", 20f, bold = true).apply {
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setPadding(dp(18), 0, dp(20), 0)
+            setOnClickListener { stepTimer() }
+        }
+        styleTimer()
+        stage.addView(timerButton, lp(WRAP, dp(60), Gravity.TOP or Gravity.END).apply { rightMargin = dp(90); topMargin = dp(18) })
 
         // The second row, over the bottom of the picture: Places' places, or the filters in a group.
         // It folds away with the arrow above it, so a row of backgrounds isn't sitting over the
@@ -426,7 +455,7 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(0, WRAP, 1f))
         album = bigButton("🖼️", Palette.BIG_ALT, 0xFF6B7290.toInt()).apply { setOnClickListener { openAlbum() } }
         record = bigButton("🎥", Palette.BIG_ALT).apply { setOnClickListener { if (recorder != null) stopRec() else startRec() } }
-        shutter = bigButton("📸", Palette.HOT).apply { setOnClickListener { takePhoto() } }
+        shutter = bigButton("📸", Palette.HOT).apply { setOnClickListener { pressShutter() } }
         for (b in listOf(album, record, shutter)) bar.addView(b, LinearLayout.LayoutParams(dp(96), dp(96)).apply { leftMargin = dp(12) })
         column.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(column, lp(MATCH, MATCH))
@@ -689,6 +718,72 @@ class MainActivity : Activity() {
 
     /* ------------------------------ Capture ------------------------------ */
 
+    // The shutter button: a photo now, or with the timer on, a count first. A tap while it's
+    // counting calls it off.
+    private fun pressShutter() {
+        when {
+            counting -> {
+                cancelCountdown()
+                hint("Timer stopped")
+            }
+            timerS == 0 -> takePhoto()
+            else -> startCountdown()
+        }
+    }
+
+    private fun stepTimer() {
+        cancelCountdown()
+        timerS = TIMERS[(TIMERS.indexOf(timerS) + 1) % TIMERS.size]
+        getSharedPreferences("camera", MODE_PRIVATE).edit().putInt("timer", timerS).apply()
+        styleTimer()
+        hint(if (timerS == 0) "Timer off" else "Timer on: the photo is taken $timerS seconds after 📸")
+    }
+
+    private fun styleTimer() {
+        timerButton.text = "⏱  " + if (timerS == 0) "Off" else "${timerS}s"
+        timerButton.background = rounded(if (timerS == 0) Color.argb(140, 0, 0, 0) else Palette.ACCENT, dp(999).toFloat())
+    }
+
+    private fun startCountdown() {
+        if (recorder != null || overlayUp() || !live()) return
+        counting = true
+        countLeft = timerS
+        shutter.text = "✕"
+        ui.post(countTick)
+    }
+
+    // One step a second: show the number and beep, and at zero take the photo. Anything that
+    // takes the picture away in the meantime (a panel, recording, leaving the app) calls it off.
+    private val countTick = object : Runnable {
+        override fun run() {
+            if (!counting) return
+            if (!resumed || recorder != null || overlayUp()) return cancelCountdown()
+            if (countLeft == 0) {
+                cancelCountdown()
+                takePhoto()
+                return
+            }
+            countView.text = countLeft.toString()
+            countView.visibility = View.VISIBLE
+            countView.alpha = 0f
+            countView.scaleX = 1.6f
+            countView.scaleY = 1.6f
+            countView.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(220).start()
+            Sfx.play(if (countLeft == 1) "beepLast" else "beep", 0.7f)
+            countLeft--
+            ui.postDelayed(this, 1000)
+        }
+    }
+
+    private fun cancelCountdown() {
+        if (!counting) return
+        counting = false
+        ui.removeCallbacks(countTick)
+        countView.animate().cancel()
+        countView.visibility = View.GONE
+        shutter.text = "📸"
+    }
+
     private fun takePhoto() {
         if (recorder != null || overlayUp() || !live()) return
         flash.alpha = 0.9f
@@ -704,6 +799,7 @@ class MainActivity : Activity() {
     }
 
     private fun startRec() {
+        cancelCountdown()
         if (recorder != null || overlayUp() || !live()) return
         val file = File(cacheDir, "vid-${System.currentTimeMillis()}.mp4")
         val micOk = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -765,7 +861,7 @@ class MainActivity : Activity() {
             setColor(Palette.BIG_ALT)
             setStroke(dp(5), Color.WHITE)
         }
-        for (b in listOf(shutter, album, gear)) {
+        for (b in listOf(shutter, album, gear, timerButton)) {
             b.isEnabled = !on
             b.alpha = if (on) 0.35f else 1f
         }
@@ -826,11 +922,13 @@ class MainActivity : Activity() {
 
     private fun openAlbum() {
         if (recorder != null) return
+        cancelCountdown()
         albumPanel.open()
     }
 
     private fun openSettings() {
         if (recorder != null) return
+        cancelCountdown()
         settings.open()
     }
 
@@ -1003,8 +1101,19 @@ class MainActivity : Activity() {
         if (i.hasExtra("turn")) painter.debugTurn = i.getFloatExtra("turn", 999f).takeIf { it in -90f..90f }
         if (i.hasExtra("rideDist")) BikeRide.debugDist = i.getFloatExtra("rideDist", -1f).takeIf { it > 0f }
         if (i.hasExtra("fallDist")) Freefall.debugDist = i.getFloatExtra("fallDist", -1f).takeIf { it > 0f }
+        // `--ei timer 0|3|10`: the self-timer, as if its button had been stepped there.
+        if (i.hasExtra("timer")) {
+            val t = i.getIntExtra("timer", 0)
+            if (t in TIMERS) {
+                cancelCountdown()
+                timerS = t
+                getSharedPreferences("camera", MODE_PRIVATE).edit().putInt("timer", t).apply()
+                styleTimer()
+            }
+        }
         when (i.getStringExtra("action")) {
             "photo" -> takePhoto()
+            "shutter" -> pressShutter()
             "poke" -> painter.active?.poke()
             "record" -> startRec()
             "stop" -> stopRec()
@@ -1111,6 +1220,8 @@ class MainActivity : Activity() {
         const val MAX_CLIP_MS = 60_000L
         const val CAMERA_PROBLEM = "Camera problem"
         const val CAMERA_RETRY_MS = 3000L
+        // The self-timer's settings, in the order its button steps through them.
+        val TIMERS = intArrayOf(0, 3, 10)
 
         // Android 9's emoji font predates some filters' emoji.
         val EMOJI_FALLBACK = mapOf("mirror" to "👯", "disco" to "✨")
