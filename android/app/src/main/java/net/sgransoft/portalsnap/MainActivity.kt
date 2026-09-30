@@ -103,6 +103,8 @@ class MainActivity : Activity() {
 
     private class Capture(val kind: String, val file: File, val ext: String, val poster: ByteArray? = null) {
         var saved: Captures.Item? = null
+        // Being copied into the album, so the draft file has to stay put until that's done.
+        var saving = false
     }
 
     private var pending: Capture? = null
@@ -460,7 +462,7 @@ class MainActivity : Activity() {
         column.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(column, lp(MATCH, MATCH))
 
-        review = ReviewPanel(this, onKeep = { keep() }, onAgain = { closeReview() },
+        review = ReviewPanel(this, onKeep = { keep() }, onClose = { closeReview() },
             onPlaying = { on -> clipSound("review", on) }).apply { visibility = View.GONE }
         root.addView(review, lp(MATCH, MATCH))
         albumPanel = AlbumPanel(this, captures, exec, onBack = { albumPanel.close() },
@@ -880,6 +882,7 @@ class MainActivity : Activity() {
     }
 
     private fun closeReview() {
+        if (pending?.saving == true) return
         review.close()
         discardPending()
         immersive()
@@ -890,13 +893,15 @@ class MainActivity : Activity() {
     // can't go now.
     private fun keep() {
         val c = pending ?: return
-        if (c.saved != null) return
+        if (c.saved != null || c.saving) return
+        c.saving = true
         review.saving()
         exec.execute {
             try {
                 val item = captures.save(c.file, c.kind, c.poster)
                 val where = if (captures.shared) "on this Portal" else "inside the app"
                 ui.post {
+                    c.saving = false
                     c.saved = item
                     if (pending === c) review.saved("Saved $where ✓")
                 }
@@ -915,7 +920,10 @@ class MainActivity : Activity() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "keep", e)
-                ui.post { if (pending === c) review.failed(e.message ?: "unknown error") }
+                ui.post {
+                    c.saving = false
+                    if (pending === c) review.failed(e.message ?: "unknown error")
+                }
             }
         }
     }

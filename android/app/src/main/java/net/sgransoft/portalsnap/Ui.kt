@@ -101,16 +101,23 @@ const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
 /* -------------------------------- Review -------------------------------- */
 
+/**
+ * The photo or clip just taken, with Keep it and a way out. The way out says what it will do:
+ * "Don't keep" while the capture is only a draft, "Back to camera" once it's saved. It used to be
+ * "Take another" throughout, which read wrong for leaving a kept photo, or for someone who only
+ * wanted the one.
+ */
 class ReviewPanel(
     ctx: Context,
     onKeep: () -> Unit,
-    onAgain: () -> Unit,
+    onClose: () -> Unit,
     /** Whether a clip is on screen with its own sound, so the app can hush its own. */
     private val onPlaying: (Boolean) -> Unit,
 ) : LinearLayout(ctx) {
     private val image = ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
     private val video = VideoView(ctx)
     private val keep = ctx.actionButton("Keep it", Palette.ACCENT)
+    private val leave = ctx.actionButton("Don't keep", Palette.ALT)
     private val msg = ctx.label("", 19f, Palette.DIM).apply { gravity = Gravity.CENTER }
 
     init {
@@ -129,10 +136,10 @@ class ReviewPanel(
         val acts = LinearLayout(ctx).apply {
             gravity = Gravity.CENTER
             addView(keep)
-            addView(ctx.actionButton("Take another", Palette.ALT).apply { setOnClickListener { onAgain() } },
-                LayoutParams(WRAP, WRAP).apply { leftMargin = ctx.dp(16) })
+            addView(leave, LayoutParams(WRAP, WRAP).apply { leftMargin = ctx.dp(16) })
         }
         keep.setOnClickListener { onKeep() }
+        leave.setOnClickListener { onClose() }
         addView(acts, LayoutParams(WRAP, WRAP).apply { topMargin = ctx.dp(18) })
         addView(msg, LayoutParams(MATCH, WRAP).apply { topMargin = ctx.dp(18) })
         video.setOnPreparedListener { it.isLooping = true; video.start() }
@@ -159,25 +166,37 @@ class ReviewPanel(
     private fun reset() {
         keep.text = "Keep it"
         keep.enabledLook(true)
+        leaveAs("Don't keep", Palette.ALT)
         say("")
         visibility = VISIBLE
     }
 
+    // Held while the copy runs: leaving now would delete the draft it's copying from.
     fun saving() {
         keep.text = "Saving…"
         keep.enabledLook(false)
+        leave.enabledLook(false)
         say("")
     }
 
+    // Kept, so the way out is now the thing to tap, and takes the accent from Keep it.
     fun saved(text: String) {
         keep.text = "Saved ✓"
+        leaveAs("Back to camera", Palette.ACCENT)
         say(text, Palette.OK)
     }
 
     fun failed(why: String) {
         keep.text = "Try again"
         keep.enabledLook(true)
+        leaveAs("Don't keep", Palette.ALT)
         say("Couldn't save it: $why", Palette.BAD)
+    }
+
+    private fun leaveAs(text: String, bg: Int) {
+        leave.text = text
+        leave.background = rounded(bg, context.dp(16).toFloat())
+        leave.enabledLook(true)
     }
 
     fun say(text: String, color: Int = Palette.DIM) {
