@@ -209,7 +209,7 @@ $A --ei faces 1 --es filter dog --ez hud true   # test portrait instead of the c
 $A --ei faces 2 --es filter bike                # two portraits
 $A --ei faces 0                                 # back to the camera
 $A --es action photo|shutter|record|stop|keep|again|album|settings|pair|close|poke   # photo = at once; shutter = a tap on 📸, so the timer counts first
-$A --ei timer 3                                 # the shutter's self-timer: 0 (off), 3 or 10 seconds, remembered
+$A --ei timer 5                                 # the shutter's self-timer: 0 (off) or 5 seconds, remembered
 $A --es filter monster --es action poke         # poke = a stage tap (Monster/Cutie flips)
 $A --es music /sdcard/Android/data/net.sgransoft.portalsnap/files/beat120.wav   # loop a track for Disco / Pop Art (baked into clips); "stop" stops
 $A --ef jaw 0.8                                 # force jawOpen on test faces (Hearts, Monster's mouth); negative clears

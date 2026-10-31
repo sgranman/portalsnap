@@ -108,7 +108,7 @@ class MainActivity : Activity() {
     }
 
     private var pending: Capture? = null
-    // The shutter's self-timer: 0 (off), 3 or 10 seconds, and where a running count has got to.
+    // The shutter's self-timer: 0 (off) or 5 seconds, and where a running count has got to.
     private var timerS = 0
     private var counting = false
     private var countLeft = 0
@@ -370,7 +370,7 @@ class MainActivity : Activity() {
         }
         stage.addView(gear, lp(dp(60), dp(60), Gravity.TOP or Gravity.END).apply { rightMargin = dp(18); topMargin = dp(18) })
 
-        // The shutter's self-timer, beside the gear: a tap steps it Off, 3s, 10s. A photo you have
+        // The shutter's self-timer, beside the gear: a tap steps it Off, 5s. A photo you have
         // to reach the screen for has your arm in it; with the timer on there's time to step back.
         timerButton = label("", 20f, bold = true).apply {
             gravity = Gravity.CENTER
@@ -1109,7 +1109,7 @@ class MainActivity : Activity() {
         if (i.hasExtra("turn")) painter.debugTurn = i.getFloatExtra("turn", 999f).takeIf { it in -90f..90f }
         if (i.hasExtra("rideDist")) BikeRide.debugDist = i.getFloatExtra("rideDist", -1f).takeIf { it > 0f }
         if (i.hasExtra("fallDist")) Freefall.debugDist = i.getFloatExtra("fallDist", -1f).takeIf { it > 0f }
-        // `--ei timer 0|3|10`: the self-timer, as if its button had been stepped there.
+        // `--ei timer 0|5`: the self-timer, as if its button had been stepped there.
         if (i.hasExtra("timer")) {
             val t = i.getIntExtra("timer", 0)
             if (t in TIMERS) {
@@ -1229,7 +1229,7 @@ class MainActivity : Activity() {
         const val CAMERA_PROBLEM = "Camera problem"
         const val CAMERA_RETRY_MS = 3000L
         // The self-timer's settings, in the order its button steps through them.
-        val TIMERS = intArrayOf(0, 3, 10)
+        val TIMERS = intArrayOf(0, 5)
 
         // Android 9's emoji font predates some filters' emoji.
         val EMOJI_FALLBACK = mapOf("mirror" to "👯", "disco" to "✨")
